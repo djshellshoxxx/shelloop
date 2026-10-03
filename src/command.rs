@@ -58,7 +58,9 @@ fn no_arg(command: Command, raw_arg: Option<&str>) -> Result<Command, String> {
 }
 
 fn require_arg<'a>(raw_arg: Option<&'a str>, message: &str) -> Result<&'a str, String> {
-    raw_arg.filter(|arg| !arg.is_empty()).ok_or_else(|| message.into())
+    raw_arg
+        .filter(|arg| !arg.is_empty())
+        .ok_or_else(|| message.into())
 }
 
 fn parse_path_arg(arg: &str) -> Result<String, String> {
