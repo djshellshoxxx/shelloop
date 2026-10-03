@@ -63,7 +63,9 @@ impl Pattern {
                 return Err(format!("step {index} note must be 0..=127"));
             }
             if !step.velocity.is_finite() || !(0.0..=1.0).contains(&step.velocity) {
-                return Err(format!("step {index} velocity must be finite and 0.0..=1.0"));
+                return Err(format!(
+                    "step {index} velocity must be finite and 0.0..=1.0"
+                ));
             }
             if !step.gate.is_finite() || !(0.0..=1.0).contains(&step.gate) {
                 return Err(format!("step {index} gate must be finite and 0.0..=1.0"));
