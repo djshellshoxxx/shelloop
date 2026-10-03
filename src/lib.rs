@@ -1,6 +1,7 @@
 pub mod command;
 pub mod midi;
 pub mod mixer;
+pub mod pattern;
 pub mod performance;
 pub mod project;
 pub mod recording;
@@ -11,6 +12,7 @@ pub mod transport;
 pub use command::{parse_command, Command};
 pub use midi::{decode_message, MidiEvent, MidiPerformanceState};
 pub use mixer::{protect_master, ChannelStrip};
+pub use pattern::{Pattern, PatternEvent, PatternScheduler, PatternStep};
 pub use performance::{AxisCurve, AxisMapping, XyPoint};
 pub use project::{Project, Track};
 pub use recording::RecordingQueue;
