@@ -16,8 +16,13 @@ impl RecordingQueue {
         }
     }
 
-    pub fn push(&mut self, _block: Vec<f32>) -> bool {
-        false
+    pub fn push(&mut self, block: Vec<f32>) -> bool {
+        if self.blocks.len() >= self.capacity_blocks {
+            self.dropped_blocks = self.dropped_blocks.saturating_add(1);
+            return false;
+        }
+        self.blocks.push_back(block);
+        true
     }
 
     pub fn pop(&mut self) -> Option<Vec<f32>> {
