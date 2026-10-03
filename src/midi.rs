@@ -1,9 +1,24 @@
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MidiEvent {
-    NoteOn { channel: u8, note: u8, velocity: u8 },
-    NoteOff { channel: u8, note: u8, velocity: u8 },
-    ControlChange { channel: u8, controller: u8, value: u8 },
-    PitchBend { channel: u8, value: i16 },
+    NoteOn {
+        channel: u8,
+        note: u8,
+        velocity: u8,
+    },
+    NoteOff {
+        channel: u8,
+        note: u8,
+        velocity: u8,
+    },
+    ControlChange {
+        channel: u8,
+        controller: u8,
+        value: u8,
+    },
+    PitchBend {
+        channel: u8,
+        value: i16,
+    },
 }
 
 pub fn decode_message(_bytes: &[u8]) -> Result<MidiEvent, String> {
