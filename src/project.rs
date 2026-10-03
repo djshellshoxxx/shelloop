@@ -71,7 +71,8 @@ impl Project {
                 .map_err(|error| format!("finish temporary project: {error}"))?;
             file.sync_all()
                 .map_err(|error| format!("sync temporary project: {error}"))?;
-            fs::rename(&temp_path, path).map_err(|error| format!("replace project file: {error}"))?;
+            fs::rename(&temp_path, path)
+                .map_err(|error| format!("replace project file: {error}"))?;
             Ok(())
         })();
 
