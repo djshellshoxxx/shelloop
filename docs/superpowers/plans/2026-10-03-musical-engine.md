@@ -44,11 +44,11 @@
 - Consumes: `Scheduler::frames_per_step()` semantics and sample-frame clock units.
 - Produces: `PatternStep`, `Pattern`, `PatternEvent`, `PatternScheduler::schedule_block(...) -> Vec<PatternEvent>`.
 
-- [ ] **Step 1: Write failing tests** for validation, independent loop length, deterministic probability, swing, signed microtiming, ratchets and loop-boundary de-duplication.
-- [ ] **Step 2: Run `cargo test --test pattern_engine` and verify the new tests fail for missing pattern behavior.**
-- [ ] **Step 3: Implement `PatternStep`, `Pattern`, and `PatternScheduler`** with bounded ranges: pattern length 1..=256 steps, velocity/probability 0..=1, ratchets 1..=8, gate 0..=1, swing 0..=0.75 step, signed microtiming expressed in frames. Use a stable per-event seed derived from project seed + pattern seed + loop index + step index so decisions do not depend on call/block partitioning.
-- [ ] **Step 4: Run `cargo test --test pattern_engine` and verify all pattern tests pass.**
-- [ ] **Step 5: Run the full suite and strict clippy; commit.**
+- [x] **Step 1: Write failing tests** for validation, independent loop length, deterministic probability, swing, signed microtiming, ratchets and loop-boundary de-duplication.
+- [x] **Step 2: Run `cargo test --test pattern_engine` and verify the new tests fail for missing pattern behavior.**
+- [x] **Step 3: Implement `PatternStep`, `Pattern`, and `PatternScheduler`** with bounded ranges: pattern length 1..=256 steps, velocity/probability 0..=1, ratchets 1..=8, gate 0..=1, swing 0..=0.75 step, signed microtiming expressed in frames. Use a stable per-event seed derived from project seed + pattern seed + loop index + step index so decisions do not depend on call/block partitioning.
+- [x] **Step 4: Run `cargo test --test pattern_engine` and verify all pattern tests pass.**
+- [x] **Step 5: Run the full suite and strict clippy; commit.**
 
 ### Task 2: Bounded Voice Allocator, Sustain and Panic
 
@@ -61,11 +61,11 @@
 - Consumes: note/channel/velocity semantics already used by `MidiEvent` and the future pattern events.
 - Produces: `VoiceId`, `VoiceState`, `VoiceAllocator::note_on`, `note_off`, `set_sustain`, `release_sustain`, `panic`, and deterministic oldest-voice stealing.
 
-- [ ] **Step 1: Write failing tests** for bounded polyphony, note-on/off lifecycle, repeated notes, sustain-deferred release, deterministic stealing and panic.
-- [ ] **Step 2: Run `cargo test --test voice_lifecycle` and verify failures correspond to missing lifecycle behavior.**
-- [ ] **Step 3: Implement a pre-sized logical voice pool** with monotonically increasing generation/order counters; never allow more than configured maximum active voices. Note-off targets the oldest matching active note that has not already been released; sustain defers release; stealing chooses the oldest releasable voice first, otherwise oldest active voice.
-- [ ] **Step 4: Run the focused and full suites; strict clippy must pass.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Write failing tests** for bounded polyphony, note-on/off lifecycle, repeated notes, sustain-deferred release, deterministic stealing and panic.
+- [x] **Step 2: Run `cargo test --test voice_lifecycle` and verify failures correspond to missing lifecycle behavior.**
+- [x] **Step 3: Implement a pre-sized logical voice pool** with monotonically increasing generation/order counters; never allow more than configured maximum active voices. Note-off targets the oldest matching active note that has not already been released; sustain defers release; stealing chooses the oldest releasable voice first, otherwise oldest active voice.
+- [x] **Step 4: Run the focused and full suites; strict clippy must pass.**
+- [x] **Step 5: Commit.**
 
 ### Task 3: Quantized Scene/Pattern Replacement Primitives
 
@@ -78,12 +78,12 @@
 - Consumes: absolute sample-frame positions, BPM, sample rate and steps-per-beat.
 - Produces: `QuantizeBoundary::{Immediate, Step, Beat, Bar, Pattern}`, `QuantizedChange<T>`, and `next_boundary_frame(...)`.
 
-- [ ] **Step 1: Write failing tests** for immediate/step/beat/bar boundaries, exact-boundary idempotence, odd-meter bars, pattern-length boundaries and tempo validation.
-- [ ] **Step 2: Run `cargo test --test quantized_changes` and verify the new behavior is absent.**
-- [ ] **Step 3: Implement pure boundary math** with no wall-clock state. An edit requested exactly on a boundary applies there; otherwise it applies at the first later boundary. Pattern boundaries use the target track's own pattern length.
-- [ ] **Step 4: Run the focused suite, then all tests and strict clippy.**
-- [ ] **Step 5: Commit.**
+- [x] **Step 1: Write failing tests** for immediate/step/beat/bar boundaries, exact-boundary idempotence, odd-meter bars, pattern-length boundaries and tempo validation.
+- [x] **Step 2: Run `cargo test --test quantized_changes` and verify the new behavior is absent.**
+- [x] **Step 3: Implement pure boundary math** with no wall-clock state. An edit requested exactly on a boundary applies there; otherwise it applies at the first later boundary. Pattern boundaries use the target track's own pattern length.
+- [x] **Step 4: Run the focused suite, then all tests and strict clippy.**
+- [x] **Step 5: Commit.**
 
 ## Completion Gate
 
-This plan is complete only when `cargo fmt --all -- --check`, `cargo test --all-targets`, and `cargo clippy --all-targets -- -D warnings` all pass on the current branch head. The next plan may then wire this engine into CPAL/midir/terminal backends without redefining musical timing or voice semantics.
+Completed on 2026-10-03. GitHub Actions passed `cargo fmt --all -- --check`, `cargo test --all-targets`, and `cargo clippy --all-targets -- -D warnings` on code head `c72893f879f848f161984f5eb45d87a5494950d3`. The musical engine layer is ready for the next implementation plan to wire CPAL, midir, terminal input/output and recording backends around these timing and voice semantics.
