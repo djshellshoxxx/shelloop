@@ -117,14 +117,7 @@ fn probability_extremes_are_exact() {
     never.probability = 0.0;
     let mut always = step(61);
     always.probability = 1.0;
-    let pattern = Pattern::new(
-        "extremes",
-        8,
-        0.0,
-        1,
-        vec![Some(never), Some(always)],
-    )
-    .unwrap();
+    let pattern = Pattern::new("extremes", 8, 0.0, 1, vec![Some(never), Some(always)]).unwrap();
     let scheduler = PatternScheduler::new(48_000, 120.0, 4, 1).unwrap();
 
     let events = scheduler.schedule_block(&pattern, 0, 12_000);
