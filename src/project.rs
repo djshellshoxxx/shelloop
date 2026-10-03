@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::{collections::HashSet, path::Path};
 
 pub const PROJECT_VERSION: u32 = 1;
 
@@ -39,5 +39,13 @@ impl Project {
         }
 
         Ok(())
+    }
+
+    pub fn save_atomic(&self, _path: impl AsRef<Path>) -> Result<(), String> {
+        Err("project save not implemented".into())
+    }
+
+    pub fn load(_path: impl AsRef<Path>) -> Result<Self, String> {
+        Err("project load not implemented".into())
     }
 }
