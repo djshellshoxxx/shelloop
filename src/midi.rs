@@ -27,7 +27,7 @@ pub fn decode_message(bytes: &[u8]) -> Result<MidiEvent, String> {
     }
 
     let status = bytes[0];
-    if status < 0x80 || status >= 0xF0 {
+    if !(0x80..0xF0).contains(&status) {
         return Err("unsupported MIDI status byte".into());
     }
     if bytes[1] > 0x7F || bytes[2] > 0x7F {
@@ -67,19 +67,10 @@ pub fn decode_message(bytes: &[u8]) -> Result<MidiEvent, String> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MidiPerformanceState {
     sustain: [bool; 16],
     pitch_bend: [i16; 16],
-}
-
-impl Default for MidiPerformanceState {
-    fn default() -> Self {
-        Self {
-            sustain: [false; 16],
-            pitch_bend: [0; 16],
-        }
-    }
 }
 
 impl MidiPerformanceState {
