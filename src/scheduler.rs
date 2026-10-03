@@ -21,7 +21,11 @@ pub struct Scheduler {
 
 impl Scheduler {
     pub fn new(sample_rate: u32, bpm: f64, steps_per_beat: u32) -> Self {
-        Self { sample_rate, bpm, steps_per_beat }
+        Self {
+            sample_rate,
+            bpm,
+            steps_per_beat,
+        }
     }
 
     pub fn schedule_block(
