@@ -78,15 +78,8 @@ fn pattern_boundary_uses_the_target_tracks_independent_length() {
 
 #[test]
 fn quantized_change_carries_value_and_resolved_absolute_frame() {
-    let change = QuantizedChange::new(
-        "scene-b",
-        25_000,
-        48_000,
-        120.0,
-        4,
-        QuantizeBoundary::Beat,
-    )
-    .unwrap();
+    let change =
+        QuantizedChange::new("scene-b", 25_000, 48_000, 120.0, 4, QuantizeBoundary::Beat).unwrap();
 
     assert_eq!(change.apply_at_frame, 48_000);
     assert_eq!(change.value, "scene-b");
@@ -106,12 +99,7 @@ fn invalid_clock_and_boundary_values_are_rejected() {
         QuantizeBoundary::Bar { beats_per_bar: 0 }
     )
     .is_err());
-    assert!(next_boundary_frame(
-        0,
-        48_000,
-        120.0,
-        4,
-        QuantizeBoundary::Pattern { steps: 0 }
-    )
-    .is_err());
+    assert!(
+        next_boundary_frame(0, 48_000, 120.0, 4, QuantizeBoundary::Pattern { steps: 0 }).is_err()
+    );
 }
