@@ -13,8 +13,25 @@ pub struct AxisMapping {
 }
 
 impl AxisMapping {
-    pub fn map(&self, _normalized: f32) -> f32 {
-        self.min
+    pub fn map(&self, normalized: f32) -> f32 {
+        let mut t = if normalized.is_finite() {
+            normalized.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        if self.inverted {
+            t = 1.0 - t;
+        }
+
+        match self.curve {
+            AxisCurve::Linear => self.min + (self.max - self.min) * t,
+            AxisCurve::Logarithmic if self.min > 0.0 && self.max > 0.0 => {
+                let min_ln = self.min.ln();
+                let max_ln = self.max.ln();
+                (min_ln + (max_ln - min_ln) * t).exp()
+            }
+            AxisCurve::Logarithmic => self.min + (self.max - self.min) * t,
+        }
     }
 }
 
@@ -26,7 +43,13 @@ pub struct XyPoint {
 
 impl XyPoint {
     pub fn from_terminal(column: u16, row: u16, width: u16, height: u16) -> Self {
-        let _ = (column, row, width, height);
-        Self { x: 0.0, y: 0.0 }
+        let x_denom = width.saturating_sub(1).max(1) as f32;
+        let y_denom = height.saturating_sub(1).max(1) as f32;
+        let x = (column.min(width.saturating_sub(1)) as f32 / x_denom).clamp(0.0, 1.0);
+        let screen_y = (row.min(height.saturating_sub(1)) as f32 / y_denom).clamp(0.0, 1.0);
+        Self {
+            x,
+            y: 1.0 - screen_y,
+        }
     }
 }
