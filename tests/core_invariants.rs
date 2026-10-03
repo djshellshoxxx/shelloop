@@ -3,7 +3,11 @@ use shelloop::{Oscillator, Project, Scheduler, StepEvent, SynthVoice, Track};
 #[test]
 fn scheduler_places_step_zero_at_block_start() {
     let scheduler = Scheduler::new(48_000, 120.0, 4);
-    let events = vec![StepEvent { step: 0, note: 60, velocity: 1.0 }];
+    let events = vec![StepEvent {
+        step: 0,
+        note: 60,
+        velocity: 1.0,
+    }];
 
     let scheduled = scheduler.schedule_block(0, 512, &events);
 
@@ -15,7 +19,11 @@ fn scheduler_places_step_zero_at_block_start() {
 #[test]
 fn scheduler_places_later_steps_at_exact_sample_frames() {
     let scheduler = Scheduler::new(48_000, 120.0, 4);
-    let events = vec![StepEvent { step: 1, note: 62, velocity: 0.75 }];
+    let events = vec![StepEvent {
+        step: 1,
+        note: 62,
+        velocity: 0.75,
+    }];
 
     // At 120 BPM, one beat is 24,000 frames. Four steps per beat => 6,000 frames/step.
     let scheduled = scheduler.schedule_block(5_900, 256, &events);
@@ -42,7 +50,9 @@ fn valid_project_passes_validation() {
     let project = Project {
         version: 1,
         bpm: 128.0,
-        tracks: vec![Track { name: "bass".into() }],
+        tracks: vec![Track {
+            name: "bass".into(),
+        }],
     };
 
     assert!(project.validate().is_ok());
@@ -50,7 +60,11 @@ fn valid_project_passes_validation() {
 
 #[test]
 fn invalid_tempo_is_rejected() {
-    let project = Project { version: 1, bpm: 0.0, tracks: Vec::new() };
+    let project = Project {
+        version: 1,
+        bpm: 0.0,
+        tracks: Vec::new(),
+    };
 
     assert!(project.validate().is_err());
 }
