@@ -8,6 +8,7 @@ pub mod recording;
 pub mod scheduler;
 pub mod synth;
 pub mod transport;
+pub mod voice;
 
 pub use command::{parse_command, Command};
 pub use midi::{decode_message, MidiEvent, MidiPerformanceState};
@@ -19,3 +20,4 @@ pub use recording::RecordingQueue;
 pub use scheduler::{ScheduledEvent, Scheduler, StepEvent};
 pub use synth::{Oscillator, SynthVoice};
 pub use transport::{Transport, TransportState};
+pub use voice::{VoiceAllocator, VoiceId, VoiceState};
