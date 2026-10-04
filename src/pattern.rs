@@ -98,8 +98,8 @@ impl Pattern {
 }
 
 pub fn parse_pattern_json(json: &str) -> Result<Pattern, String> {
-    let pattern: Pattern = serde_json::from_str(json)
-        .map_err(|error| format!("invalid pattern JSON: {error}"))?;
+    let pattern: Pattern =
+        serde_json::from_str(json).map_err(|error| format!("invalid pattern JSON: {error}"))?;
     pattern.validate()?;
     Ok(pattern)
 }
