@@ -5,6 +5,9 @@ pub struct StartupOptions {
     pub audio_device: Option<String>,
     pub midi_port: Option<MidiPortSelector>,
     pub polyphony: usize,
+    pub pattern_path: Option<String>,
+    pub bpm: u16,
+    pub steps_per_beat: u8,
     pub list_devices: bool,
     pub no_midi: bool,
     pub show_help: bool,
@@ -16,6 +19,9 @@ impl Default for StartupOptions {
             audio_device: None,
             midi_port: Some(MidiPortSelector::First),
             polyphony: 16,
+            pattern_path: None,
+            bpm: 120,
+            steps_per_beat: 4,
             list_devices: false,
             no_midi: false,
             show_help: false,
@@ -88,6 +94,42 @@ where
                     return Err("--polyphony must be between 1 and 256".into());
                 }
                 options.polyphony = polyphony;
+            }
+            "--pattern" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--pattern requires a JSON file path".to_string())?;
+                if value.trim().is_empty() {
+                    return Err("--pattern requires a non-empty JSON file path".into());
+                }
+                options.pattern_path = Some(value.clone());
+            }
+            "--bpm" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--bpm requires an integer tempo".to_string())?;
+                let bpm = value
+                    .parse::<u16>()
+                    .map_err(|_| "--bpm must be an integer from 20 to 400".to_string())?;
+                if !(20..=400).contains(&bpm) {
+                    return Err("--bpm must be between 20 and 400".into());
+                }
+                options.bpm = bpm;
+            }
+            "--steps-per-beat" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--steps-per-beat requires an integer".to_string())?;
+                let steps_per_beat = value
+                    .parse::<u8>()
+                    .map_err(|_| "--steps-per-beat must be an integer from 1 to 64".to_string())?;
+                if !(1..=64).contains(&steps_per_beat) {
+                    return Err("--steps-per-beat must be between 1 and 64".into());
+                }
+                options.steps_per_beat = steps_per_beat;
             }
             "--list-devices" => options.list_devices = true,
             "--no-midi" => options.no_midi = true,
