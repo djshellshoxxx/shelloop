@@ -92,5 +92,7 @@ fn json_pattern_loading_validates_the_pattern() {
     assert_eq!(pattern.steps.len(), 2);
 
     let invalid = json.replace("\"ratchets\":1", "\"ratchets\":0");
-    assert!(parse_pattern_json(&invalid).unwrap_err().contains("ratchets"));
+    assert!(parse_pattern_json(&invalid)
+        .unwrap_err()
+        .contains("ratchets"));
 }
