@@ -18,11 +18,11 @@ pub mod transport;
 pub mod voice;
 
 pub use app::{parse_startup_options, StartupOptions};
-#[cfg(feature = "realtime-audio")]
-pub use audio::{list_output_device_names, open_output_stream, AudioOutput};
 pub use audio::{
     create_sample_renderer, sanitize_sample, select_named_device_index, write_mono_interleaved,
 };
+#[cfg(feature = "realtime-audio")]
+pub use audio::{list_output_device_names, open_output_stream, AudioOutput};
 pub use command::{parse_command, Command};
 pub use engine::{midi_note_hz, EngineCommand, RealtimeSynth};
 pub use keyboard::{map_performance_key, shift_octave, PerformanceKey};
@@ -38,9 +38,9 @@ pub use performance::{AxisCurve, AxisMapping, XyPoint};
 pub use project::{Project, Track};
 pub use quantize::{next_boundary_frame, QuantizeBoundary, QuantizedChange};
 pub use recording::RecordingQueue;
+pub use runtime::engine_command_from_midi;
 #[cfg(all(feature = "realtime-audio", feature = "terminal-ui"))]
 pub use runtime::run_realtime_session;
-pub use runtime::engine_command_from_midi;
 pub use scheduler::{ScheduledEvent, Scheduler, StepEvent};
 pub use synth::{Oscillator, SynthVoice};
 pub use transport::{Transport, TransportState};
