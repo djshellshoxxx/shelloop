@@ -4,7 +4,7 @@
 
 **Goal:** Turn the verified Shelloop musical core into a runnable terminal beta with guarded audio/MIDI backends, then QA and publish Windows/Linux v0.01-beta artifacts.
 
-**Architecture:** Keep hardware-facing CPAL and midir code behind optional features and small adapters. Move all deterministic behavior (device-selection policy, sample conversion, MIDI port selection/reconnect decisions, keyboard mapping) into pure functions covered by tests so CI can prove behavior without physical hardware. The binary owns lifecycle and error reporting; the audio callback remains bounded and communicates through fixed-capacity channels/state.
+**Architecture:** Keep hardware-facing CPAL and midir code behind optional features and small adapters. Move deterministic behavior into testable functions and keep the audio callback bounded. Pattern files are loaded and validated before audio startup; live pattern scheduling uses sample-frame timing and preallocated state in the callback. The binary owns lifecycle and error reporting, while terminal/MIDI/sequencer controls cross fixed-capacity channels.
 
 **Tech Stack:** Rust 2021, CPAL 0.16, midir 0.10, crossterm 0.29, ratatui 0.29, GitHub Actions.
 
@@ -25,6 +25,7 @@
 - Unsupported sample formats/channel counts: convert safely or reject explicitly.
 - MIDI device disconnect/reconnect: do not panic or leave stuck notes.
 - Terminal input exit/panic paths: always request all-notes-off before shutdown.
+- Sequencer pause/restart must not cut live keyboard/MIDI voices.
 - Release artifacts: binaries must come from the exact verified release commit and include SHA-256 checksums.
 
 ---
@@ -39,7 +40,7 @@
 
 - [x] Add Linux system audio headers and all-feature check/clippy job.
 - [x] Add equivalent Windows all-feature check/clippy job.
-- [x] Verify the workflow passes on both operating systems. Verified on CI run #91 / `37190843336` at head `27be5e679b8080c741401e17f9707489900b57ae`.
+- [x] Verify the workflow passes on both operating systems. Reverified after live sequencer integration on CI run #106 / `37201995320` at implementation head `bf25d3b7f503a690094afcb9b411291c23c93af5`.
 
 ### Task 2: Audio backend adapter
 
@@ -108,12 +109,32 @@
 **Interfaces:**
 - Produces: reproducible QA record and any RED→GREEN fixes.
 
-- [x] Run fmt, full tests, strict clippy, release builds, and Windows/Linux feature builds. CI run #91 is green for all listed automated gates.
+- [x] Run fmt, full tests, strict clippy, release builds, and Windows/Linux feature builds. Reverified on CI run #106.
 - [x] Exercise deterministic error/validation paths through tests and CLI smoke contracts; hardware-absence behavior remains part of physical host validation.
 - [x] Audit panic/unwrap usage in runtime paths and fix important findings test-first. No explicit production `panic!` was found; the allocator `expect` is guarded by its nonzero-polyphony constructor invariant.
 - [x] Record limitations requiring physical hardware validation in `docs/QA-v0.01-beta.md`.
 
-### Task 6: v0.01-beta release pipeline and artifacts
+### Task 6: Live sequencer playback integration
+
+**Files:**
+- Create: `src/sequencer.rs`, `tests/live_sequencer_contracts.rs`, `patterns/example-bassline.json`
+- Modify: `src/pattern.rs`, `src/runtime.rs`, `src/app.rs`, `src/main.rs`, `src/lib.rs`, `README.md`
+
+**Interfaces:**
+- Consumes: deterministic `PatternScheduler`, `RealtimeSynth`, CPAL callback sample rate, terminal performance controls.
+- Produces: validated JSON pattern loading, live sample-frame playback, bounded sequencer transport controls and separate performance/sequencer synth paths.
+
+- [x] Define failing live sequencer contracts before implementation.
+- [x] Add reusable/preallocated pattern scheduling buffers.
+- [x] Add `LiveSequencer` with gate-timed note-offs, pause/resume and restart semantics.
+- [x] Add CLI pattern/BPM/grid options and validate JSON before audio startup.
+- [x] Connect sequencer playback to the real-time CPAL callback.
+- [x] Keep sequencer voices separate from live keyboard/MIDI voices.
+- [x] Add Space play/pause, Backspace restart and sequencer panic routing.
+- [x] Add an example pattern and usage documentation.
+- [x] Verify default and Windows/Linux all-feature check/test/strict-Clippy/release-build jobs on CI run #106.
+
+### Task 7: v0.01-beta release pipeline and artifacts
 
 **Files:**
 - Modify: `Cargo.toml`
@@ -126,9 +147,14 @@
 - [x] Set package version corresponding to the requested 0.01 beta (`0.1.0-beta.1`).
 - [x] Add tag-triggered Windows/Linux release builds with all runtime features enabled.
 - [x] Package binaries with README/license and generate SHA-256 checksums.
+- [ ] Complete representative physical Windows/Linux audio and MIDI validation from `docs/QA-v0.01-beta.md`.
 - [ ] Verify the actual tag-triggered release packaging workflow from the exact final release commit.
 - [ ] Publish `v0.01-beta` as a GitHub prerelease and attach artifacts.
 
 ## Current Gate
 
-Automated code and cross-platform build verification is green as recorded in `docs/QA-v0.01-beta.md`. Do not create the release tag yet. Physical audio/MIDI validation remains required, and the current beta scope still needs a decision/implementation pass for live sequencer pattern playback because the deterministic pattern engine is built but is not yet connected to the real-time hardware session.
+The selected beta code scope, including live sequencer pattern playback, is implemented and passes the automated cross-platform gate recorded in `docs/QA-v0.01-beta.md`.
+
+Do not create the release tag yet. The remaining release gate requires representative physical Windows/Linux audio and MIDI validation, including real output-device behavior, MIDI unplug/reconnect, latency/xrun/sound-quality checks, and simultaneous live-performance plus sequencer playback. After physical validation, verify the tag-triggered packaging workflow from the exact release commit and publish the prerelease.
+
+Broader v1 implementation can proceed independently on quantized live pattern/scene replacement, terminal command/display work, mouse XY control, drum/sample playback, effects and recording.
