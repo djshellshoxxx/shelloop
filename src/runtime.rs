@@ -11,9 +11,7 @@ pub fn engine_command_from_midi(event: MidiEvent) -> Option<EngineCommand> {
             note,
             velocity: f32::from(velocity) / 127.0,
         }),
-        MidiEvent::NoteOff { channel, note, .. } => {
-            Some(EngineCommand::NoteOff { channel, note })
-        }
+        MidiEvent::NoteOff { channel, note, .. } => Some(EngineCommand::NoteOff { channel, note }),
         MidiEvent::ControlChange {
             channel,
             controller: 64,
@@ -34,21 +32,21 @@ pub fn engine_command_from_midi(event: MidiEvent) -> Option<EngineCommand> {
 mod live {
     #[cfg(feature = "midi")]
     use super::engine_command_from_midi;
+    #[cfg(feature = "midi")]
+    use crate::{
+        connect_midi_input, list_midi_input_names, select_midi_port_index, MidiPortSelector,
+    };
     use crate::{
         list_output_device_names, map_performance_key, open_output_stream, shift_octave,
         EngineCommand, Oscillator, PerformanceKey, RealtimeSynth, StartupOptions,
     };
-    #[cfg(feature = "midi")]
-    use crate::{connect_midi_input, list_midi_input_names, select_midi_port_index, MidiPortSelector};
     use crossbeam_channel::{bounded, Sender};
     use crossterm::event::{
-        self, Event, KeyCode, KeyEventKind, KeyboardEnhancementFlags,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        self, Event, KeyCode, KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     };
     use crossterm::execute;
-    use crossterm::terminal::{
-        disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement,
-    };
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement};
     use std::collections::HashMap;
     use std::io::{self, Write};
     use std::thread;
@@ -76,7 +74,8 @@ mod live {
 
     impl TerminalGuard {
         fn enable() -> Result<Self, String> {
-            enable_raw_mode().map_err(|error| format!("failed to enter terminal raw mode: {error}"))?;
+            enable_raw_mode()
+                .map_err(|error| format!("failed to enter terminal raw mode: {error}"))?;
 
             let keyboard_enhancement = supports_keyboard_enhancement().unwrap_or(false);
             if keyboard_enhancement {
@@ -182,10 +181,7 @@ mod live {
         })?;
 
         #[cfg(feature = "midi")]
-        let midi_selector = options
-            .midi_port
-            .clone()
-            .unwrap_or(MidiPortSelector::First);
+        let midi_selector = options.midi_port.clone().unwrap_or(MidiPortSelector::First);
         #[cfg(feature = "midi")]
         let mut midi = if options.no_midi {
             None
@@ -373,7 +369,8 @@ mod live {
                     KeyEventKind::Repeat => {
                         if !terminal.release_events_supported() {
                             if let Some(held) = held_notes.get_mut(&held_key) {
-                                held.release_deadline = Some(Instant::now() + FALLBACK_REPEAT_GRACE);
+                                held.release_deadline =
+                                    Some(Instant::now() + FALLBACK_REPEAT_GRACE);
                             }
                         }
                     }
