@@ -34,6 +34,9 @@ fn requested_audio_device_selection_is_exact_and_case_insensitive() {
         "HDMI".to_string(),
     ];
 
-    assert_eq!(select_named_device_index(&names, "focusrite usb").unwrap(), 1);
+    assert_eq!(
+        select_named_device_index(&names, "focusrite usb").unwrap(),
+        1
+    );
     assert!(select_named_device_index(&names, "missing device").is_err());
 }
