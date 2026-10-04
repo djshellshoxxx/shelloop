@@ -45,31 +45,34 @@ impl SynthVoice {
         self.velocity = 0.0;
     }
 
+    pub fn next_sample(&mut self) -> f32 {
+        if self.sample_rate <= 0.0 || !self.sample_rate.is_finite() {
+            return 0.0;
+        }
+
+        let raw = match self.oscillator {
+            Oscillator::Sine => (self.phase * TAU).sin(),
+            Oscillator::Triangle => 1.0 - 4.0 * (self.phase - 0.5).abs(),
+            Oscillator::Saw => 2.0 * self.phase - 1.0,
+            Oscillator::Pulse => {
+                if self.phase < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+        };
+        let sample = (raw * self.velocity).clamp(-1.0, 1.0);
+        let phase_increment = self.frequency_hz / self.sample_rate;
+        self.phase = (self.phase + phase_increment).fract();
+        sample
+    }
+
     pub fn render(&mut self, frames: usize) -> Vec<f32> {
         let mut output = Vec::with_capacity(frames);
-        if self.sample_rate <= 0.0 || !self.sample_rate.is_finite() {
-            output.resize(frames, 0.0);
-            return output;
-        }
-
-        let phase_increment = self.frequency_hz / self.sample_rate;
         for _ in 0..frames {
-            let raw = match self.oscillator {
-                Oscillator::Sine => (self.phase * TAU).sin(),
-                Oscillator::Triangle => 1.0 - 4.0 * (self.phase - 0.5).abs(),
-                Oscillator::Saw => 2.0 * self.phase - 1.0,
-                Oscillator::Pulse => {
-                    if self.phase < 0.5 {
-                        1.0
-                    } else {
-                        -1.0
-                    }
-                }
-            };
-            output.push((raw * self.velocity).clamp(-1.0, 1.0));
-            self.phase = (self.phase + phase_increment).fract();
+            output.push(self.next_sample());
         }
-
         output
     }
 }
