@@ -32,6 +32,7 @@ pub fn engine_command_from_midi(event: MidiEvent) -> Option<EngineCommand> {
 
 #[cfg(all(feature = "realtime-audio", feature = "terminal-ui"))]
 mod live {
+    #[cfg(feature = "midi")]
     use super::engine_command_from_midi;
     use crate::{
         list_output_device_names, map_performance_key, open_output_stream, shift_octave,
@@ -40,30 +41,74 @@ mod live {
     #[cfg(feature = "midi")]
     use crate::{connect_midi_input, list_midi_input_names, select_midi_port_index, MidiPortSelector};
     use crossbeam_channel::{bounded, Sender};
-    use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+    use crossterm::event::{
+        self, Event, KeyCode, KeyEventKind, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    };
+    use crossterm::execute;
+    use crossterm::terminal::{
+        disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement,
+    };
     use std::collections::HashMap;
     use std::io::{self, Write};
     use std::thread;
     use std::time::{Duration, Instant};
 
     const COMMAND_QUEUE_CAPACITY: usize = 256;
+    #[cfg(feature = "midi")]
     const MIDI_QUEUE_CAPACITY: usize = 256;
     const COMMANDS_PER_SAMPLE_LIMIT: usize = 64;
     const KEYBOARD_CHANNEL: u8 = 0;
     const KEYBOARD_VELOCITY: f32 = 0.8;
+    const FALLBACK_INITIAL_HOLD: Duration = Duration::from_millis(650);
+    const FALLBACK_REPEAT_GRACE: Duration = Duration::from_millis(180);
 
-    struct RawModeGuard;
+    #[derive(Debug, Clone, Copy)]
+    struct HeldNote {
+        note: u8,
+        release_deadline: Option<Instant>,
+    }
 
-    impl RawModeGuard {
+    struct TerminalGuard {
+        keyboard_enhancement: bool,
+        release_events_supported: bool,
+    }
+
+    impl TerminalGuard {
         fn enable() -> Result<Self, String> {
             enable_raw_mode().map_err(|error| format!("failed to enter terminal raw mode: {error}"))?;
-            Ok(Self)
+
+            let keyboard_enhancement = supports_keyboard_enhancement().unwrap_or(false);
+            if keyboard_enhancement {
+                let flags = KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES;
+                let mut stdout = io::stdout();
+                if let Err(error) = execute!(stdout, PushKeyboardEnhancementFlags(flags)) {
+                    let _ = disable_raw_mode();
+                    return Err(format!(
+                        "terminal reported keyboard enhancement support but enabling it failed: {error}"
+                    ));
+                }
+            }
+
+            Ok(Self {
+                keyboard_enhancement,
+                release_events_supported: cfg!(windows) || keyboard_enhancement,
+            })
+        }
+
+        fn release_events_supported(&self) -> bool {
+            self.release_events_supported
         }
     }
 
-    impl Drop for RawModeGuard {
+    impl Drop for TerminalGuard {
         fn drop(&mut self) {
+            if self.keyboard_enhancement {
+                let mut stdout = io::stdout();
+                let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+            }
             let _ = disable_raw_mode();
         }
     }
@@ -72,6 +117,11 @@ mod live {
         sender
             .send_timeout(command, Duration::from_millis(50))
             .map_err(|error| format!("audio command queue unavailable: {error}"))
+    }
+
+    fn request_panic(sender: &Sender<EngineCommand>) {
+        let _ = sender.send_timeout(EngineCommand::Panic, Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(5));
     }
 
     fn print_devices() -> Result<(), String> {
@@ -161,122 +211,179 @@ mod live {
             println!("MIDI input: {}", handle.port_name());
         }
         println!("Keys: Z-M/Q-U notes, [ ] octave, ! panic, ~ or Esc quit");
-        io::stdout()
-            .flush()
-            .map_err(|error| format!("failed to flush terminal output: {error}"))?;
+        if let Err(error) = io::stdout().flush() {
+            request_panic(&command_sender);
+            return Err(format!("failed to flush terminal output: {error}"));
+        }
 
-        let _raw_mode = RawModeGuard::enable()?;
+        let terminal = match TerminalGuard::enable() {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                request_panic(&command_sender);
+                return Err(error);
+            }
+        };
+        if !terminal.release_events_supported() {
+            eprintln!(
+                "terminal does not expose key-release events; keyboard notes use a timed fallback. \
+                 MIDI input or a terminal supporting the kitty keyboard protocol gives better note gating"
+            );
+        }
+
         let mut octave = 0_i8;
-        let mut held_notes = HashMap::<char, u8>::new();
+        let mut held_notes = HashMap::<char, HeldNote>::new();
         #[cfg(feature = "midi")]
         let mut last_midi_scan = Instant::now();
 
-        let session_result = 'session: loop {
-            if let Some(error) = audio.take_error() {
-                break 'session Err(format!("audio stream error: {error}"));
-            }
+        let session_result = (|| -> Result<(), String> {
+            'session: loop {
+                if let Some(error) = audio.take_error() {
+                    return Err(format!("audio stream error: {error}"));
+                }
 
-            #[cfg(feature = "midi")]
-            {
-                if let Some(handle) = midi.as_ref() {
-                    while let Some(event) = handle.try_recv() {
-                        if let Some(command) = engine_command_from_midi(event) {
-                            if let Err(error) = send_command(&command_sender, command) {
-                                break 'session Err(error);
-                            }
+                if !terminal.release_events_supported() {
+                    let now = Instant::now();
+                    let expired: Vec<char> = held_notes
+                        .iter()
+                        .filter_map(|(key, held)| {
+                            held.release_deadline
+                                .filter(|deadline| now >= *deadline)
+                                .map(|_| *key)
+                        })
+                        .collect();
+                    for key in expired {
+                        if let Some(held) = held_notes.remove(&key) {
+                            send_command(
+                                &command_sender,
+                                EngineCommand::NoteOff {
+                                    channel: KEYBOARD_CHANNEL,
+                                    note: held.note,
+                                },
+                            )?;
                         }
                     }
                 }
 
-                if !options.no_midi && last_midi_scan.elapsed() >= Duration::from_secs(1) {
-                    last_midi_scan = Instant::now();
-                    if let Ok(names) = list_midi_input_names() {
-                        let desired_name = select_midi_port_index(&names, &midi_selector)
-                            .ok()
-                            .and_then(|index| names.get(index).cloned());
-                        let current_name = midi.as_ref().map(|handle| handle.port_name().to_string());
-
-                        if current_name != desired_name {
-                            if current_name.is_some() {
-                                midi = None;
-                                let _ = send_command(&command_sender, EngineCommand::Panic);
+                #[cfg(feature = "midi")]
+                {
+                    if let Some(handle) = midi.as_ref() {
+                        while let Some(event) = handle.try_recv() {
+                            if let Some(command) = engine_command_from_midi(event) {
+                                send_command(&command_sender, command)?;
                             }
-                            if desired_name.is_some() {
-                                if let Ok(handle) =
-                                    connect_midi_input(&midi_selector, MIDI_QUEUE_CAPACITY)
-                                {
-                                    eprintln!("MIDI input connected: {}", handle.port_name());
-                                    midi = Some(handle);
+                        }
+                    }
+
+                    if !options.no_midi && last_midi_scan.elapsed() >= Duration::from_secs(1) {
+                        last_midi_scan = Instant::now();
+                        if let Ok(names) = list_midi_input_names() {
+                            let desired_name = select_midi_port_index(&names, &midi_selector)
+                                .ok()
+                                .and_then(|index| names.get(index).cloned());
+                            let current_name =
+                                midi.as_ref().map(|handle| handle.port_name().to_string());
+
+                            if current_name != desired_name {
+                                if current_name.is_some() {
+                                    midi = None;
+                                    let _ = send_command(&command_sender, EngineCommand::Panic);
+                                }
+                                if desired_name.is_some() {
+                                    if let Ok(handle) =
+                                        connect_midi_input(&midi_selector, MIDI_QUEUE_CAPACITY)
+                                    {
+                                        eprintln!("MIDI input connected: {}", handle.port_name());
+                                        midi = Some(handle);
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            let has_event = event::poll(Duration::from_millis(10))
-                .map_err(|error| format!("terminal event polling failed: {error}"))?;
-            if !has_event {
-                continue;
-            }
+                if !event::poll(Duration::from_millis(10))
+                    .map_err(|error| format!("terminal event polling failed: {error}"))?
+                {
+                    continue;
+                }
 
-            let terminal_event = event::read()
-                .map_err(|error| format!("failed to read terminal event: {error}"))?;
-            let Event::Key(key_event) = terminal_event else {
-                continue;
-            };
+                let terminal_event = event::read()
+                    .map_err(|error| format!("failed to read terminal event: {error}"))?;
+                let Event::Key(key_event) = terminal_event else {
+                    continue;
+                };
 
-            if key_event.code == KeyCode::Esc && key_event.kind != KeyEventKind::Release {
-                break 'session Ok(());
-            }
+                if key_event.code == KeyCode::Esc && key_event.kind != KeyEventKind::Release {
+                    break 'session;
+                }
 
-            let KeyCode::Char(character) = key_event.code else {
-                continue;
-            };
-            let held_key = character.to_ascii_lowercase();
+                let KeyCode::Char(character) = key_event.code else {
+                    continue;
+                };
+                let held_key = character.to_ascii_lowercase();
 
-            match key_event.kind {
-                KeyEventKind::Press => match map_performance_key(character, octave) {
-                    Some(PerformanceKey::Note(note)) => {
-                        if held_notes.contains_key(&held_key) {
-                            continue;
+                match key_event.kind {
+                    KeyEventKind::Press => match map_performance_key(character, octave) {
+                        Some(PerformanceKey::Note(note)) => {
+                            if let Some(held) = held_notes.get_mut(&held_key) {
+                                if !terminal.release_events_supported() {
+                                    held.release_deadline =
+                                        Some(Instant::now() + FALLBACK_REPEAT_GRACE);
+                                }
+                                continue;
+                            }
+                            send_command(
+                                &command_sender,
+                                EngineCommand::NoteOn {
+                                    channel: KEYBOARD_CHANNEL,
+                                    note,
+                                    velocity: KEYBOARD_VELOCITY,
+                                },
+                            )?;
+                            let release_deadline = (!terminal.release_events_supported())
+                                .then_some(Instant::now() + FALLBACK_INITIAL_HOLD);
+                            held_notes.insert(
+                                held_key,
+                                HeldNote {
+                                    note,
+                                    release_deadline,
+                                },
+                            );
                         }
-                        send_command(
-                            &command_sender,
-                            EngineCommand::NoteOn {
-                                channel: KEYBOARD_CHANNEL,
-                                note,
-                                velocity: KEYBOARD_VELOCITY,
-                            },
-                        )?;
-                        held_notes.insert(held_key, note);
+                        Some(PerformanceKey::OctaveDown) => octave = shift_octave(octave, -1),
+                        Some(PerformanceKey::OctaveUp) => octave = shift_octave(octave, 1),
+                        Some(PerformanceKey::Panic) => {
+                            send_command(&command_sender, EngineCommand::Panic)?;
+                            held_notes.clear();
+                        }
+                        Some(PerformanceKey::Quit) => break 'session,
+                        Some(PerformanceKey::TogglePlay) | None => {}
+                    },
+                    KeyEventKind::Release => {
+                        if let Some(held) = held_notes.remove(&held_key) {
+                            send_command(
+                                &command_sender,
+                                EngineCommand::NoteOff {
+                                    channel: KEYBOARD_CHANNEL,
+                                    note: held.note,
+                                },
+                            )?;
+                        }
                     }
-                    Some(PerformanceKey::OctaveDown) => octave = shift_octave(octave, -1),
-                    Some(PerformanceKey::OctaveUp) => octave = shift_octave(octave, 1),
-                    Some(PerformanceKey::Panic) => {
-                        send_command(&command_sender, EngineCommand::Panic)?;
-                        held_notes.clear();
-                    }
-                    Some(PerformanceKey::Quit) => break 'session Ok(()),
-                    Some(PerformanceKey::TogglePlay) | None => {}
-                },
-                KeyEventKind::Release => {
-                    if let Some(note) = held_notes.remove(&held_key) {
-                        send_command(
-                            &command_sender,
-                            EngineCommand::NoteOff {
-                                channel: KEYBOARD_CHANNEL,
-                                note,
-                            },
-                        )?;
+                    KeyEventKind::Repeat => {
+                        if !terminal.release_events_supported() {
+                            if let Some(held) = held_notes.get_mut(&held_key) {
+                                held.release_deadline = Some(Instant::now() + FALLBACK_REPEAT_GRACE);
+                            }
+                        }
                     }
                 }
-                KeyEventKind::Repeat => {}
             }
-        };
+            Ok(())
+        })();
 
-        let _ = command_sender.send_timeout(EngineCommand::Panic, Duration::from_millis(20));
-        thread::sleep(Duration::from_millis(5));
+        request_panic(&command_sender);
+        drop(terminal);
         session_result
     }
 }
