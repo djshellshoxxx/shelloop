@@ -25,7 +25,7 @@ jobs:
             archive: shelloop-v0.01-beta-windows-x86_64.zip
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux audio development headers

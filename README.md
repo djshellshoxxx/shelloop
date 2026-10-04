@@ -2,22 +2,25 @@
 
 SHELLOOP is a terminal-only real-time music instrument: a live step sequencer plus a playable synthesizer designed for Windows and Linux.
 
-The current continuation branch reconstructs the verified musical core and is now adding the hardware-facing runtime and beta release layer.
+Development is active on `continuation/rebuild-baseline` in draft PR #1. The deterministic musical core and the first hardware-facing playable-synth runtime have been reconstructed and verified. Live pattern playback is the next major runtime integration step, so this branch is not yet tagged as the beta release.
 
-## Current implemented core
+## Implemented
 
 - Sample-frame transport and exact in-block event offsets
-- Oscillator synthesis with finite/bounded output
 - Deterministic pattern scheduling with independent lengths, probability, swing, microtiming and ratchets
-- Fixed-capacity polyphonic voice allocation and panic/all-voices-off behavior
-- MIDI 1.0 note/CC/pitch-bend decoding and MIDI port selection helpers
-- CPAL audio-device enumeration/output adapter behind the `realtime-audio` feature
-- `midir` input enumeration/connection adapter behind the `midi` feature
-- Computer-keyboard performance mapping and octave controls
-- Project validation and JSON persistence
+- Fixed-capacity polyphonic voice allocation with deterministic stealing, sustain and panic/all-voices-off
+- Real-time oscillator synth rendering at the actual CPAL device sample rate
+- CPAL audio-device enumeration, default/named-device selection and guarded output streams
+- MIDI 1.0 note/CC/pitch-bend decoding and `midir` input enumeration/connection
+- Live MIDI note, sustain and panic routing into the synth
+- MIDI hot-plug polling/reconnect with panic on disconnect to avoid stuck notes
+- Computer-keyboard performance mapping, octave controls, panic and quit
+- Crossterm key-release reporting where supported, with a timed note-off fallback on older terminals
+- Bounded control/MIDI queues and no blocking terminal or filesystem work in the audio callback
+- Project validation and atomic JSON persistence
 - Bounded recording queue and master-output protection
-- Command-line startup parsing, help and validation
-- Windows/Linux all-feature CI checks
+- Windows/Linux all-feature compile, test, strict Clippy and optimized-release CI gates
+- `v0.01-beta` packaging workflow for Windows x86-64 and Linux x86-64 with SHA-256 checksums
 
 ## Command line
 
@@ -34,50 +37,94 @@ Options:
   -h, --help             Print help
 ```
 
-The parser is wired into the executable. The full interactive terminal/audio session is still being connected, so the project should not yet be treated as a finished beta.
+List devices before starting:
+
+```bash
+shelloop --list-devices
+```
+
+Start with the default audio device and first MIDI input:
+
+```bash
+shelloop
+```
+
+Select hardware explicitly:
+
+```bash
+shelloop --audio-device "Focusrite USB" --midi-name "Launchkey MIDI" --polyphony 24
+```
+
+Run without MIDI:
+
+```bash
+shelloop --no-midi
+```
+
+## Live keyboard controls
+
+The playable synth uses a two-row piano layout:
+
+```text
+Lower: Z S X D C V G B H N J M
+Upper: Q 2 W 3 E R 5 T 6 Y 7 U
+```
+
+`[` and `]` shift octave, `!` sends panic/all-notes-off, and `~` or `Esc` quits. Windows provides key press/repeat/release events directly. On Unix-like terminals, Shelloop requests the crossterm/kitty keyboard enhancement protocol so notes can be released correctly. If the terminal does not support it, Shelloop falls back to bounded timed note releases and reports that limitation at startup.
 
 ## Build
 
-Install a current stable Rust toolchain. Linux builds with real-time audio also require ALSA development headers.
+Install a current stable Rust toolchain. Linux builds with real-time audio require ALSA development headers.
 
-Default core build:
+Core-only build and tests:
 
 ```bash
 cargo build
 cargo test --all-targets
 ```
 
-Build every runtime backend:
+Full runtime build:
 
 ```bash
 cargo build --release --features realtime-audio,midi,terminal-ui
 ```
 
-On Debian/Ubuntu, install the audio development package first:
+Full runtime tests:
+
+```bash
+cargo test --all-targets --features realtime-audio,midi,terminal-ui
+```
+
+On Debian/Ubuntu:
 
 ```bash
 sudo apt-get install libasound2-dev
 ```
 
+## Real-time design
+
+The CPAL callback owns the `RealtimeSynth`. UI and MIDI threads communicate with it through a fixed-capacity channel. The renderer is constructed only after CPAL reports the selected device's actual sample rate, preventing pitch/timing errors caused by assuming 44.1 or 48 kHz. Each sample drains only a bounded number of commands before rendering, and callback error reporting uses a bounded channel.
+
+MIDI input is also bounded. Malformed messages and queue overflows are counted instead of panicking. The terminal loop periodically re-enumerates MIDI devices; if the selected target disappears it requests panic before dropping the connection and reconnects when the target returns.
+
 ## Beta release pipeline
 
-The package version is `0.1.0-beta.1`. Pushing the release tag `v0.01-beta` triggers Windows x86-64 and Linux x86-64 release builds with all runtime features enabled. The workflow packages the binary with this README and the MIT license, creates SHA-256 checksum files, and publishes a GitHub prerelease.
+The package version is `0.1.0-beta.1`. The eventual `v0.01-beta` tag triggers Windows x86-64 and Linux x86-64 optimized builds with all runtime features, packages the binary with this README and MIT license, emits SHA-256 checksum files, and publishes a GitHub prerelease.
 
-The tag will only be created after the runtime, CI and QA gates are satisfied.
+The tag is intentionally not created yet. Remaining release gates include live pattern/sequencer playback integration and physical audio/MIDI hardware validation for latency, disconnect behavior and sound quality.
 
 ## v1 direction
 
-- Continuous real-time synthesis while sequencing and editing
-- Live step sequencing with scenes, probability, ratchets, swing and independent pattern lengths
-- Playable synth alongside sequenced tracks
-- Terminal command mode and full-screen performance mode
-- Computer keyboard, terminal mouse XY and optional MIDI control
+- Live step sequencer playback using the existing deterministic pattern scheduler
+- Quantized pattern and scene replacement while audio is running
+- Terminal command mode and richer full-screen performance display
+- Terminal mouse XY performance control
 - Drum synthesis and WAV sample playback
-- Mixer, delay/reverb/saturation, master protection and metering
-- Project/preset persistence and WAV recording
-- Bounded real-time queues and no blocking I/O in the audio callback
+- Mixer sends, delay/reverb/saturation and metering
+- WAV recorder writer thread around the existing bounded recording queue
+- Expanded project/preset schema for patterns, scenes, mappings and audio settings
 - Windows and Linux first; macOS evaluated separately
 
 ## Status
 
-Active development is on `continuation/rebuild-baseline` in draft PR #1. Automated CI can verify deterministic logic and feature builds, but physical audio playback, MIDI hardware, latency and sound-quality validation remain release gates.
+Automated CI validates deterministic logic, runtime feature builds and optimized binaries. Physical playback, MIDI hardware, latency and sound-quality validation cannot be claimed from CI and remain required before the beta tag is published.
