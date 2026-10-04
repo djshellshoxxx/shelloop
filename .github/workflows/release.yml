@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v0.01-beta
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            binary: shelloop
+            archive: shelloop-v0.01-beta-linux-x86_64.tar.gz
+          - name: windows-x86_64
+            os: windows-latest
+            binary: shelloop.exe
+            archive: shelloop-v0.01-beta-windows-x86_64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux audio development headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Build release binary
+        run: cargo build --release --features realtime-audio,midi,terminal-ui
+      - name: Package Linux artifact
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/shelloop-v0.01-beta-linux-x86_64
+          cp target/release/shelloop dist/shelloop-v0.01-beta-linux-x86_64/
+          cp README.md LICENSE dist/shelloop-v0.01-beta-linux-x86_64/
+          tar -C dist -czf dist/${{ matrix.archive }} shelloop-v0.01-beta-linux-x86_64
+          cd dist
+          sha256sum ${{ matrix.archive }} > ${{ matrix.archive }}.sha256
+      - name: Package Windows artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $package = 'dist/shelloop-v0.01-beta-windows-x86_64'
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item 'target/release/shelloop.exe' $package
+          Copy-Item 'README.md' $package
+          Copy-Item 'LICENSE' $package
+          Compress-Archive -Path "$package/*" -DestinationPath "dist/${{ matrix.archive }}" -Force
+          $hash = (Get-FileHash "dist/${{ matrix.archive }}" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  ${{ matrix.archive }}" | Set-Content -NoNewline "dist/${{ matrix.archive }}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            dist/${{ matrix.archive }}
+            dist/${{ matrix.archive }}.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish prerelease
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish v0.01-beta
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
