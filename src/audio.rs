@@ -6,6 +6,16 @@ pub fn sanitize_sample(sample: f32) -> f32 {
     }
 }
 
+pub fn create_sample_renderer<F, R>(sample_rate: u32, factory: F) -> Result<R, String>
+where
+    F: FnOnce(u32) -> Result<R, String>,
+{
+    if sample_rate == 0 {
+        return Err("audio sample rate must be greater than zero".into());
+    }
+    factory(sample_rate)
+}
+
 pub fn write_mono_interleaved(
     output: &mut [f32],
     channels: usize,
@@ -51,7 +61,7 @@ pub fn select_named_device_index(names: &[String], requested: &str) -> Result<us
 
 #[cfg(feature = "realtime-audio")]
 mod realtime {
-    use super::sanitize_sample;
+    use super::{create_sample_renderer, sanitize_sample};
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{FromSample, SampleFormat, SizedSample};
     use crossbeam_channel::{bounded, Receiver, Sender};
@@ -98,12 +108,13 @@ mod realtime {
         Ok(names)
     }
 
-    pub fn open_output_stream<F>(
+    pub fn open_output_stream<F, R>(
         requested_device: Option<&str>,
-        next_sample: F,
+        renderer_factory: F,
     ) -> Result<AudioOutput, String>
     where
-        F: FnMut() -> f32 + Send + 'static,
+        F: FnOnce(u32) -> Result<R, String>,
+        R: FnMut() -> f32 + Send + 'static,
     {
         let host = cpal::default_host();
         let device = if let Some(requested) = requested_device {
@@ -145,6 +156,7 @@ mod realtime {
             return Err("audio output device reported zero channels".into());
         }
 
+        let next_sample = create_sample_renderer(sample_rate, renderer_factory)?;
         let (error_sender, error_receiver) = bounded(32);
         let stream = match sample_format {
             SampleFormat::F32 => {
