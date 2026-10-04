@@ -1,4 +1,6 @@
-use shelloop::{sanitize_sample, select_named_device_index, write_mono_interleaved};
+use shelloop::{
+    create_sample_renderer, sanitize_sample, select_named_device_index, write_mono_interleaved,
+};
 
 #[test]
 fn mono_samples_are_duplicated_across_output_channels() {
@@ -39,4 +41,15 @@ fn requested_audio_device_selection_is_exact_and_case_insensitive() {
         1
     );
     assert!(select_named_device_index(&names, "missing device").is_err());
+}
+
+#[test]
+fn renderer_factory_receives_the_device_sample_rate() {
+    let renderer = create_sample_renderer(48_000, |sample_rate| {
+        Ok::<_, String>(move || sample_rate as f32)
+    })
+    .unwrap();
+
+    assert_eq!(renderer(), 48_000.0);
+    assert!(create_sample_renderer(0, |_| Ok::<_, String>(|| 0.0)).is_err());
 }
