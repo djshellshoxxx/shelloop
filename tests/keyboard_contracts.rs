@@ -26,9 +26,15 @@ fn octave_shift_is_bounded_and_changes_note_mapping() {
 
 #[test]
 fn special_performance_keys_are_available_without_stealing_note_keys() {
-    assert_eq!(map_performance_key('[', 0), Some(PerformanceKey::OctaveDown));
+    assert_eq!(
+        map_performance_key('[', 0),
+        Some(PerformanceKey::OctaveDown)
+    );
     assert_eq!(map_performance_key(']', 0), Some(PerformanceKey::OctaveUp));
-    assert_eq!(map_performance_key(' ', 0), Some(PerformanceKey::TogglePlay));
+    assert_eq!(
+        map_performance_key(' ', 0),
+        Some(PerformanceKey::TogglePlay)
+    );
     assert_eq!(map_performance_key('!', 0), Some(PerformanceKey::Panic));
     assert_eq!(map_performance_key('~', 0), Some(PerformanceKey::Quit));
     assert_eq!(map_performance_key('?', 0), None);
