@@ -8,17 +8,17 @@ fn midi_port_selection_supports_first_index_and_exact_name() {
         "Virtual Port".to_string(),
     ];
 
-    assert_eq!(select_midi_port_index(&names, &MidiPortSelector::First).unwrap(), 0);
+    assert_eq!(
+        select_midi_port_index(&names, &MidiPortSelector::First).unwrap(),
+        0
+    );
     assert_eq!(
         select_midi_port_index(&names, &MidiPortSelector::Index(2)).unwrap(),
         2
     );
     assert_eq!(
-        select_midi_port_index(
-            &names,
-            &MidiPortSelector::Name("usb keyboard".to_string())
-        )
-        .unwrap(),
+        select_midi_port_index(&names, &MidiPortSelector::Name("usb keyboard".to_string()))
+            .unwrap(),
         1
     );
 }
@@ -29,11 +29,9 @@ fn midi_port_selection_rejects_missing_or_out_of_range_targets() {
 
     assert!(select_midi_port_index(&[], &MidiPortSelector::First).is_err());
     assert!(select_midi_port_index(&names, &MidiPortSelector::Index(1)).is_err());
-    assert!(select_midi_port_index(
-        &names,
-        &MidiPortSelector::Name("missing".to_string())
-    )
-    .is_err());
+    assert!(
+        select_midi_port_index(&names, &MidiPortSelector::Name("missing".to_string())).is_err()
+    );
 }
 
 #[test]
