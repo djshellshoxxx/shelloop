@@ -26,6 +26,24 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    println!("shelloop: startup options accepted; real-time session wiring is in progress");
-    ExitCode::SUCCESS
+    #[cfg(all(feature = "realtime-audio", feature = "terminal-ui"))]
+    {
+        match shelloop::run_realtime_session(options) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("error: {error}");
+                ExitCode::from(1)
+            }
+        }
+    }
+
+    #[cfg(not(all(feature = "realtime-audio", feature = "terminal-ui")))]
+    {
+        let _ = options;
+        eprintln!(
+            "error: real-time runtime support is not compiled in; rebuild with \
+             `--features realtime-audio,terminal-ui` (and `midi` for MIDI input)"
+        );
+        ExitCode::from(2)
+    }
 }
