@@ -30,11 +30,7 @@ pub struct RealtimeSynth {
 }
 
 impl RealtimeSynth {
-    pub fn new(
-        sample_rate: f32,
-        oscillator: Oscillator,
-        polyphony: usize,
-    ) -> Result<Self, String> {
+    pub fn new(sample_rate: f32, oscillator: Oscillator, polyphony: usize) -> Result<Self, String> {
         if !sample_rate.is_finite() || sample_rate <= 0.0 {
             return Err("sample rate must be finite and greater than zero".into());
         }
