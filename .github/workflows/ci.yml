@@ -43,5 +43,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: Check all optional backends
         run: cargo check --all-targets --features realtime-audio,midi,terminal-ui
+      - name: Test all optional backends
+        run: cargo test --all-targets --features realtime-audio,midi,terminal-ui
       - name: Clippy all optional backends
         run: cargo clippy --all-targets --features realtime-audio,midi,terminal-ui -- -D warnings
