@@ -1,5 +1,8 @@
+pub mod app;
 pub mod audio;
 pub mod command;
+pub mod engine;
+pub mod keyboard;
 pub mod midi;
 pub mod midi_io;
 pub mod mixer;
@@ -13,10 +16,13 @@ pub mod synth;
 pub mod transport;
 pub mod voice;
 
+pub use app::{parse_startup_options, StartupOptions};
 #[cfg(feature = "realtime-audio")]
 pub use audio::{list_output_device_names, open_output_stream, AudioOutput};
 pub use audio::{sanitize_sample, select_named_device_index, write_mono_interleaved};
 pub use command::{parse_command, Command};
+pub use engine::{midi_note_hz, EngineCommand, RealtimeSynth};
+pub use keyboard::{map_performance_key, shift_octave, PerformanceKey};
 pub use midi::{decode_message, MidiEvent, MidiPerformanceState};
 #[cfg(feature = "midi")]
 pub use midi_io::{connect_midi_input, list_midi_input_names, MidiInputHandle};
