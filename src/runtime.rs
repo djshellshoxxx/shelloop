@@ -143,8 +143,7 @@ mod live {
         sequencer_sender: &Sender<SequencerControl>,
     ) {
         let _ = command_sender.send_timeout(EngineCommand::Panic, Duration::from_millis(20));
-        let _ = sequencer_sender
-            .send_timeout(SequencerControl::Panic, Duration::from_millis(20));
+        let _ = sequencer_sender.send_timeout(SequencerControl::Panic, Duration::from_millis(20));
         thread::sleep(Duration::from_millis(5));
     }
 
@@ -454,15 +453,13 @@ mod live {
                             held_notes.clear();
                         }
                         Some(PerformanceKey::Quit) => break 'session,
-                        Some(PerformanceKey::TogglePlay) => {
-                            if pattern_name.is_some() {
-                                send_sequencer_control(
-                                    &sequencer_sender,
-                                    SequencerControl::TogglePlay,
-                                )?;
-                            }
+                        Some(PerformanceKey::TogglePlay) if pattern_name.is_some() => {
+                            send_sequencer_control(
+                                &sequencer_sender,
+                                SequencerControl::TogglePlay,
+                            )?;
                         }
-                        None => {}
+                        Some(PerformanceKey::TogglePlay) | None => {}
                     },
                     KeyEventKind::Release => {
                         if let Some(held) = held_notes.remove(&held_key) {
