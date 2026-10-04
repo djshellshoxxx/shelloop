@@ -20,7 +20,9 @@ pub use command::{parse_command, Command};
 pub use midi::{decode_message, MidiEvent, MidiPerformanceState};
 #[cfg(feature = "midi")]
 pub use midi_io::{connect_midi_input, list_midi_input_names, MidiInputHandle};
-pub use midi_io::{reconnect_decision, select_midi_port_index, MidiPortSelector, ReconnectDecision};
+pub use midi_io::{
+    reconnect_decision, select_midi_port_index, MidiPortSelector, ReconnectDecision,
+};
 pub use mixer::{protect_master, ChannelStrip};
 pub use pattern::{Pattern, PatternEvent, PatternScheduler, PatternStep};
 pub use performance::{AxisCurve, AxisMapping, XyPoint};
