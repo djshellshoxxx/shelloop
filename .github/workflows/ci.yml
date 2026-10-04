@@ -24,3 +24,24 @@ jobs:
         run: cargo test --all-targets
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+
+  feature-build:
+    name: Features (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux audio development headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Check all optional backends
+        run: cargo check --all-targets --features realtime-audio,midi,terminal-ui
+      - name: Clippy all optional backends
+        run: cargo clippy --all-targets --features realtime-audio,midi,terminal-ui -- -D warnings
