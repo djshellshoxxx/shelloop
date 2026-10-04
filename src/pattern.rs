@@ -1,9 +1,11 @@
+use serde::{Deserialize, Serialize};
+
 const MAX_PATTERN_STEPS: usize = 256;
 const MAX_RATCHETS: u8 = 8;
 const MAX_MICROTIMING_FRAMES: i32 = 192_000;
 const MAX_EVENTS_PER_BLOCK: usize = 4096;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PatternStep {
     pub note: u8,
     pub velocity: f32,
@@ -13,7 +15,7 @@ pub struct PatternStep {
     pub microtiming_frames: i32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pattern {
     pub name: String,
     pub seed: u64,
@@ -59,9 +61,6 @@ impl Pattern {
 
         for (index, step) in self.steps.iter().enumerate() {
             let Some(step) = step else { continue };
-            if step.note > 127 {
-                return Err(format!("step {index} note must be 0..=127"));
-            }
             if !step.velocity.is_finite() || !(0.0..=1.0).contains(&step.velocity) {
                 return Err(format!(
                     "step {index} velocity must be finite and 0.0..=1.0"
@@ -96,6 +95,13 @@ impl Pattern {
     pub fn is_empty(&self) -> bool {
         self.steps.is_empty()
     }
+}
+
+pub fn parse_pattern_json(json: &str) -> Result<Pattern, String> {
+    let pattern: Pattern = serde_json::from_str(json)
+        .map_err(|error| format!("invalid pattern JSON: {error}"))?;
+    pattern.validate()?;
+    Ok(pattern)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -152,21 +158,30 @@ impl PatternScheduler {
         block_start_frame: u64,
         block_frames: u32,
     ) -> Vec<PatternEvent> {
+        let mut events = Vec::with_capacity(MAX_EVENTS_PER_BLOCK);
+        self.schedule_block_into(pattern, block_start_frame, block_frames, &mut events);
+        events
+    }
+
+    pub fn schedule_block_into(
+        &self,
+        pattern: &Pattern,
+        block_start_frame: u64,
+        block_frames: u32,
+        events: &mut Vec<PatternEvent>,
+    ) {
+        events.clear();
         if block_frames == 0 || pattern.validate().is_err() {
-            return Vec::new();
+            return;
         }
 
         let frames_per_step = self.frames_per_step();
         let loop_frames = frames_per_step * pattern.len() as f64;
         let block_end = block_start_frame.saturating_add(block_frames as u64);
-
-        // Scan one neighboring loop on either side so bounded swing/microtiming can
-        // move an event across a loop boundary without missing it.
         let estimated_first = (block_start_frame as f64 / loop_frames).floor() as i64 - 1;
         let estimated_last = (block_end as f64 / loop_frames).floor() as i64 + 1;
         let first_loop = estimated_first.max(0) as u64;
         let last_loop = estimated_last.max(0) as u64;
-        let mut events = Vec::new();
 
         'loops: for loop_index in first_loop..=last_loop {
             for (step_index, maybe_step) in pattern.steps.iter().enumerate() {
@@ -224,7 +239,6 @@ impl PatternScheduler {
                 event.note,
             )
         });
-        events
     }
 
     fn step_triggers(
