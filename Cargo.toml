@@ -1,6 +1,6 @@
 [package]
 name = "shelloop"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 edition = "2021"
 description = "Terminal-only real-time step sequencer and playable synthesizer"
 license = "MIT"
