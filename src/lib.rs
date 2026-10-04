@@ -13,6 +13,7 @@ pub mod quantize;
 pub mod recording;
 pub mod runtime;
 pub mod scheduler;
+pub mod sequencer;
 pub mod synth;
 pub mod transport;
 pub mod voice;
@@ -33,7 +34,7 @@ pub use midi_io::{
     reconnect_decision, select_midi_port_index, MidiPortSelector, ReconnectDecision,
 };
 pub use mixer::{protect_master, ChannelStrip};
-pub use pattern::{Pattern, PatternEvent, PatternScheduler, PatternStep};
+pub use pattern::{parse_pattern_json, Pattern, PatternEvent, PatternScheduler, PatternStep};
 pub use performance::{AxisCurve, AxisMapping, XyPoint};
 pub use project::{Project, Track};
 pub use quantize::{next_boundary_frame, QuantizeBoundary, QuantizedChange};
@@ -42,6 +43,7 @@ pub use runtime::engine_command_from_midi;
 #[cfg(all(feature = "realtime-audio", feature = "terminal-ui"))]
 pub use runtime::run_realtime_session;
 pub use scheduler::{ScheduledEvent, Scheduler, StepEvent};
+pub use sequencer::LiveSequencer;
 pub use synth::{Oscillator, SynthVoice};
 pub use transport::{Transport, TransportState};
 pub use voice::{VoiceAllocator, VoiceId, VoiceState};
