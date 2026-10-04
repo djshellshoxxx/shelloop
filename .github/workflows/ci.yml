@@ -47,3 +47,5 @@ jobs:
         run: cargo test --all-targets --features realtime-audio,midi,terminal-ui
       - name: Clippy all optional backends
         run: cargo clippy --all-targets --features realtime-audio,midi,terminal-ui -- -D warnings
+      - name: Build optimized runtime
+        run: cargo build --release --features realtime-audio,midi,terminal-ui
