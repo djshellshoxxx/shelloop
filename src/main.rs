@@ -8,6 +8,9 @@ Options:\n\
   --midi-name <NAME>     Select a MIDI input port by exact name\n\
   --midi-index <INDEX>   Select a MIDI input port by zero-based index\n\
   --polyphony <VOICES>   Set synth polyphony from 1 to 256 (default: 16)\n\
+  --pattern <FILE>       Load a validated JSON pattern for live playback\n\
+  --bpm <TEMPO>          Set sequencer tempo from 20 to 400 (default: 120)\n\
+  --steps-per-beat <N>   Set sequencer grid density from 1 to 64 (default: 4)\n\
   --list-devices         List available audio and MIDI devices\n\
   --no-midi              Disable MIDI input\n\
   -h, --help             Print this help text\n";
