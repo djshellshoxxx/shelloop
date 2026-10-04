@@ -147,24 +147,15 @@ mod realtime {
 
         let (error_sender, error_receiver) = bounded(32);
         let stream = match sample_format {
-            SampleFormat::F32 => build_stream::<f32, _>(
-                &device,
-                &config,
-                next_sample,
-                error_sender,
-            ),
-            SampleFormat::I16 => build_stream::<i16, _>(
-                &device,
-                &config,
-                next_sample,
-                error_sender,
-            ),
-            SampleFormat::U16 => build_stream::<u16, _>(
-                &device,
-                &config,
-                next_sample,
-                error_sender,
-            ),
+            SampleFormat::F32 => {
+                build_stream::<f32, _>(&device, &config, next_sample, error_sender)
+            }
+            SampleFormat::I16 => {
+                build_stream::<i16, _>(&device, &config, next_sample, error_sender)
+            }
+            SampleFormat::U16 => {
+                build_stream::<u16, _>(&device, &config, next_sample, error_sender)
+            }
             other => Err(format!("unsupported audio sample format: {other}")),
         }?;
 
