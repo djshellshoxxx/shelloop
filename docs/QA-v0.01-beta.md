@@ -2,12 +2,12 @@
 
 Date: 2026-10-04
 Branch: `continuation/rebuild-baseline`
-Verified code head: `27be5e679b8080c741401e17f9707489900b57ae`
-GitHub Actions run: `37190843336` (CI run #91)
+Verified implementation head: `bf25d3b7f503a690094afcb9b411291c23c93af5`
+GitHub Actions run: `37201995320` (CI run #106)
 
 ## Automated verification
 
-The following checks completed successfully against the verified code head.
+The following checks completed successfully against the verified implementation head after live sequencer playback was connected to the real-time runtime.
 
 ### Default/core job — Ubuntu
 
@@ -56,14 +56,25 @@ Result: PASS.
 - startup option parsing, conflicts, invalid values, help and error exit behavior
 - bounded voice allocation, sustain release, voice stealing and panic
 - deterministic pattern probability, independent pattern lengths, swing, microtiming and ratchets
+- validated JSON pattern loading
+- live sample-frame sequencer note-on and gate-timed note-off generation
+- sequencer pause/resume position semantics and restart-to-zero behavior
 - sample-frame quantization and transport invariants
 - project validation and atomic persistence
 
+## Live sequencer integration
+
+Live pattern playback is now connected to the hardware-facing CPAL session. Pattern files are read and validated before the audio stream starts. The callback owns a `LiveSequencer` and a dedicated sequencer synth, separate from the keyboard/MIDI performance synth.
+
+The separation means a sequencer pause, restart or sequencer panic does not terminate a note currently held from the computer keyboard or a MIDI controller. Space toggles sequencer playback and Backspace restarts at frame zero when a pattern is loaded.
+
+Pattern scheduling uses a preallocated event cache and bounded pending note-off storage. Sequencer transport commands are delivered over a fixed-capacity channel. The callback performs no pattern-file filesystem I/O.
+
 ## Runtime hardening review
 
-The hardware-facing runtime uses bounded control and MIDI queues. The audio callback owns the synth and does not perform terminal rendering or filesystem I/O. Synth construction occurs after CPAL reports the selected device sample rate. Audio stream errors are reported through a bounded channel.
+The hardware-facing runtime uses bounded performance, MIDI and sequencer-control queues. The audio callback owns the synth state and does not perform terminal rendering or filesystem I/O. Synth and sequencer construction occurs after CPAL reports the selected device sample rate. Audio stream errors are reported through a bounded channel.
 
-Normal quit, terminal read/poll failures after audio startup, audio stream errors and terminal setup failures request `EngineCommand::Panic` before session teardown. MIDI target disappearance also requests panic before the old connection is dropped, reducing the risk of stuck voices.
+Normal quit, terminal read/poll failures after audio startup, audio stream errors and terminal setup failures request panic before session teardown. MIDI target disappearance also requests panic before the old connection is dropped, reducing the risk of stuck voices.
 
 The production-code panic/unwrap audit found no explicit `panic!` calls. The remaining production `expect` in `VoiceAllocator::choose_slot` is protected by the constructor invariant that polyphony is always in `1..=256`; an allocator therefore always contains at least one slot.
 
@@ -77,17 +88,22 @@ CI cannot validate real audio hardware or subjective/audio-timing behavior. Befo
 
 - enumerate audio devices and select both default and explicitly named outputs
 - verify stable playback at the device's native/default sample rate
+- load `patterns/example-bassline.json` and verify stable sequencer playback
+- verify Space pause/resume and Backspace restart without cutting held live-performance notes
 - hold/release chords from the computer keyboard and confirm no stuck notes
 - connect a physical MIDI keyboard/controller and verify notes, sustain and panic
+- play MIDI/keyboard notes while the sequencer runs and confirm both paths coexist correctly
 - unplug/reconnect the active MIDI device and confirm panic/reconnect behavior
 - verify terminal state is restored after normal quit and forced runtime errors
-- check audible latency, xruns/underruns and sound quality under sustained polyphony
+- check audible latency, xruns/underruns and sound quality under sustained polyphony plus sequencer load
 - validate no-audio-device and unavailable-selected-device errors on real hosts
 
-## Known scope remaining beyond the playable-synth runtime
+## Scope after the beta gate
 
-The deterministic pattern scheduler exists and is tested, but live sequencer/pattern playback is not yet connected to the real-time audio session. The broader v1 design also still includes scenes, richer terminal UI/command mode, mouse XY control, drum/sample playback, effects, and the WAV recorder writer thread.
+The selected beta code scope is implemented and covered by automated CI. Broader v1 work remains, including quantized live pattern/scene replacement, richer terminal UI and command mode, mouse XY control, drum/sample playback, effects and the WAV recorder writer thread.
 
 ## Release status
 
-The release workflow is present and configured to package Windows and Linux optimized binaries with README/LICENSE and SHA-256 checksums when tag `v0.01-beta` is pushed. The release tag has not been created. Publishing remains gated on the physical validation above and completion of the beta scope selected for live sequencing.
+The release workflow is present and configured to package Windows and Linux optimized binaries with README/LICENSE and SHA-256 checksums when tag `v0.01-beta` is pushed.
+
+The release tag has intentionally not been created. Publishing remains gated on the physical validation above and then verification of the tag-triggered packaging workflow against the exact release commit.
