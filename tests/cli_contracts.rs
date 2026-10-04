@@ -31,3 +31,16 @@ fn invalid_option_reports_error_and_exits_nonzero() {
     assert!(stderr.contains("unknown option"));
     assert!(stderr.contains("--help"));
 }
+
+#[cfg(not(all(feature = "realtime-audio", feature = "terminal-ui")))]
+#[test]
+fn build_without_runtime_features_fails_clearly_instead_of_claiming_to_run() {
+    let output = shelloop_command()
+        .output()
+        .expect("shelloop binary should launch");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("realtime-audio"));
+    assert!(stderr.contains("terminal-ui"));
+}
