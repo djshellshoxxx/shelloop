@@ -11,6 +11,7 @@ pub mod performance;
 pub mod project;
 pub mod quantize;
 pub mod recording;
+pub mod runtime;
 pub mod scheduler;
 pub mod synth;
 pub mod transport;
@@ -37,6 +38,9 @@ pub use performance::{AxisCurve, AxisMapping, XyPoint};
 pub use project::{Project, Track};
 pub use quantize::{next_boundary_frame, QuantizeBoundary, QuantizedChange};
 pub use recording::RecordingQueue;
+#[cfg(all(feature = "realtime-audio", feature = "terminal-ui"))]
+pub use runtime::run_realtime_session;
+pub use runtime::engine_command_from_midi;
 pub use scheduler::{ScheduledEvent, Scheduler, StepEvent};
 pub use synth::{Oscillator, SynthVoice};
 pub use transport::{Transport, TransportState};
