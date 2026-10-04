@@ -95,7 +95,8 @@ impl LiveSequencer {
             return;
         }
 
-        self.cache_start = (self.position_frame / u64::from(CACHE_FRAMES)) * u64::from(CACHE_FRAMES);
+        self.cache_start =
+            (self.position_frame / u64::from(CACHE_FRAMES)) * u64::from(CACHE_FRAMES);
         self.cache_end = self.cache_start.saturating_add(u64::from(CACHE_FRAMES));
         self.scheduler.schedule_block_into(
             &self.pattern,
