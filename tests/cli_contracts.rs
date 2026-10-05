@@ -28,7 +28,10 @@ fn version_prints_package_version_and_exits_successfully() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), format!("shelloop {}", env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        stdout.trim(),
+        format!("shelloop {}", env!("CARGO_PKG_VERSION"))
+    );
 }
 
 #[test]
