@@ -38,8 +38,8 @@ mod live {
     };
     use crate::{
         list_output_device_names, map_performance_key, open_output_stream, parse_pattern_json,
-        protect_master, shift_octave, EngineCommand, LiveSequencer, Oscillator, PerformanceKey,
-        RealtimeSynth, StartupOptions,
+        protect_master, shift_octave, spawn_realtime_recording, EngineCommand, LiveSequencer,
+        Oscillator, PerformanceKey, RealtimeSynth, StartupOptions, WavRecordingConfig,
     };
     use crossbeam_channel::{bounded, Sender};
     use crossterm::event::{
@@ -61,6 +61,8 @@ mod live {
     const COMMANDS_PER_SAMPLE_LIMIT: usize = 64;
     const SEQUENCER_CONTROLS_PER_SAMPLE_LIMIT: usize = 8;
     const KEYBOARD_CHANNEL: u8 = 0;
+    const RECORDING_QUEUE_CAPACITY: usize = 64;
+    const RECORDING_BLOCK_FRAMES: usize = 1024;
     const KEYBOARD_VELOCITY: f32 = 0.8;
     const FALLBACK_INITIAL_HOLD: Duration = Duration::from_millis(650);
     const FALLBACK_REPEAT_GRACE: Duration = Duration::from_millis(180);
@@ -204,7 +206,27 @@ mod live {
         let polyphony = options.polyphony;
         let bpm = options.bpm;
         let steps_per_beat = options.steps_per_beat;
+        let record_path = options.record_path.clone();
+        let (recording_finalizer_sender, recording_finalizer_receiver) =
+            std::sync::mpsc::sync_channel(1);
         let audio = open_output_stream(options.audio_device.as_deref(), move |sample_rate| {
+            let mut recorder = match record_path.as_deref() {
+                Some(path) => {
+                    let config = WavRecordingConfig::new(sample_rate, 1, RECORDING_QUEUE_CAPACITY)?;
+                    let (producer, finalizer) =
+                        spawn_realtime_recording(path, config, RECORDING_BLOCK_FRAMES)?;
+                    recording_finalizer_sender
+                        .send(Some(finalizer))
+                        .map_err(|_| "failed to publish recording finalizer".to_string())?;
+                    Some(producer)
+                }
+                None => {
+                    recording_finalizer_sender
+                        .send(None)
+                        .map_err(|_| "failed to publish recording state".to_string())?;
+                    None
+                }
+            };
             let mut performance_synth =
                 RealtimeSynth::new(sample_rate as f32, Oscillator::Saw, polyphony)?;
             let mut sequenced = match pattern {
@@ -261,9 +283,16 @@ mod live {
                     0.0
                 };
 
-                protect_master(performance_synth.next_sample() + sequencer_sample)
+                let sample = protect_master(performance_synth.next_sample() + sequencer_sample);
+                if let Some(recorder) = recorder.as_mut() {
+                    let _ = recorder.push_sample(sample);
+                }
+                sample
             })
         })?;
+        let recording_finalizer = recording_finalizer_receiver
+            .recv()
+            .map_err(|_| "audio renderer did not publish recording state".to_string())?;
 
         #[cfg(feature = "midi")]
         let midi_selector = options.midi_port.clone().unwrap_or(MidiPortSelector::First);
@@ -291,6 +320,9 @@ mod live {
         if let Some(handle) = midi.as_ref() {
             println!("MIDI input: {}", handle.port_name());
         }
+        if let Some(path) = options.record_path.as_deref() {
+            println!("Recording mono master output to: {path}");
+        }
         if let Some(name) = pattern_name.as_deref() {
             println!(
                 "Pattern: {name} at {} BPM, {} steps/beat",
@@ -301,6 +333,10 @@ mod live {
         println!("Keys: Z-M/Q-U notes, [ ] octave, ! panic, ~ or Esc quit");
         if let Err(error) = io::stdout().flush() {
             request_panic(&command_sender, &sequencer_sender);
+            drop(audio);
+            if let Some(finalizer) = recording_finalizer {
+                let _ = finalizer.finish();
+            }
             return Err(format!("failed to flush terminal output: {error}"));
         }
 
@@ -308,6 +344,10 @@ mod live {
             Ok(terminal) => terminal,
             Err(error) => {
                 request_panic(&command_sender, &sequencer_sender);
+                drop(audio);
+                if let Some(finalizer) = recording_finalizer {
+                    let _ = finalizer.finish();
+                }
                 return Err(error);
             }
         };
@@ -487,7 +527,31 @@ mod live {
 
         request_panic(&command_sender, &sequencer_sender);
         drop(terminal);
-        session_result
+        drop(audio);
+
+        let recording_result = match recording_finalizer {
+            Some(finalizer) => finalizer.finish().map(|summary| {
+                if let Some(path) = options.record_path.as_deref() {
+                    println!(
+                        "Recording saved: {} frames to {} (dropped blocks: {}, rejected blocks: {})",
+                        summary.frames_written,
+                        path,
+                        summary.dropped_blocks,
+                        summary.rejected_blocks
+                    );
+                }
+            }),
+            None => Ok(()),
+        };
+
+        match (session_result, recording_result) {
+            (Err(session_error), Err(recording_error)) => Err(format!(
+                "{session_error}; recording finalization also failed: {recording_error}"
+            )),
+            (Err(session_error), Ok(())) => Err(session_error),
+            (Ok(()), Err(recording_error)) => Err(recording_error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
     }
 }
 
