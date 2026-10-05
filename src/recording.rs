@@ -275,7 +275,9 @@ impl RealtimeRecordingBridge {
                     rejected_blocks: worker_rejected.load(Ordering::Relaxed),
                 })
             })
-            .map_err(|error| format!("failed to start realtime recording writer thread: {error}"))?;
+            .map_err(|error| {
+                format!("failed to start realtime recording writer thread: {error}")
+            })?;
 
         Ok(Self {
             full_sender,
@@ -356,16 +358,16 @@ impl RealtimeRecordingBridge {
 
     pub fn finish(mut self) -> Result<RecordingSummary, String> {
         if !self.current.is_empty() {
-            let remainder = self.current.len() % self.channels;
-            if remainder != 0 {
+            if !self.current.len().is_multiple_of(self.channels) {
                 self.rejected_blocks.fetch_add(1, Ordering::Relaxed);
+                let remainder = self.current.len() % self.channels;
                 self.current.truncate(self.current.len() - remainder);
             }
             if !self.current.is_empty() {
                 let block = std::mem::take(&mut self.current);
-                self.full_sender
-                    .send(block)
-                    .map_err(|error| format!("recording writer unavailable during finish: {error}"))?;
+                self.full_sender.send(block).map_err(|error| {
+                    format!("recording writer unavailable during finish: {error}")
+                })?;
             }
         }
 
