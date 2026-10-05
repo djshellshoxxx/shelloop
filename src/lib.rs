@@ -39,7 +39,9 @@ pub use performance::{AxisCurve, AxisMapping, XyPoint};
 pub use project::{Project, Track};
 pub use quantize::{next_boundary_frame, QuantizeBoundary, QuantizedChange};
 pub use recording::{
-    RealtimeRecordingBridge, RecordingQueue, RecordingSummary, RecordingWriter, WavRecordingConfig,
+    spawn_realtime_recording, RealtimeRecordingBridge, RealtimeRecordingFinalizer,
+    RealtimeRecordingProducer, RecordingQueue, RecordingSummary, RecordingWriter,
+    WavRecordingConfig,
 };
 pub use runtime::engine_command_from_midi;
 #[cfg(all(feature = "realtime-audio", feature = "terminal-ui"))]
