@@ -128,7 +128,9 @@ impl RecordingWriter {
                     for sample in block {
                         writer
                             .write_sample(sanitize_sample(sample))
-                            .map_err(|error| format!("failed to write recording sample: {error}"))?;
+                            .map_err(|error| {
+                                format!("failed to write recording sample: {error}")
+                            })?;
                         samples_written = samples_written.saturating_add(1);
                     }
                 }
