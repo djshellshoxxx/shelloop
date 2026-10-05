@@ -1,13 +1,14 @@
 # Shelloop v0.01-beta QA Record
 
-Date: 2026-10-04
+Date: 2026-10-05
 Branch: `continuation/rebuild-baseline`
-Verified implementation head: `bf25d3b7f503a690094afcb9b411291c23c93af5`
-GitHub Actions run: `37201995320` (CI run #106)
+Verified product-code head: `5b205d4577c845f309f8388f12355476ba8ce774`
+GitHub Actions CI run: `37277967104` (CI run #114)
+GitHub Actions release-build run: `37277967094` (Release run #6)
 
 ## Automated verification
 
-The following checks completed successfully against the verified implementation head after live sequencer playback was connected to the real-time runtime.
+The following checks completed successfully against the verified product-code head after the final CLI/version QA fix.
 
 ### Default/core job — Ubuntu
 
@@ -41,6 +42,35 @@ Features: `realtime-audio,midi,terminal-ui`
 
 Result: PASS.
 
+## Release-package QA
+
+Release run `37277967094` rebuilt and packaged both release targets from the verified product-code head.
+
+### Linux x86_64
+
+- all-feature release-source tests: PASS
+- optimized release build: PASS
+- package verifier: PASS
+- workflow artifact: `linux-x86_64`
+- archive: `shelloop-v0.01-beta-linux-x86_64.tar.gz`
+- SHA-256 checksum verification after download: PASS
+- artifact type: 64-bit x86_64 ELF PIE executable
+- `shelloop --version`: `shelloop 0.1.0-beta.1`
+- `shelloop --help` contains `-V, --version`: PASS
+- invalid option returns exit code 2 and an explicit error: PASS
+- README, LICENSE, and `patterns/example-bassline.json` present: PASS
+
+### Windows x86_64
+
+- all-feature release-source tests: PASS
+- optimized release build: PASS
+- package verifier: PASS
+- workflow artifact: `windows-x86_64`
+- archive: `shelloop-v0.01-beta-windows-x86_64.zip`
+- SHA-256 checksum verification after download: PASS
+- artifact type: PE32+ x86_64 Windows console executable
+- README, LICENSE, and `patterns/example-bassline.json` present: PASS
+
 ## Runtime behavior covered by automated tests
 
 - audio sample clipping and non-finite-value sanitization
@@ -53,7 +83,7 @@ Result: PASS.
 - sustain pedal routing and all-notes-off/panic routing
 - malformed MIDI decoding rejection
 - keyboard note mapping, octave bounds, panic and quit controls
-- startup option parsing, conflicts, invalid values, help and error exit behavior
+- startup option parsing, conflicts, invalid values, help, version and error exit behavior
 - bounded voice allocation, sustain release, voice stealing and panic
 - deterministic pattern probability, independent pattern lengths, swing, microtiming and ratchets
 - validated JSON pattern loading
@@ -64,7 +94,7 @@ Result: PASS.
 
 ## Live sequencer integration
 
-Live pattern playback is now connected to the hardware-facing CPAL session. Pattern files are read and validated before the audio stream starts. The callback owns a `LiveSequencer` and a dedicated sequencer synth, separate from the keyboard/MIDI performance synth.
+Live pattern playback is connected to the hardware-facing CPAL session. Pattern files are read and validated before the audio stream starts. The callback owns a `LiveSequencer` and a dedicated sequencer synth, separate from the keyboard/MIDI performance synth.
 
 The separation means a sequencer pause, restart or sequencer panic does not terminate a note currently held from the computer keyboard or a MIDI controller. Space toggles sequencer playback and Backspace restarts at frame zero when a pattern is loaded.
 
@@ -82,9 +112,9 @@ The production-code panic/unwrap audit found no explicit `panic!` calls. The rem
 
 Windows uses crossterm key press/repeat/release events. On compatible Unix terminals, Shelloop requests keyboard enhancement event types so note-off can follow real key release. Where release events are unavailable, the runtime reports the limitation and uses bounded timed note releases rather than allowing indefinitely stuck keyboard notes.
 
-## Physical validation still required
+## Physical validation status
 
-CI cannot validate real audio hardware or subjective/audio-timing behavior. Before publishing `v0.01-beta`, perform at least the following on representative Windows and Linux machines:
+Automated QA cannot validate subjective audio quality or real external hardware behavior. The following checks remain recommended for beta testers on representative Windows and Linux systems:
 
 - enumerate audio devices and select both default and explicitly named outputs
 - verify stable playback at the device's native/default sample rate
@@ -98,12 +128,12 @@ CI cannot validate real audio hardware or subjective/audio-timing behavior. Befo
 - check audible latency, xruns/underruns and sound quality under sustained polyphony plus sequencer load
 - validate no-audio-device and unavailable-selected-device errors on real hosts
 
-## Scope after the beta gate
+These are documented as beta hardware-validation items rather than silently claimed as completed.
 
-The selected beta code scope is implemented and covered by automated CI. Broader v1 work remains, including quantized live pattern/scene replacement, richer terminal UI and command mode, mouse XY control, drum/sample playback, effects and the WAV recorder writer thread.
+## Scope after the beta release
+
+The selected beta code scope is implemented and covered by automated CI and artifact-level package QA. Broader v1 work remains, including quantized live pattern/scene replacement, richer terminal UI and command mode, mouse XY control, drum/sample playback, effects and the WAV recorder writer thread.
 
 ## Release status
 
-The release workflow is present and configured to package Windows and Linux optimized binaries with README/LICENSE and SHA-256 checksums when tag `v0.01-beta` is pushed.
-
-The release tag has intentionally not been created. Publishing remains gated on the physical validation above and then verification of the tag-triggered packaging workflow against the exact release commit.
+The release workflow packages Windows and Linux optimized binaries with README/LICENSE and SHA-256 checksums for `v0.01-beta`. Automated CI, cross-platform release builds, package verification and independent artifact smoke checks are green. The release is explicitly a beta; physical audio/MIDI hardware validation remains an open beta-testing item.
