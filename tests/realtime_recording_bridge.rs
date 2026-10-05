@@ -59,7 +59,6 @@ fn realtime_bridge_reports_preallocated_pool_size() {
     bridge.finish().unwrap();
 }
 
-
 #[test]
 fn split_realtime_recording_finalizes_after_producer_drop() {
     let dir = tempdir().unwrap();
