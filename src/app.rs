@@ -14,6 +14,9 @@ pub struct StartupOptions {
     pub no_midi: bool,
     pub show_help: bool,
     pub show_version: bool,
+    pub pc_speaker_test: bool,
+    pub pc_speaker_frequency_hz: u32,
+    pub pc_speaker_duration_ms: u32,
 }
 
 impl Default for StartupOptions {
@@ -31,6 +34,9 @@ impl Default for StartupOptions {
             no_midi: false,
             show_help: false,
             show_version: false,
+            pc_speaker_test: false,
+            pc_speaker_frequency_hz: 440,
+            pc_speaker_duration_ms: 250,
         }
     }
 }
@@ -47,6 +53,8 @@ where
     let mut options = StartupOptions::default();
     let mut index = 0;
     let mut explicit_midi = false;
+    let mut explicit_pc_speaker_frequency = false;
+    let mut explicit_pc_speaker_duration = false;
 
     while index < args.len() {
         match args[index].as_str() {
@@ -147,6 +155,35 @@ where
                 }
                 options.steps_per_beat = steps_per_beat;
             }
+            "--pc-speaker-test" => options.pc_speaker_test = true,
+            "--pc-speaker-frequency" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--pc-speaker-frequency requires a frequency in Hz".to_string())?;
+                let frequency = value
+                    .parse::<u32>()
+                    .map_err(|_| "--pc-speaker-frequency must be an integer from 37 to 32767".to_string())?;
+                if !(37..=32_767).contains(&frequency) {
+                    return Err("--pc-speaker-frequency must be between 37 and 32767 Hz".into());
+                }
+                options.pc_speaker_frequency_hz = frequency;
+                explicit_pc_speaker_frequency = true;
+            }
+            "--pc-speaker-duration" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--pc-speaker-duration requires milliseconds".to_string())?;
+                let duration = value
+                    .parse::<u32>()
+                    .map_err(|_| "--pc-speaker-duration must be an integer from 1 to 5000".to_string())?;
+                if !(1..=5_000).contains(&duration) {
+                    return Err("--pc-speaker-duration must be between 1 and 5000 ms".into());
+                }
+                options.pc_speaker_duration_ms = duration;
+                explicit_pc_speaker_duration = true;
+            }
             "--list-devices" => options.list_devices = true,
             "--mouse-xy" => options.mouse_xy = true,
             "--no-midi" => options.no_midi = true,
@@ -159,6 +196,13 @@ where
 
     if options.no_midi && explicit_midi {
         return Err("--no-midi cannot be combined with a MIDI port selector".into());
+    }
+    if !options.pc_speaker_test
+        && (explicit_pc_speaker_frequency || explicit_pc_speaker_duration)
+    {
+        return Err(
+            "--pc-speaker-frequency and --pc-speaker-duration require --pc-speaker-test".into(),
+        );
     }
 
     Ok(options)
