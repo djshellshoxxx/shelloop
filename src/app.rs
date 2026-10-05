@@ -158,12 +158,12 @@ where
             "--pc-speaker-test" => options.pc_speaker_test = true,
             "--pc-speaker-frequency" => {
                 index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or_else(|| "--pc-speaker-frequency requires a frequency in Hz".to_string())?;
-                let frequency = value
-                    .parse::<u32>()
-                    .map_err(|_| "--pc-speaker-frequency must be an integer from 37 to 32767".to_string())?;
+                let value = args.get(index).ok_or_else(|| {
+                    "--pc-speaker-frequency requires a frequency in Hz".to_string()
+                })?;
+                let frequency = value.parse::<u32>().map_err(|_| {
+                    "--pc-speaker-frequency must be an integer from 37 to 32767".to_string()
+                })?;
                 if !(37..=32_767).contains(&frequency) {
                     return Err("--pc-speaker-frequency must be between 37 and 32767 Hz".into());
                 }
@@ -175,9 +175,9 @@ where
                 let value = args
                     .get(index)
                     .ok_or_else(|| "--pc-speaker-duration requires milliseconds".to_string())?;
-                let duration = value
-                    .parse::<u32>()
-                    .map_err(|_| "--pc-speaker-duration must be an integer from 1 to 5000".to_string())?;
+                let duration = value.parse::<u32>().map_err(|_| {
+                    "--pc-speaker-duration must be an integer from 1 to 5000".to_string()
+                })?;
                 if !(1..=5_000).contains(&duration) {
                     return Err("--pc-speaker-duration must be between 1 and 5000 ms".into());
                 }
@@ -197,9 +197,7 @@ where
     if options.no_midi && explicit_midi {
         return Err("--no-midi cannot be combined with a MIDI port selector".into());
     }
-    if !options.pc_speaker_test
-        && (explicit_pc_speaker_frequency || explicit_pc_speaker_duration)
-    {
+    if !options.pc_speaker_test && (explicit_pc_speaker_frequency || explicit_pc_speaker_duration) {
         return Err(
             "--pc-speaker-frequency and --pc-speaker-duration require --pc-speaker-test".into(),
         );
