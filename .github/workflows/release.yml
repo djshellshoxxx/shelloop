@@ -4,6 +4,8 @@ on:
   pull_request:
   workflow_dispatch:
   push:
+    branches:
+      - continuation/rebuild-baseline
     tags:
       - v0.01-beta
 
@@ -81,8 +83,8 @@ jobs:
   publish:
     name: Publish prerelease
     if: >-
-      (github.event_name == 'push' && github.ref == 'refs/tags/v0.01-beta') ||
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+      github.event_name == 'push' &&
+      (github.ref == 'refs/tags/v0.01-beta' || github.ref == 'refs/heads/continuation/rebuild-baseline')
     permissions:
       contents: write
     needs: build
@@ -93,7 +95,7 @@ jobs:
         id: gate
         shell: bash
         run: |
-          if [[ "$GITHUB_EVENT_NAME" == "push" ]] || [[ -f .github/release-v0.01-beta.trigger ]]; then
+          if [[ "$GITHUB_REF" == "refs/tags/v0.01-beta" ]] || [[ -f .github/release-v0.01-beta.trigger ]]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
