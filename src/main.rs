@@ -13,6 +13,7 @@ Options:\n\
   --bpm <TEMPO>          Set sequencer tempo from 20 to 400 (default: 120)\n\
   --steps-per-beat <N>   Set sequencer grid density from 1 to 64 (default: 4)\n\
   --list-devices         List available audio and MIDI devices\n\
+  --mouse-xy             Enable mouse XY performance control\n\
   --no-midi              Disable MIDI input\n\
   -V, --version          Print version information\n\
   -h, --help             Print this help text\n";
