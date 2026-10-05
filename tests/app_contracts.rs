@@ -29,6 +29,18 @@ fn startup_options_parse_audio_midi_and_runtime_flags() {
 }
 
 #[test]
+fn startup_options_support_wav_recording_path() {
+    let options = parse_startup_options(["--record", "captures/demo.wav"]).unwrap();
+    assert_eq!(options.record_path.as_deref(), Some("captures/demo.wav"));
+}
+
+#[test]
+fn startup_options_reject_missing_or_empty_recording_path() {
+    assert!(parse_startup_options(["--record"]).is_err());
+    assert!(parse_startup_options(["--record", ""]).is_err());
+}
+
+#[test]
 fn startup_options_support_live_pattern_playback() {
     let options = parse_startup_options([
         "--pattern",
