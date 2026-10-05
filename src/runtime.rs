@@ -468,29 +468,30 @@ mod live {
 
                 let terminal_event = event::read()
                     .map_err(|error| format!("failed to read terminal event: {error}"))?;
-                if let Event::Mouse(mouse_event) = terminal_event {
-                    if options.mouse_xy
-                        && matches!(
-                            mouse_event.kind,
-                            MouseEventKind::Down(MouseButton::Left)
-                                | MouseEventKind::Drag(MouseButton::Left)
-                        )
-                    {
-                        let (width, height) = crossterm::terminal::size()
-                            .map_err(|error| format!("failed to query terminal size: {error}"))?;
-                        let point = XyPoint::from_terminal(
-                            mouse_event.column,
-                            mouse_event.row,
-                            width,
-                            height,
-                        );
-                        let mix = PerformanceMix::from_xy(point, pattern_name.is_some());
-                        let _ = performance_sender.try_send(mix);
+                let key_event = match terminal_event {
+                    Event::Mouse(mouse_event) => {
+                        if options.mouse_xy
+                            && matches!(
+                                mouse_event.kind,
+                                MouseEventKind::Down(MouseButton::Left)
+                                    | MouseEventKind::Drag(MouseButton::Left)
+                            )
+                        {
+                            let (width, height) = crossterm::terminal::size()
+                                .map_err(|error| format!("failed to query terminal size: {error}"))?;
+                            let point = XyPoint::from_terminal(
+                                mouse_event.column,
+                                mouse_event.row,
+                                width,
+                                height,
+                            );
+                            let mix = PerformanceMix::from_xy(point, pattern_name.is_some());
+                            let _ = performance_sender.try_send(mix);
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                let Event::Key(key_event) = terminal_event else {
-                    continue;
+                    Event::Key(key_event) => key_event,
+                    _ => continue,
                 };
 
                 if key_event.code == KeyCode::Esc && key_event.kind != KeyEventKind::Release {
