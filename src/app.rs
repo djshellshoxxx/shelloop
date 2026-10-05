@@ -6,6 +6,7 @@ pub struct StartupOptions {
     pub midi_port: Option<MidiPortSelector>,
     pub polyphony: usize,
     pub pattern_path: Option<String>,
+    pub record_path: Option<String>,
     pub bpm: u16,
     pub steps_per_beat: u8,
     pub list_devices: bool,
@@ -21,6 +22,7 @@ impl Default for StartupOptions {
             midi_port: Some(MidiPortSelector::First),
             polyphony: 16,
             pattern_path: None,
+            record_path: None,
             bpm: 120,
             steps_per_beat: 4,
             list_devices: false,
@@ -106,6 +108,16 @@ where
                     return Err("--pattern requires a non-empty JSON file path".into());
                 }
                 options.pattern_path = Some(value.clone());
+            }
+            "--record" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--record requires a WAV file path".to_string())?;
+                if value.trim().is_empty() {
+                    return Err("--record requires a non-empty WAV file path".into());
+                }
+                options.record_path = Some(value.clone());
             }
             "--bpm" => {
                 index += 1;
