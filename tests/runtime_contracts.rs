@@ -1,6 +1,6 @@
 use shelloop::{
     parse_command, AxisCurve, AxisMapping, Command, RecordingQueue, Transport, TransportState,
-    XyPoint,
+    PerformanceMix, XyPoint,
 };
 
 #[test]
@@ -100,4 +100,23 @@ fn command_parser_handles_transport_tempo_and_quoted_paths() {
     );
     assert!(parse_command("tempo nope").is_err());
     assert!(parse_command("unknown thing").is_err());
+}
+
+#[test]
+fn mouse_xy_maps_crossfade_and_master_level() {
+    let bottom_left = PerformanceMix::from_xy(XyPoint { x: 0.0, y: 0.0 }, true);
+    assert_eq!(bottom_left.live_gain, 0.0);
+    assert_eq!(bottom_left.sequencer_gain, 0.0);
+
+    let top_left = PerformanceMix::from_xy(XyPoint { x: 0.0, y: 1.0 }, true);
+    assert_eq!(top_left.live_gain, 1.0);
+    assert_eq!(top_left.sequencer_gain, 0.0);
+
+    let top_right = PerformanceMix::from_xy(XyPoint { x: 1.0, y: 1.0 }, true);
+    assert_eq!(top_right.live_gain, 0.0);
+    assert_eq!(top_right.sequencer_gain, 1.0);
+
+    let no_pattern = PerformanceMix::from_xy(XyPoint { x: 1.0, y: 0.5 }, false);
+    assert_eq!(no_pattern.live_gain, 0.5);
+    assert_eq!(no_pattern.sequencer_gain, 0.0);
 }
