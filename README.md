@@ -37,6 +37,7 @@ Options:
   --midi-index <INDEX>   Select a MIDI input port by zero-based index
   --polyphony <VOICES>   Set synth polyphony from 1 to 256 (default: 16)
   --pattern <FILE>       Load a validated JSON pattern for live playback
+  --record <FILE>        Record the mono master output to a 32-bit float WAV
   --bpm <TEMPO>          Set sequencer tempo from 20 to 400 (default: 120)
   --steps-per-beat <N>   Set sequencer grid density from 1 to 64 (default: 4)
   --list-devices         List available audio and MIDI devices
@@ -73,6 +74,20 @@ Run without MIDI:
 ```bash
 shelloop --no-midi
 ```
+
+Record the protected mono master output while performing:
+
+```bash
+shelloop --record take.wav
+```
+
+Record a pattern performance:
+
+```bash
+shelloop --no-midi --pattern patterns/example-bassline.json --bpm 138 --record bassline-take.wav
+```
+
+Recording uses the actual selected output device sample rate, writes 32-bit float WAV data on a background writer thread, and reports dropped/rejected blocks when the session ends.
 
 ## Windows: complete setup and testing guide
 
@@ -475,7 +490,7 @@ shelloop-v0.01-beta-windows-x86_64.zip.sha256
 
 The project is still pre-beta. Automated Windows CI proves that the all-feature code compiles, tests, passes strict Clippy and produces an optimized executable, but CI cannot prove real speaker output, real MIDI-controller behavior, end-to-end latency, xrun/dropout behavior or sound quality on physical hardware.
 
-The real-time recording bridge is implemented and tested internally, but a user-facing `--record` runtime option is still being wired in. Do not expect live recording from the command line until that control path is documented here.
+Live recording is now wired through `--record <FILE>`. The current beta records the protected mono master mix; multichannel/stem recording is not implemented yet.
 
 The final `v0.01-beta` release will only be tagged after the remaining real-hardware QA checks and release-package verification are complete.
 
@@ -554,7 +569,7 @@ The package version is `0.1.0-beta.1`. The eventual `v0.01-beta` tag triggers Wi
 
 The release workflow can also be run manually for package verification without publishing a tag. Normal pull requests use the cross-platform CI workflow for formatting, tests, strict Clippy, all-feature checks and optimized runtime builds; the release-packaging workflow is intentionally kept off ordinary PR commits so development feedback is not duplicated.
 
-The tag is intentionally not created yet. Remaining release gates are physical Windows/Linux playback and MIDI-controller validation, latency/xrun/sound-quality checks, device-unavailable and unplug/reconnect validation on real hosts, completion of user-facing live-recording wiring, and verification of the tag-triggered packaging workflow against the exact final release commit.
+The tag is intentionally not created yet. Remaining release gates are physical Windows/Linux playback and MIDI-controller validation, latency/xrun/sound-quality checks, device-unavailable and unplug/reconnect validation on real hosts, live-recording validation on real hardware, and verification of the tag-triggered packaging workflow against the exact final release commit.
 
 ## v1 direction
 
