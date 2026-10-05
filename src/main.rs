@@ -13,6 +13,7 @@ Options:\n\
   --steps-per-beat <N>   Set sequencer grid density from 1 to 64 (default: 4)\n\
   --list-devices         List available audio and MIDI devices\n\
   --no-midi              Disable MIDI input\n\
+  -V, --version          Print version information\n\
   -h, --help             Print this help text\n";
 
 fn main() -> ExitCode {
@@ -26,6 +27,11 @@ fn main() -> ExitCode {
 
     if options.show_help {
         print!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+
+    if options.show_version {
+        println!("shelloop {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
 
