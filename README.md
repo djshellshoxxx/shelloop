@@ -41,6 +41,7 @@ Options:
   --bpm <TEMPO>          Set sequencer tempo from 20 to 400 (default: 120)
   --steps-per-beat <N>   Set sequencer grid density from 1 to 64 (default: 4)
   --list-devices         List available audio and MIDI devices
+  --mouse-xy             Enable terminal mouse XY performance control
   --no-midi              Disable MIDI input
   -h, --help             Print help
 ```
@@ -74,6 +75,14 @@ Run without MIDI:
 ```bash
 shelloop --no-midi
 ```
+
+Enable mouse XY Performance Mode:
+
+```bash
+shelloop --mouse-xy
+```
+
+With a pattern loaded, hold the left mouse button and drag inside the terminal. X crossfades between the live synth (left) and sequencer (right); Y controls overall performance level. Without a loaded pattern, X is ignored and Y controls the live synth level. Mouse capture is disabled again when Shelloop exits.
 
 Record the protected mono master output while performing:
 
@@ -522,7 +531,7 @@ Lower: Z S X D C V G B H N J M
 Upper: Q 2 W 3 E R 5 T 6 Y 7 U
 ```
 
-`[` and `]` shift octave, `!` sends panic/all-notes-off, and `~` or `Esc` quits. With a pattern loaded, Space toggles sequencer play/pause and Backspace restarts from frame zero. Windows provides key press/repeat/release events directly. On Unix-like terminals, Shelloop requests the crossterm/kitty keyboard enhancement protocol so notes can be released correctly. If the terminal does not support it, Shelloop falls back to bounded timed note releases and reports that limitation at startup.
+`[` and `]` shift octave, `!` sends panic/all-notes-off, and `~` or `Esc` quits. With a pattern loaded, Space toggles sequencer play/pause and Backspace restarts from frame zero. `--mouse-xy` enables left-button drag performance control, using X as live/sequencer crossfade and Y as overall level. Windows provides key press/repeat/release events directly. On Unix-like terminals, Shelloop requests the crossterm/kitty keyboard enhancement protocol so notes can be released correctly. If the terminal does not support it, Shelloop falls back to bounded timed note releases and reports that limitation at startup.
 
 ## Build
 
