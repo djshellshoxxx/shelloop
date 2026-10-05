@@ -7,6 +7,7 @@ pub struct StartupOptions {
     pub polyphony: usize,
     pub pattern_path: Option<String>,
     pub record_path: Option<String>,
+    pub mouse_xy: bool,
     pub bpm: u16,
     pub steps_per_beat: u8,
     pub list_devices: bool,
@@ -23,6 +24,7 @@ impl Default for StartupOptions {
             polyphony: 16,
             pattern_path: None,
             record_path: None,
+            mouse_xy: false,
             bpm: 120,
             steps_per_beat: 4,
             list_devices: false,
@@ -146,6 +148,7 @@ where
                 options.steps_per_beat = steps_per_beat;
             }
             "--list-devices" => options.list_devices = true,
+            "--mouse-xy" => options.mouse_xy = true,
             "--no-midi" => options.no_midi = true,
             "--help" | "-h" => options.show_help = true,
             "--version" | "-V" => options.show_version = true,
