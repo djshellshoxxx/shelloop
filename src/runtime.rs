@@ -38,7 +38,8 @@ mod live {
     };
     use crate::{
         list_output_device_names, map_performance_key, open_output_stream, parse_pattern_json,
-        protect_master, shift_octave, spawn_realtime_recording, EngineCommand, LiveSequencer,
+        pc_speaker_backend, protect_master, shift_octave, spawn_realtime_recording, EngineCommand,
+        LiveSequencer,
         Oscillator, PerformanceKey, PerformanceMix, RealtimeSynth, StartupOptions, WavRecordingConfig,
         XyPoint,
     };
@@ -194,6 +195,9 @@ mod live {
         }
         #[cfg(not(feature = "midi"))]
         println!("  (MIDI support not compiled in)");
+
+        println!("Special outputs:");
+        println!("  PC speaker: {}", pc_speaker_backend().description());
 
         Ok(())
     }
