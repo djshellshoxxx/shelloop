@@ -4,16 +4,11 @@ on:
   pull_request:
   workflow_dispatch:
   push:
-    branches:
-      - continuation/rebuild-baseline
     tags:
       - v0.01-beta
 
 permissions:
   contents: read
-
-env:
-  BETA_RELEASE_SHA: 6a39c216d607b7ed9995033a6dc0a4f14d8c4981
 
 jobs:
   build:
@@ -33,8 +28,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.BETA_RELEASE_SHA }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux audio development headers
@@ -82,44 +75,21 @@ jobs:
 
   publish:
     name: Publish prerelease
-    if: >-
-      github.event_name == 'push' &&
-      (github.ref == 'refs/tags/v0.01-beta' || github.ref == 'refs/heads/continuation/rebuild-baseline')
+    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.01-beta'
     permissions:
       contents: write
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - name: Check one-time beta publish gate
-        id: gate
-        shell: bash
-        run: |
-          if [[ "$GITHUB_REF" == "refs/tags/v0.01-beta" ]] || [[ -f .github/release-v0.01-beta.trigger ]]; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          fi
       - uses: actions/download-artifact@v4
-        if: steps.gate.outputs.publish == 'true'
         with:
           path: dist
           merge-multiple: true
       - name: Publish v0.01-beta
-        if: steps.gate.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.01-beta
-          target_commitish: ${{ env.BETA_RELEASE_SHA }}
-          name: Shelloop v0.01 Beta
           prerelease: true
           generate_release_notes: true
-          body: |
-            Shelloop v0.01 Beta is the first packaged beta of the terminal-only real-time step sequencer and playable synthesizer.
-
-            Automated QA is green on Ubuntu and Windows, including all-feature tests, strict Clippy, optimized builds, package verification and SHA-256 checksums. The Linux and Windows packages include the executable, README, MIT license and example pattern.
-
-            This is a beta release. Physical audio-interface and MIDI-controller validation, subjective sound-quality checks, latency/xrun testing and device unplug/reconnect testing remain hardware-dependent beta validation items and are not claimed as completed.
           files: |
             dist/*.tar.gz
             dist/*.zip
