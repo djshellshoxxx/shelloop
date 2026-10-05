@@ -11,6 +11,7 @@ pub struct StartupOptions {
     pub list_devices: bool,
     pub no_midi: bool,
     pub show_help: bool,
+    pub show_version: bool,
 }
 
 impl Default for StartupOptions {
@@ -25,6 +26,7 @@ impl Default for StartupOptions {
             list_devices: false,
             no_midi: false,
             show_help: false,
+            show_version: false,
         }
     }
 }
@@ -134,6 +136,7 @@ where
             "--list-devices" => options.list_devices = true,
             "--no-midi" => options.no_midi = true,
             "--help" | "-h" => options.show_help = true,
+            "--version" | "-V" => options.show_version = true,
             unknown => return Err(format!("unknown option: {unknown}")),
         }
         index += 1;
