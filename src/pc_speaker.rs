@@ -20,12 +20,12 @@ impl PcSpeakerBackend {
 pub fn pc_speaker_backend() -> PcSpeakerBackend {
     #[cfg(target_os = "linux")]
     {
-        return PcSpeakerBackend::LinuxConsoleSpeaker;
+        PcSpeakerBackend::LinuxConsoleSpeaker
     }
 
     #[cfg(windows)]
     {
-        return PcSpeakerBackend::WindowsBeepCompatibility;
+        PcSpeakerBackend::WindowsBeepCompatibility
     }
 
     #[cfg(not(any(target_os = "linux", windows)))]
@@ -44,12 +44,12 @@ pub fn pc_speaker_test(frequency_hz: u32, duration_ms: u32) -> Result<(), String
 
     #[cfg(target_os = "linux")]
     {
-        return linux::tone(frequency_hz, duration_ms);
+        linux::tone(frequency_hz, duration_ms)
     }
 
     #[cfg(windows)]
     {
-        return windows::tone(frequency_hz, duration_ms);
+        windows::tone(frequency_hz, duration_ms)
     }
 
     #[cfg(not(any(target_os = "linux", windows)))]
