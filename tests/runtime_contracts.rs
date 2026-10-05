@@ -1,6 +1,6 @@
 use shelloop::{
-    parse_command, AxisCurve, AxisMapping, Command, RecordingQueue, Transport, TransportState,
-    PerformanceMix, XyPoint,
+    parse_command, AxisCurve, AxisMapping, Command, PerformanceMix, RecordingQueue, Transport,
+    TransportState, XyPoint,
 };
 
 #[test]
