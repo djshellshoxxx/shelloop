@@ -142,7 +142,9 @@ MIDI input is also bounded. Malformed messages and queue overflows are counted i
 
 ## Beta release pipeline
 
-The package version is `0.1.0-beta.1`. The eventual `v0.01-beta` tag triggers Windows x86-64 and Linux x86-64 optimized builds with all runtime features, packages the binary with this README and MIT license, emits SHA-256 checksum files, and publishes a GitHub prerelease.
+The package version is `0.1.0-beta.1`. The eventual `v0.01-beta` tag triggers Windows x86-64 and Linux x86-64 optimized builds with all runtime features, packages the binary with this README, MIT license and example patterns, emits SHA-256 checksum files, and publishes a GitHub prerelease.
+
+Pull requests also build the archives, verify their checksums and required resources, and run the extracted executable with `--help`. Download the candidate archives from the Release workflow artifacts for hardware testing. These runs do not publish a release.
 
 The tag is intentionally not created yet. Remaining release gates are fresh automated verification of this sequencer integration, physical Windows/Linux playback and MIDI-controller validation, latency/xrun/sound-quality checks, device-unavailable and unplug/reconnect validation on real hosts, and verification of the tag-triggered packaging workflow against the exact final release commit.
 

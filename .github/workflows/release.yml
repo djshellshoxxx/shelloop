@@ -1,12 +1,14 @@
 name: Release
 
 on:
+  pull_request:
+  workflow_dispatch:
   push:
     tags:
       - v0.01-beta
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -31,6 +33,8 @@ jobs:
       - name: Install Linux audio development headers
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Test release source
+        run: cargo test --all-targets --features realtime-audio,midi,terminal-ui
       - name: Build release binary
         run: cargo build --release --features realtime-audio,midi,terminal-ui
       - name: Package Linux artifact
@@ -41,6 +45,7 @@ jobs:
           mkdir -p dist/shelloop-v0.01-beta-linux-x86_64
           cp target/release/shelloop dist/shelloop-v0.01-beta-linux-x86_64/
           cp README.md LICENSE dist/shelloop-v0.01-beta-linux-x86_64/
+          cp -r patterns dist/shelloop-v0.01-beta-linux-x86_64/
           tar -C dist -czf dist/${{ matrix.archive }} shelloop-v0.01-beta-linux-x86_64
           cd dist
           sha256sum ${{ matrix.archive }} > ${{ matrix.archive }}.sha256
@@ -54,9 +59,12 @@ jobs:
           Copy-Item 'target/release/shelloop.exe' $package
           Copy-Item 'README.md' $package
           Copy-Item 'LICENSE' $package
+          Copy-Item 'patterns' $package -Recurse
           Compress-Archive -Path "$package/*" -DestinationPath "dist/${{ matrix.archive }}" -Force
           $hash = (Get-FileHash "dist/${{ matrix.archive }}" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  ${{ matrix.archive }}" | Set-Content -NoNewline "dist/${{ matrix.archive }}.sha256"
+      - name: Verify packaged artifact
+        run: python scripts/verify_release.py dist/${{ matrix.archive }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
@@ -67,6 +75,9 @@ jobs:
 
   publish:
     name: Publish prerelease
+    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.01-beta'
+    permissions:
+      contents: write
     needs: build
     runs-on: ubuntu-latest
     steps:
