@@ -2,7 +2,7 @@
 
 SHELLOOP is a terminal-only real-time music instrument: a live step sequencer plus a playable synthesizer designed for Windows and Linux.
 
-Development is active on `continuation/rebuild-baseline` in draft PR #1. The deterministic musical core, hardware-facing playable synth, and first live pattern-playback path are implemented on this branch. The beta tag is still intentionally withheld pending physical audio/MIDI validation and final release verification.
+Development is active on `continuation/rebuild-baseline` in draft PR #1. The deterministic musical core, hardware-facing playable synth, live pattern-playback path and real-time-safe WAV recording foundation are implemented on this branch. The beta tag is still intentionally withheld pending physical audio/MIDI validation and final release verification.
 
 ## Implemented
 
@@ -21,7 +21,8 @@ Development is active on `continuation/rebuild-baseline` in draft PR #1. The det
 - Crossterm key-release reporting where supported, with a timed note-off fallback on older terminals
 - Bounded control/MIDI/sequencer queues and no blocking terminal or filesystem work in the audio callback
 - Project validation and atomic JSON persistence
-- Bounded recording queue and master-output protection
+- Background WAV writer and preallocated real-time recording bridge
+- Bounded recording queues and master-output protection
 - Windows/Linux all-feature compile, test, strict Clippy and optimized-release CI gates
 - `v0.01-beta` packaging workflow for Windows x86-64 and Linux x86-64 with SHA-256 checksums
 
@@ -72,6 +73,411 @@ Run without MIDI:
 ```bash
 shelloop --no-midi
 ```
+
+## Windows: complete setup and testing guide
+
+Shelloop targets 64-bit Windows. There are two ways to run it: use the prebuilt `v0.01-beta` package once that release is published, or build the current development branch from source now.
+
+### Option A: use the prebuilt Windows beta
+
+Once `v0.01-beta` is published, open the repository's **Releases** section and download:
+
+```text
+shelloop-v0.01-beta-windows-x86_64.zip
+shelloop-v0.01-beta-windows-x86_64.zip.sha256
+```
+
+Extract the ZIP to a normal writable folder, for example:
+
+```text
+C:\Tools\shelloop\
+```
+
+The extracted directory will contain at least:
+
+```text
+shelloop.exe
+README.md
+LICENSE
+patterns\
+```
+
+Open PowerShell in that directory. In File Explorer you can click the address bar, type `powershell`, and press Enter.
+
+Confirm that the executable starts:
+
+```powershell
+.\shelloop.exe --help
+```
+
+List the audio and MIDI devices visible to Shelloop:
+
+```powershell
+.\shelloop.exe --list-devices
+```
+
+Then start with the Windows default audio output and the first available MIDI input:
+
+```powershell
+.\shelloop.exe
+```
+
+If no MIDI keyboard is connected, start with MIDI disabled:
+
+```powershell
+.\shelloop.exe --no-midi
+```
+
+The `v0.01-beta` release is not published yet. Until the release gate is complete, use the source-build instructions below.
+
+### Option B: build the current version from source
+
+Shelloop is written in Rust and uses the normal Windows MSVC Rust toolchain.
+
+#### 1. Install Git
+
+Install Git for Windows if `git` is not already available. Confirm it from PowerShell:
+
+```powershell
+git --version
+```
+
+#### 2. Install the Microsoft C++ build tools
+
+Install **Visual Studio 2022 Build Tools** or Visual Studio 2022 with the **Desktop development with C++** workload enabled. The Rust MSVC target needs the Microsoft linker and Windows SDK supplied by this workload.
+
+After installation, a normal PowerShell window should be sufficient once Rust is installed.
+
+#### 3. Install Rust
+
+Install Rust using `rustup` and use the stable MSVC toolchain. After installation, close and reopen PowerShell, then verify:
+
+```powershell
+rustc --version
+cargo --version
+rustup show
+```
+
+The active host/toolchain should be the 64-bit MSVC target, normally:
+
+```text
+x86_64-pc-windows-msvc
+```
+
+If required, set it explicitly:
+
+```powershell
+rustup default stable-x86_64-pc-windows-msvc
+```
+
+#### 4. Clone Shelloop
+
+Choose a working folder and clone the repository:
+
+```powershell
+cd $HOME\Documents
+git clone https://github.com/djshellshoxxx/shelloop.git
+cd shelloop
+```
+
+The current playable development work is on:
+
+```text
+continuation/rebuild-baseline
+```
+
+Switch to it:
+
+```powershell
+git fetch origin
+git switch continuation/rebuild-baseline
+```
+
+Confirm the branch:
+
+```powershell
+git branch --show-current
+```
+
+It should print:
+
+```text
+continuation/rebuild-baseline
+```
+
+#### 5. Run the automated tests
+
+Start with the core test suite:
+
+```powershell
+cargo test --all-targets
+```
+
+Then test the actual Windows runtime feature set:
+
+```powershell
+cargo test --all-targets --features realtime-audio,midi,terminal-ui
+```
+
+Run strict Clippy checks as well:
+
+```powershell
+cargo clippy --all-targets --features realtime-audio,midi,terminal-ui -- -D warnings
+```
+
+These are the same main Rust checks used by the Windows CI job.
+
+#### 6. Build the optimized executable
+
+Build the release version with audio, MIDI and terminal UI enabled:
+
+```powershell
+cargo build --release --features realtime-audio,midi,terminal-ui
+```
+
+The executable will be created at:
+
+```text
+target\release\shelloop.exe
+```
+
+Test it:
+
+```powershell
+.\target\release\shelloop.exe --help
+```
+
+### Windows audio setup
+
+Shelloop uses CPAL to access the Windows audio system. For the first test, set the Windows output device you want to use as the normal Windows default output, then run:
+
+```powershell
+.\target\release\shelloop.exe --no-midi
+```
+
+To see the exact device names Shelloop can select:
+
+```powershell
+.\target\release\shelloop.exe --list-devices
+```
+
+Use the audio device name exactly as Shelloop prints it:
+
+```powershell
+.\target\release\shelloop.exe --audio-device "YOUR EXACT DEVICE NAME" --no-midi
+```
+
+For example, if the device list contains `Speakers (Focusrite USB Audio)`, run:
+
+```powershell
+.\target\release\shelloop.exe --audio-device "Speakers (Focusrite USB Audio)" --no-midi
+```
+
+If a USB interface is not listed, confirm that Windows can play ordinary system audio through it first, then close and reopen Shelloop after reconnecting the interface.
+
+### Windows MIDI setup
+
+Connect the MIDI keyboard/controller before starting Shelloop, then list devices:
+
+```powershell
+.\target\release\shelloop.exe --list-devices
+```
+
+Select a MIDI port by exact name:
+
+```powershell
+.\target\release\shelloop.exe --midi-name "YOUR MIDI PORT NAME"
+```
+
+Or select it by the zero-based index shown in the device listing:
+
+```powershell
+.\target\release\shelloop.exe --midi-index 0
+```
+
+A useful first hardware test is:
+
+```powershell
+.\target\release\shelloop.exe --audio-device "YOUR AUDIO DEVICE" --midi-name "YOUR MIDI PORT" --polyphony 24
+```
+
+Play several notes at once, use the sustain pedal, release notes in different orders, and disconnect/reconnect the MIDI controller. Shelloop's MIDI reconnect path sends panic/all-notes-off when a connection disappears so stale notes should not remain sounding.
+
+### Test without a MIDI controller
+
+The computer keyboard can play the synth directly. Start Shelloop without MIDI:
+
+```powershell
+.\target\release\shelloop.exe --no-midi
+```
+
+The keyboard layout is:
+
+```text
+Lower row: Z S X D C V G B H N J M
+Upper row: Q 2 W 3 E R 5 T 6 Y 7 U
+```
+
+Use:
+
+```text
+[     octave down
+]     octave up
+!     panic / all notes off
+~     quit
+Esc   quit
+```
+
+Windows supplies key press, repeat and release events directly, so computer-keyboard note releases should behave more naturally than terminals that only report key presses.
+
+### Test the sequencer
+
+An example pattern is included in the repository. Run it at 120 BPM:
+
+```powershell
+.\target\release\shelloop.exe --no-midi --pattern .\patterns\example-bassline.json --bpm 120 --steps-per-beat 4
+```
+
+Or at a faster tempo:
+
+```powershell
+.\target\release\shelloop.exe --no-midi --pattern .\patterns\example-bassline.json --bpm 138 --steps-per-beat 4
+```
+
+While a pattern is loaded:
+
+```text
+Space       play / pause
+Backspace   restart pattern from frame zero
+!           panic / all notes off
+Esc or ~    quit
+```
+
+You can still play the live synth over the sequencer because live performance and sequenced playback use separate synth paths.
+
+### Recommended first Windows QA session
+
+For the first real-machine test, use this order:
+
+1. Run `--help` and confirm the executable starts.
+2. Run `--list-devices` and confirm the intended audio device is shown.
+3. Run `--no-midi` and test computer-keyboard notes.
+4. Test octave up/down and panic.
+5. Load `patterns\example-bassline.json` and test play, pause and restart.
+6. Connect a MIDI controller and confirm note-on/note-off behavior.
+7. Test chords up to the selected polyphony value.
+8. Test sustain-pedal press/release.
+9. Disconnect and reconnect the MIDI controller while Shelloop is running.
+10. Let it run continuously and listen for crackles, dropouts, stuck notes, timing jumps or pitch changes.
+11. Repeat using the desired USB audio interface instead of the Windows default device.
+
+For beta validation, note the audio interface model, MIDI controller model, Windows version, sample rate shown/used by the device, and any audible glitch or unexpected console message.
+
+### Useful Windows commands
+
+List devices:
+
+```powershell
+.\target\release\shelloop.exe --list-devices
+```
+
+Default audio, no MIDI:
+
+```powershell
+.\target\release\shelloop.exe --no-midi
+```
+
+Specific audio output:
+
+```powershell
+.\target\release\shelloop.exe --audio-device "DEVICE NAME" --no-midi
+```
+
+Specific audio and MIDI devices:
+
+```powershell
+.\target\release\shelloop.exe --audio-device "DEVICE NAME" --midi-name "MIDI PORT" --polyphony 24
+```
+
+Pattern playback:
+
+```powershell
+.\target\release\shelloop.exe --pattern .\patterns\example-bassline.json --bpm 138 --steps-per-beat 4 --no-midi
+```
+
+Run tests:
+
+```powershell
+cargo test --all-targets --features realtime-audio,midi,terminal-ui
+```
+
+Build release executable:
+
+```powershell
+cargo build --release --features realtime-audio,midi,terminal-ui
+```
+
+### Windows troubleshooting
+
+**`cargo` or `rustc` is not recognized**
+
+Close and reopen PowerShell after installing Rust. If it still fails, verify that `%USERPROFILE%\.cargo\bin` is on the user PATH.
+
+**Linker errors such as `link.exe not found`**
+
+Install or modify Visual Studio 2022 Build Tools and enable **Desktop development with C++**, including the Windows SDK. Then reopen PowerShell and build again.
+
+**No audio device appears**
+
+Verify that Windows recognizes the device and can play normal system audio through it. Disconnect/reconnect USB audio hardware, then restart Shelloop and run `--list-devices` again.
+
+**The wrong audio device is used**
+
+Run `--list-devices`, copy the exact printed name, and pass it to `--audio-device` in quotes.
+
+**No MIDI port appears**
+
+Connect and power on the controller before running `--list-devices`. Close DAWs or utilities that may have exclusive access to the MIDI device and try again.
+
+**A MIDI port disconnects during use**
+
+Leave Shelloop running and reconnect it. The runtime polls for MIDI device changes and attempts to reconnect the selected target. It also sends panic when the connection is lost to reduce the chance of stuck notes.
+
+**Notes are too loud, distorted or clipped**
+
+Reduce the Windows/interface output volume while testing. Shelloop applies master-output protection, but hardware gain staging still matters.
+
+**Crackles or dropouts**
+
+Close high-CPU applications, avoid Bluetooth audio for latency testing, use a wired/USB interface where possible, and test again. Record the device model and circumstances because physical latency/xrun tuning remains part of the beta QA gate.
+
+**PowerShell blocks execution**
+
+Shelloop is an `.exe`, not a PowerShell script, so PowerShell execution-policy changes should normally not be required. Run it with an explicit relative path such as `.\shelloop.exe` or `.\target\release\shelloop.exe`.
+
+**Windows SmartScreen warns about the beta executable**
+
+The first beta may not yet have an established code-signing reputation. Verify that the file came from this repository's Releases page and compare its SHA-256 hash with the published `.sha256` file before running it.
+
+To calculate the downloaded ZIP hash yourself:
+
+```powershell
+Get-FileHash .\shelloop-v0.01-beta-windows-x86_64.zip -Algorithm SHA256
+```
+
+Compare that value with:
+
+```text
+shelloop-v0.01-beta-windows-x86_64.zip.sha256
+```
+
+### Current Windows beta limitations
+
+The project is still pre-beta. Automated Windows CI proves that the all-feature code compiles, tests, passes strict Clippy and produces an optimized executable, but CI cannot prove real speaker output, real MIDI-controller behavior, end-to-end latency, xrun/dropout behavior or sound quality on physical hardware.
+
+The real-time recording bridge is implemented and tested internally, but a user-facing `--record` runtime option is still being wired in. Do not expect live recording from the command line until that control path is documented here.
+
+The final `v0.01-beta` release will only be tagged after the remaining real-hardware QA checks and release-package verification are complete.
 
 ## Pattern JSON
 
@@ -140,13 +546,15 @@ Pattern files are read and validated before audio starts. The callback uses a pr
 
 MIDI input is also bounded. Malformed messages and queue overflows are counted instead of panicking. The terminal loop periodically re-enumerates MIDI devices; if the selected target disappears it requests panic before dropping the connection and reconnects when the target returns.
 
+The WAV recording layer uses a background writer thread and a separate preallocated real-time bridge. Full buffers are passed to the writer with nonblocking bounded-channel operations, then cleared and recycled back into the pool instead of allocating a new audio block for every callback buffer.
+
 ## Beta release pipeline
 
 The package version is `0.1.0-beta.1`. The eventual `v0.01-beta` tag triggers Windows x86-64 and Linux x86-64 optimized builds with all runtime features, packages the binary with this README, MIT license and example patterns, emits SHA-256 checksum files, and publishes a GitHub prerelease.
 
-Pull requests also build the archives, verify their checksums and required resources, and run the extracted executable with `--help`. Download the candidate archives from the Release workflow artifacts for hardware testing. These runs do not publish a release.
+The release workflow can also be run manually for package verification without publishing a tag. Normal pull requests use the cross-platform CI workflow for formatting, tests, strict Clippy, all-feature checks and optimized runtime builds; the release-packaging workflow is intentionally kept off ordinary PR commits so development feedback is not duplicated.
 
-The tag is intentionally not created yet. Remaining release gates are fresh automated verification of this sequencer integration, physical Windows/Linux playback and MIDI-controller validation, latency/xrun/sound-quality checks, device-unavailable and unplug/reconnect validation on real hosts, and verification of the tag-triggered packaging workflow against the exact final release commit.
+The tag is intentionally not created yet. Remaining release gates are physical Windows/Linux playback and MIDI-controller validation, latency/xrun/sound-quality checks, device-unavailable and unplug/reconnect validation on real hosts, completion of user-facing live-recording wiring, and verification of the tag-triggered packaging workflow against the exact final release commit.
 
 ## v1 direction
 
@@ -155,7 +563,6 @@ The tag is intentionally not created yet. Remaining release gates are fresh auto
 - Terminal mouse XY performance control
 - Drum synthesis and WAV sample playback
 - Mixer sends, delay/reverb/saturation and metering
-- WAV recorder writer thread around the existing bounded recording queue
 - Expanded project/preset schema for patterns, scenes, mappings and audio settings
 - Windows and Linux first; macOS evaluated separately
 
