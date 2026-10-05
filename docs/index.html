@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Shelloop terminal step sequencer and playable synthesizer demo and setup guide.">
+  <title>Shelloop — terminal synth + sequencer</title>
+  <style>
+    :root{color-scheme:dark;--bg:#070b12;--panel:#0e1622;--panel2:#111d2b;--text:#e6edf3;--muted:#93a4b8;--line:#233247;--accent:#59b7ff;--accent2:#82e0c4;--warn:#f3c969}
+    *{box-sizing:border-box} body{margin:0;background:linear-gradient(180deg,#070b12,#0a111b 60%,#070b12);color:var(--text);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+    a{color:var(--accent)} .wrap{max-width:1060px;margin:auto;padding:44px 22px 70px}
+    header{padding:34px 0 24px}.tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:5px 10px;color:var(--accent2);font-size:13px;letter-spacing:.04em}
+    h1{font-size:clamp(42px,8vw,78px);line-height:.95;margin:18px 0 16px;letter-spacing:-.045em} h2{margin-top:42px;font-size:28px} h3{margin-top:26px}
+    .lead{max-width:760px;color:var(--muted);font-size:19px}.actions{display:flex;gap:12px;flex-wrap:wrap;margin:24px 0}
+    .btn{display:inline-block;text-decoration:none;border:1px solid var(--line);background:var(--panel);padding:10px 14px;border-radius:9px;color:var(--text)} .btn.primary{background:#153454;border-color:#28679c}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}.card{background:rgba(14,22,34,.86);border:1px solid var(--line);border-radius:14px;padding:20px}
+    pre{position:relative;background:#05080d;border:1px solid var(--line);border-radius:12px;padding:18px;overflow:auto;color:#c9f3df;font:14px/1.55 Consolas,ui-monospace,SFMono-Regular,monospace}
+    code{font-family:Consolas,ui-monospace,SFMono-Regular,monospace}.copy{float:right;border:1px solid var(--line);background:#101b28;color:var(--text);border-radius:7px;padding:5px 9px;cursor:pointer}
+    .keys{display:grid;grid-template-columns:150px 1fr;gap:7px 14px}.keys code{color:var(--accent2)} .note{color:var(--muted);font-size:14px}.warn{border-left:3px solid var(--warn);padding-left:14px;color:#d8d1b4}
+    footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:14px}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <span class="tag">v0.01 beta development</span>
+    <h1>SHELLOOP</h1>
+    <p class="lead">A terminal-only real-time step sequencer and playable synthesizer for Windows and Linux. Play it from the computer keyboard or MIDI, run deterministic patterns, and record the protected master output directly to WAV.</p>
+    <div class="actions">
+      <a class="btn primary" href="https://github.com/djshellshoxxx/shelloop">GitHub repository</a>
+      <a class="btn" href="https://github.com/djshellshoxxx/shelloop/tree/continuation/rebuild-baseline#complete-windows-setup-and-testing-guide">Full Windows setup</a>
+      <a class="btn" href="https://github.com/djshellshoxxx/shelloop/pull/1">Current development PR</a>
+    </div>
+  </header>
+
+  <section>
+    <h2>Windows: first sound</h2>
+    <p>Install Git, Rust, and Visual Studio 2022 Build Tools with <strong>Desktop development with C++</strong>, then run this from PowerShell:</p>
+    <pre><button class="copy" data-copy="win">Copy</button><code id="win">git clone https://github.com/djshellshoxxx/shelloop.git
+cd shelloop
+git switch continuation/rebuild-baseline
+cargo build --release --features realtime-audio,midi,terminal-ui
+.\target\release\shelloop.exe --list-devices
+.\target\release\shelloop.exe --no-midi --pattern .\patterns\example-bassline.json --bpm 138</code></pre>
+    <p class="note">If the intended audio output is not the Windows default, copy its exact name from <code>--list-devices</code> and pass <code>--audio-device "DEVICE NAME"</code>.</p>
+  </section>
+
+  <section>
+    <h2>Play it</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Computer keyboard</h3>
+        <div class="keys">
+          <code>Z S X D C V G B H N J M</code><span>lower note row</span>
+          <code>Q 2 W 3 E R 5 T 6 Y 7 U</code><span>upper note row</span>
+          <code>[ / ]</code><span>octave down / up</span>
+          <code>!</code><span>panic / all notes off</span>
+          <code>~ or Esc</code><span>quit</span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Sequencer</h3>
+        <div class="keys">
+          <code>Space</code><span>play / pause</span>
+          <code>Backspace</code><span>restart pattern</span>
+          <code>--bpm 138</code><span>tempo</span>
+          <code>--steps-per-beat 4</code><span>grid density</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Record a demo</h2>
+    <p>This records the mono master at the selected device's actual sample rate as a 32-bit float WAV. File writing is handled off the audio callback.</p>
+    <pre><button class="copy" data-copy="record">Copy</button><code id="record">.\target\release\shelloop.exe --no-midi --pattern .\patterns\example-bassline.json --bpm 138 --record .\shelloop-demo.wav</code></pre>
+    <p>Quit normally with <code>Esc</code> or <code>~</code>. Shelloop prints the number of frames written and any dropped or rejected recording blocks.</p>
+  </section>
+
+  <section>
+    <h2>MIDI</h2>
+    <pre><button class="copy" data-copy="midi">Copy</button><code id="midi">.\target\release\shelloop.exe --list-devices
+.\target\release\shelloop.exe --audio-device "YOUR AUDIO DEVICE" --midi-name "YOUR MIDI PORT" --polyphony 24</code></pre>
+    <p>Note on/off, chords, sustain, panic, and MIDI reconnect handling are part of the current beta path.</p>
+  </section>
+
+  <section>
+    <h2>Experimental PC-speaker probe</h2>
+    <pre><button class="copy" data-copy="speaker">Copy</button><code id="speaker">.\target\release\shelloop.exe --pc-speaker-test
+.\target\release\shelloop.exe --pc-speaker-test --pc-speaker-frequency 880 --pc-speaker-duration 300</code></pre>
+    <p class="warn"><strong>Windows:</strong> this uses the Win32 Beep compatibility API. Modern Windows normally sends that sound through the default audio device, not the physical motherboard speaker. Linux attempts the console PC-speaker ioctl and therefore needs compatible hardware and console-device permission.</p>
+  </section>
+
+  <section>
+    <h2>What to verify</h2>
+    <div class="grid">
+      <div class="card"><strong>Audio</strong><p class="note">Notes respond immediately, pattern timing stays stable, and no stuck notes remain after panic or exit.</p></div>
+      <div class="card"><strong>Recording</strong><p class="note">The WAV opens normally, contains the performance, and reports zero dropped/rejected blocks under ordinary load.</p></div>
+      <div class="card"><strong>MIDI</strong><p class="note">Chords, sustain, note releases, and disconnect/reconnect behave cleanly.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    Shelloop is currently beta-stage software. Automated Windows/Linux CI checks compile, test, lint, and build the runtime; physical audio-interface, MIDI-controller, latency, and motherboard-speaker behavior still require real hardware testing.
+  </footer>
+</main>
+<script>
+document.querySelectorAll('.copy').forEach(button=>{
+  button.addEventListener('click',async()=>{
+    const node=document.getElementById(button.dataset.copy);
+    try{await navigator.clipboard.writeText(node.innerText);button.textContent='Copied';setTimeout(()=>button.textContent='Copy',1200)}
+    catch{button.textContent='Select + copy'}
+  });
+});
+</script>
+</body>
+</html>
