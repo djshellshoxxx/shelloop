@@ -39,11 +39,13 @@ mod live {
     use crate::{
         list_output_device_names, map_performance_key, open_output_stream, parse_pattern_json,
         protect_master, shift_octave, spawn_realtime_recording, EngineCommand, LiveSequencer,
-        Oscillator, PerformanceKey, RealtimeSynth, StartupOptions, WavRecordingConfig,
+        Oscillator, PerformanceKey, PerformanceMix, RealtimeSynth, StartupOptions, WavRecordingConfig,
+        XyPoint,
     };
     use crossbeam_channel::{bounded, Sender};
     use crossterm::event::{
-        self, Event, KeyCode, KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
+        KeyboardEnhancementFlags, MouseButton, MouseEventKind, PopKeyboardEnhancementFlags,
         PushKeyboardEnhancementFlags,
     };
     use crossterm::execute;
@@ -56,6 +58,7 @@ mod live {
 
     const COMMAND_QUEUE_CAPACITY: usize = 256;
     const SEQUENCER_CONTROL_QUEUE_CAPACITY: usize = 32;
+    const PERFORMANCE_QUEUE_CAPACITY: usize = 32;
     #[cfg(feature = "midi")]
     const MIDI_QUEUE_CAPACITY: usize = 256;
     const COMMANDS_PER_SAMPLE_LIMIT: usize = 64;
@@ -83,10 +86,11 @@ mod live {
     struct TerminalGuard {
         keyboard_enhancement: bool,
         release_events_supported: bool,
+        mouse_capture: bool,
     }
 
     impl TerminalGuard {
-        fn enable() -> Result<Self, String> {
+        fn enable(mouse_capture: bool) -> Result<Self, String> {
             enable_raw_mode()
                 .map_err(|error| format!("failed to enter terminal raw mode: {error}"))?;
 
@@ -104,9 +108,21 @@ mod live {
                 }
             }
 
+            if mouse_capture {
+                let mut stdout = io::stdout();
+                if let Err(error) = execute!(stdout, EnableMouseCapture) {
+                    if keyboard_enhancement {
+                        let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+                    }
+                    let _ = disable_raw_mode();
+                    return Err(format!("failed to enable mouse capture: {error}"));
+                }
+            }
+
             Ok(Self {
                 keyboard_enhancement,
                 release_events_supported: cfg!(windows) || keyboard_enhancement,
+                mouse_capture,
             })
         }
 
@@ -117,6 +133,10 @@ mod live {
 
     impl Drop for TerminalGuard {
         fn drop(&mut self) {
+            if self.mouse_capture {
+                let mut stdout = io::stdout();
+                let _ = execute!(stdout, DisableMouseCapture);
+            }
             if self.keyboard_enhancement {
                 let mut stdout = io::stdout();
                 let _ = execute!(stdout, PopKeyboardEnhancementFlags);
@@ -203,6 +223,7 @@ mod live {
 
         let (command_sender, command_receiver) = bounded(COMMAND_QUEUE_CAPACITY);
         let (sequencer_sender, sequencer_receiver) = bounded(SEQUENCER_CONTROL_QUEUE_CAPACITY);
+        let (performance_sender, performance_receiver) = bounded(PERFORMANCE_QUEUE_CAPACITY);
         let polyphony = options.polyphony;
         let bpm = options.bpm;
         let steps_per_beat = options.steps_per_beat;
@@ -243,8 +264,12 @@ mod live {
                 None => None,
             };
             let mut sequencer_commands = Vec::with_capacity(LiveSequencer::MAX_COMMANDS_PER_FRAME);
+            let mut performance_mix = PerformanceMix::UNITY;
 
             Ok(move || {
+                while let Ok(next_mix) = performance_receiver.try_recv() {
+                    performance_mix = next_mix;
+                }
                 for _ in 0..COMMANDS_PER_SAMPLE_LIMIT {
                     let Ok(command) = command_receiver.try_recv() else {
                         break;
@@ -283,7 +308,10 @@ mod live {
                     0.0
                 };
 
-                let sample = protect_master(performance_synth.next_sample() + sequencer_sample);
+                let sample = protect_master(
+                    performance_synth.next_sample() * performance_mix.live_gain
+                        + sequencer_sample * performance_mix.sequencer_gain,
+                );
                 if let Some(recorder) = recorder.as_mut() {
                     let _ = recorder.push_sample(sample);
                 }
@@ -340,7 +368,7 @@ mod live {
             return Err(format!("failed to flush terminal output: {error}"));
         }
 
-        let terminal = match TerminalGuard::enable() {
+        let terminal = match TerminalGuard::enable(options.mouse_xy) {
             Ok(terminal) => terminal,
             Err(error) => {
                 request_panic(&command_sender, &sequencer_sender);
@@ -351,6 +379,9 @@ mod live {
                 return Err(error);
             }
         };
+        if options.mouse_xy {
+            eprintln!("Mouse XY enabled: X crossfades live ↔ sequencer; Y controls overall level");
+        }
         if !terminal.release_events_supported() {
             eprintln!(
                 "terminal does not expose key-release events; keyboard notes use a timed fallback. \
@@ -437,6 +468,27 @@ mod live {
 
                 let terminal_event = event::read()
                     .map_err(|error| format!("failed to read terminal event: {error}"))?;
+                if let Event::Mouse(mouse_event) = terminal_event {
+                    if options.mouse_xy
+                        && matches!(
+                            mouse_event.kind,
+                            MouseEventKind::Down(MouseButton::Left)
+                                | MouseEventKind::Drag(MouseButton::Left)
+                        )
+                    {
+                        let (width, height) = crossterm::terminal::size()
+                            .map_err(|error| format!("failed to query terminal size: {error}"))?;
+                        let point = XyPoint::from_terminal(
+                            mouse_event.column,
+                            mouse_event.row,
+                            width,
+                            height,
+                        );
+                        let mix = PerformanceMix::from_xy(point, pattern_name.is_some());
+                        let _ = performance_sender.try_send(mix);
+                    }
+                    continue;
+                }
                 let Event::Key(key_event) = terminal_event else {
                     continue;
                 };
