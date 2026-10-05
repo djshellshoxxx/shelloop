@@ -22,6 +22,7 @@ Development is active on `continuation/rebuild-baseline` in draft PR #1. The det
 - Bounded control/MIDI/sequencer queues and no blocking terminal or filesystem work in the audio callback
 - Project validation and atomic JSON persistence
 - Background WAV writer and preallocated real-time recording bridge
+- Experimental PC-speaker probe: Linux console speaker ioctl and Windows Beep compatibility mode
 - Bounded recording queues and master-output protection
 - Windows/Linux all-feature compile, test, strict Clippy and optimized-release CI gates
 - `v0.01-beta` packaging workflow for Windows x86-64 and Linux x86-64 with SHA-256 checksums
@@ -38,6 +39,9 @@ Options:
   --polyphony <VOICES>   Set synth polyphony from 1 to 256 (default: 16)
   --pattern <FILE>       Load a validated JSON pattern for live playback
   --record <FILE>        Record the mono master output to a 32-bit float WAV
+  --pc-speaker-test      Play a short experimental PC-speaker probe tone and exit
+  --pc-speaker-frequency <HZ>  Probe frequency, 37-32767 Hz (default: 440)
+  --pc-speaker-duration <MS>   Probe duration, 1-5000 ms (default: 250)
   --bpm <TEMPO>          Set sequencer tempo from 20 to 400 (default: 120)
   --steps-per-beat <N>   Set sequencer grid density from 1 to 64 (default: 4)
   --list-devices         List available audio and MIDI devices
@@ -97,6 +101,27 @@ shelloop --no-midi --pattern patterns/example-bassline.json --bpm 138 --record b
 ```
 
 Recording uses the actual selected output device sample rate, writes 32-bit float WAV data on a background writer thread, and reports dropped/rejected blocks when the session ends.
+
+
+### Experimental PC-speaker probe
+
+To test whether Shelloop can invoke the platform PC-speaker path:
+
+```bash
+shelloop --pc-speaker-test
+```
+
+Choose a different frequency or duration:
+
+```bash
+shelloop --pc-speaker-test --pc-speaker-frequency 880 --pc-speaker-duration 300
+```
+
+On Linux, Shelloop attempts the kernel console PC-speaker tone ioctl through `/dev/console` or `/dev/tty0`. The machine must actually have a PC speaker/buzzer and the process must have permission to access the console device.
+
+On Windows, this uses the Win32 `Beep` compatibility API. Modern Windows normally routes that sound through the default audio device rather than directly driving a motherboard speaker, so Shelloop reports it as compatibility output instead of claiming physical BIOS-speaker access.
+
+`--list-devices` also reports the platform PC-speaker backend under **Special outputs**.
 
 ## Windows: complete setup and testing guide
 
