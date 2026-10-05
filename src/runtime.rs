@@ -39,9 +39,8 @@ mod live {
     use crate::{
         list_output_device_names, map_performance_key, open_output_stream, parse_pattern_json,
         pc_speaker_backend, protect_master, shift_octave, spawn_realtime_recording, EngineCommand,
-        LiveSequencer,
-        Oscillator, PerformanceKey, PerformanceMix, RealtimeSynth, StartupOptions, WavRecordingConfig,
-        XyPoint,
+        LiveSequencer, Oscillator, PerformanceKey, PerformanceMix, RealtimeSynth, StartupOptions,
+        WavRecordingConfig, XyPoint,
     };
     use crossbeam_channel::{bounded, Sender};
     use crossterm::event::{
@@ -481,8 +480,9 @@ mod live {
                                     | MouseEventKind::Drag(MouseButton::Left)
                             )
                         {
-                            let (width, height) = crossterm::terminal::size()
-                                .map_err(|error| format!("failed to query terminal size: {error}"))?;
+                            let (width, height) = crossterm::terminal::size().map_err(|error| {
+                                format!("failed to query terminal size: {error}")
+                            })?;
                             let point = XyPoint::from_terminal(
                                 mouse_event.column,
                                 mouse_event.row,
