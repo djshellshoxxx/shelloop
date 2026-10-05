@@ -53,3 +53,40 @@ impl XyPoint {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PerformanceMix {
+    pub live_gain: f32,
+    pub sequencer_gain: f32,
+}
+
+impl PerformanceMix {
+    pub const UNITY: Self = Self {
+        live_gain: 1.0,
+        sequencer_gain: 1.0,
+    };
+
+    pub fn from_xy(point: XyPoint, has_sequencer: bool) -> Self {
+        let level = if point.y.is_finite() {
+            point.y.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        if !has_sequencer {
+            return Self {
+                live_gain: level,
+                sequencer_gain: 0.0,
+            };
+        }
+
+        let crossfade = if point.x.is_finite() {
+            point.x.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        Self {
+            live_gain: (1.0 - crossfade) * level,
+            sequencer_gain: crossfade * level,
+        }
+    }
+}
