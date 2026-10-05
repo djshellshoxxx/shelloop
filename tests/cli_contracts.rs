@@ -18,6 +18,7 @@ fn help_prints_usage_and_exits_successfully() {
     assert!(stdout.contains("--midi-name"));
     assert!(stdout.contains("--polyphony"));
     assert!(stdout.contains("--record <FILE>"));
+    assert!(stdout.contains("--pc-speaker-test"));
 }
 
 #[test]
