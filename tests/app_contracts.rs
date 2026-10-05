@@ -29,6 +29,12 @@ fn startup_options_parse_audio_midi_and_runtime_flags() {
 }
 
 #[test]
+fn startup_options_support_mouse_xy_performance_mode() {
+    let options = parse_startup_options(["--mouse-xy"]).unwrap();
+    assert!(options.mouse_xy);
+}
+
+#[test]
 fn startup_options_support_wav_recording_path() {
     let options = parse_startup_options(["--record", "captures/demo.wav"]).unwrap();
     assert_eq!(options.record_path.as_deref(), Some("captures/demo.wav"));
