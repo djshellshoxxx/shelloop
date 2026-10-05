@@ -35,7 +35,7 @@ pub use midi_io::{
 };
 pub use mixer::{protect_master, ChannelStrip};
 pub use pattern::{parse_pattern_json, Pattern, PatternEvent, PatternScheduler, PatternStep};
-pub use performance::{AxisCurve, AxisMapping, XyPoint};
+pub use performance::{AxisCurve, AxisMapping, PerformanceMix, XyPoint};
 pub use project::{Project, Track};
 pub use quantize::{next_boundary_frame, QuantizeBoundary, QuantizedChange};
 pub use recording::{
