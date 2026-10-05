@@ -89,7 +89,6 @@ fn startup_options_reject_conflicts_unknown_flags_and_bad_ranges() {
     assert!(parse_startup_options(["--audio-device"]).is_err());
 }
 
-
 #[test]
 fn startup_options_support_pc_speaker_probe() {
     let options = parse_startup_options([
@@ -111,7 +110,9 @@ fn startup_options_reject_invalid_pc_speaker_probe_values() {
     assert!(parse_startup_options(["--pc-speaker-frequency", "440"]).is_err());
     assert!(parse_startup_options(["--pc-speaker-duration", "100"]).is_err());
     assert!(parse_startup_options(["--pc-speaker-test", "--pc-speaker-frequency", "36"]).is_err());
-    assert!(parse_startup_options(["--pc-speaker-test", "--pc-speaker-frequency", "32768"]).is_err());
+    assert!(
+        parse_startup_options(["--pc-speaker-test", "--pc-speaker-frequency", "32768"]).is_err()
+    );
     assert!(parse_startup_options(["--pc-speaker-test", "--pc-speaker-duration", "0"]).is_err());
     assert!(parse_startup_options(["--pc-speaker-test", "--pc-speaker-duration", "5001"]).is_err());
 }
