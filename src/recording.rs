@@ -160,7 +160,7 @@ impl RecordingWriter {
     }
 
     pub fn try_record(&self, block: Vec<f32>) -> bool {
-        if block.len() % self.channels != 0 {
+        if !block.len().is_multiple_of(self.channels) {
             self.rejected_blocks.fetch_add(1, Ordering::Relaxed);
             return false;
         }
