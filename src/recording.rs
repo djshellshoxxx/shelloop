@@ -191,7 +191,6 @@ impl RecordingWriter {
     }
 }
 
-
 pub struct RealtimeRecordingProducer {
     full_sender: Sender<Vec<f32>>,
     free_sender: Sender<Vec<f32>>,
