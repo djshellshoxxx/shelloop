@@ -1,4 +1,4 @@
-use shelloop::{RealtimeRecordingBridge, WavRecordingConfig};
+use shelloop::{spawn_realtime_recording, RealtimeRecordingBridge, WavRecordingConfig};
 use tempfile::tempdir;
 
 #[test]
@@ -57,4 +57,28 @@ fn realtime_bridge_reports_preallocated_pool_size() {
     assert_eq!(bridge.block_samples(), 64);
     assert_eq!(bridge.preallocated_blocks(), 4);
     bridge.finish().unwrap();
+}
+
+
+#[test]
+fn split_realtime_recording_finalizes_after_producer_drop() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("split.wav");
+    let config = WavRecordingConfig::new(48_000, 1, 4).unwrap();
+    let (mut producer, finalizer) =
+        spawn_realtime_recording(&path, config, 4).expect("split recorder should start");
+
+    for sample in [0.2, 0.4, 0.6, 0.8, 1.0] {
+        assert!(producer.push_sample(sample));
+    }
+
+    drop(producer);
+    let summary = finalizer.finish().unwrap();
+    assert_eq!(summary.frames_written, 5);
+    assert_eq!(summary.samples_written, 5);
+    assert_eq!(summary.dropped_blocks, 0);
+
+    let mut reader = hound::WavReader::open(path).unwrap();
+    let samples: Vec<f32> = reader.samples::<f32>().map(Result::unwrap).collect();
+    assert_eq!(samples, vec![0.2, 0.4, 0.6, 0.8, 1.0]);
 }
