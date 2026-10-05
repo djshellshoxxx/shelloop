@@ -19,7 +19,8 @@ Verify the inner archive before extracting it:
 4. Run with `--audio-device "EXACT OUTPUT NAME" --midi-name "EXACT INPUT NAME" --pattern patterns/example-bassline.json`. Test MIDI chords, sustain pedal, note releases, and concurrent sequencer playback for at least 10 minutes. Record audible clicks/dropouts and perceived latency; do not report measured latency or xrun counts without measurement tools.
 5. Unplug the selected MIDI device while notes are held, then reconnect. Confirm notes stop and input returns. Test the keyboard afterward. Record reconnect duration and terminal messages.
 6. Quit and run with `--audio-device "shelloop-nonexistent-device"`. Confirm a readable error and nonzero exit (`$LASTEXITCODE` in PowerShell; `echo $?` on Linux). Repeat with an invalid pattern path. Confirm terminal state remains usable.
-7. On a suitable test host, disable or disconnect the active output and observe whether the runtime reports an error and exits cleanly. Also test startup without an available output. Mark unavailable scenarios NOT RUN.
+7. Run `shelloop --no-midi --record shelloop-hardware-test.wav`, play keyboard notes for at least 30 seconds, then quit normally. Confirm the file exists, opens as a 32-bit float mono WAV at the active device sample rate, contains the audible performance, and the shutdown summary reports zero dropped/rejected blocks under normal load. Repeat once with the example pattern playing.
+8. On a suitable test host, disable or disconnect the active output and observe whether the runtime reports an error and exits cleanly. Also test startup without an available output. Mark unavailable scenarios NOT RUN.
 
 ## Results template
 
@@ -36,6 +37,7 @@ Verify the inner archive before extracting it:
 | Concurrent keyboard/MIDI and pattern | NOT RUN |
 | Sustain and MIDI unplug/reconnect | NOT RUN |
 | Ten-minute playback, latency/dropouts | NOT RUN |
+| Live WAV recording and clean finalization | NOT RUN |
 | Missing pattern/invalid device errors | NOT RUN |
 | Audio disconnect/no-output behavior | NOT RUN |
 | Terminal restored after errors | NOT RUN |
