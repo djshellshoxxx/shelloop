@@ -38,7 +38,9 @@ pub use pattern::{parse_pattern_json, Pattern, PatternEvent, PatternScheduler, P
 pub use performance::{AxisCurve, AxisMapping, XyPoint};
 pub use project::{Project, Track};
 pub use quantize::{next_boundary_frame, QuantizeBoundary, QuantizedChange};
-pub use recording::{RecordingQueue, RecordingSummary, RecordingWriter, WavRecordingConfig};
+pub use recording::{
+    RealtimeRecordingBridge, RecordingQueue, RecordingSummary, RecordingWriter, WavRecordingConfig,
+};
 pub use runtime::engine_command_from_midi;
 #[cfg(all(feature = "realtime-audio", feature = "terminal-ui"))]
 pub use runtime::run_realtime_session;
