@@ -1,8 +1,93 @@
 use crate::{ChannelStrip, EngineCommand, LiveSequencer, Oscillator, Pattern, RealtimeSynth};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    fs::{self, File},
+    io::Write,
+    path::Path,
+};
 
 pub const MAX_REALTIME_TRACKS: usize = 16;
+pub const MULTITRACK_PROJECT_SCHEMA_VERSION: u32 = 2;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MultiTrackProject {
+    pub schema_version: u32,
+    pub revision: u64,
+    pub seed: u64,
+    pub bpm: f64,
+    pub steps_per_beat: u8,
+    pub tracks: Vec<TrackDefinition>,
+}
+
+impl MultiTrackProject {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != MULTITRACK_PROJECT_SCHEMA_VERSION {
+            return Err(format!(
+                "unsupported multitrack project schema {}; expected {}",
+                self.schema_version, MULTITRACK_PROJECT_SCHEMA_VERSION
+            ));
+        }
+        if !self.bpm.is_finite() || !(20.0..=400.0).contains(&self.bpm) {
+            return Err("project bpm must be finite and between 20 and 400".into());
+        }
+        if !(1..=64).contains(&self.steps_per_beat) {
+            return Err("project steps_per_beat must be between 1 and 64".into());
+        }
+        validate_track_definitions(&self.tracks)
+    }
+
+    pub fn to_snapshot(&self) -> Result<EngineProjectSnapshot, String> {
+        self.validate()?;
+        EngineProjectSnapshot::new(self.revision, self.tracks.clone())
+    }
+
+    pub fn save_atomic(&self, path: impl AsRef<Path>) -> Result<(), String> {
+        self.validate()?;
+        let path = path.as_ref();
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("create multitrack project directory: {error}"))?;
+
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("{value}.tmp"))
+            .unwrap_or_else(|| "tmp".to_owned());
+        let temp_path = path.with_extension(extension);
+
+        let result = (|| -> Result<(), String> {
+            let json = serde_json::to_vec_pretty(self)
+                .map_err(|error| format!("serialize multitrack project: {error}"))?;
+            let mut file = File::create(&temp_path)
+                .map_err(|error| format!("create temporary multitrack project: {error}"))?;
+            file.write_all(&json)
+                .map_err(|error| format!("write temporary multitrack project: {error}"))?;
+            file.write_all(b"\n")
+                .map_err(|error| format!("finish temporary multitrack project: {error}"))?;
+            file.sync_all()
+                .map_err(|error| format!("sync temporary multitrack project: {error}"))?;
+            fs::rename(&temp_path, path)
+                .map_err(|error| format!("replace multitrack project file: {error}"))?;
+            Ok(())
+        })();
+
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+        result
+    }
+
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
+        let bytes = fs::read(path.as_ref())
+            .map_err(|error| format!("read multitrack project: {error}"))?;
+        let project: Self = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("parse multitrack project: {error}"))?;
+        project.validate()?;
+        Ok(project)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EngineProjectSnapshot {
