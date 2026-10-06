@@ -82,8 +82,8 @@ impl MultiTrackProject {
     }
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
-        let bytes = fs::read(path.as_ref())
-            .map_err(|error| format!("read multitrack project: {error}"))?;
+        let bytes =
+            fs::read(path.as_ref()).map_err(|error| format!("read multitrack project: {error}"))?;
         let project: Self = serde_json::from_slice(&bytes)
             .map_err(|error| format!("parse multitrack project: {error}"))?;
         project.validate()?;
@@ -376,7 +376,9 @@ impl MultiTrackEngine {
     }
 
     pub fn is_playing(&self) -> bool {
-        self.tracks.first().is_some_and(|track| track.sequencer.is_playing())
+        self.tracks
+            .first()
+            .is_some_and(|track| track.sequencer.is_playing())
     }
 
     pub fn set_playing_all(&mut self, playing: bool) {
@@ -418,7 +420,6 @@ impl MultiTrackEngine {
             .ok_or_else(|| format!("track id {} does not exist", id.0))
     }
 }
-
 
 fn validate_track_definitions(definitions: &[TrackDefinition]) -> Result<(), String> {
     if definitions.is_empty() {
