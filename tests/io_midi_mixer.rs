@@ -1,5 +1,6 @@
 use shelloop::{
-    decode_message, protect_master, ChannelStrip, MidiEvent, MidiPerformanceState, Project, Track,
+    decode_message, protect_master, ChannelStrip, MidiEvent, MidiPerformanceState, Project,
+    SmoothedParam, Track,
 };
 
 #[test]
@@ -113,4 +114,17 @@ fn master_protection_is_finite_and_bounded() {
         assert!(protected.is_finite());
         assert!(protected.abs() <= 1.0);
     }
+}
+
+#[test]
+fn smoothed_parameter_reaches_target_without_overshoot() {
+    let mut value = SmoothedParam::new(0.0);
+    value.set_target(1.0, 4);
+
+    assert!((value.next_value() - 0.25).abs() < 0.0001);
+    assert!((value.next_value() - 0.50).abs() < 0.0001);
+    assert!((value.next_value() - 0.75).abs() < 0.0001);
+    assert!((value.next_value() - 1.00).abs() < 0.0001);
+    assert_eq!(value.next_value(), 1.0);
+    assert_eq!(value.target(), 1.0);
 }
