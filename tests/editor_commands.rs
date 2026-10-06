@@ -154,9 +154,7 @@ fn selected_editor_compiles_directly_to_realtime_quantized_change() {
     let mut editors =
         ProjectPatternEditors::new(vec![(TrackId(9), pattern("nine", 60))], 8).unwrap();
 
-    editors
-        .apply(PatternEditCommand::Swing(0.2))
-        .unwrap();
+    editors.apply(PatternEditCommand::Swing(0.2)).unwrap();
     let (track, queued) = editors
         .queue_selected_revision(1, 100, 60.0, 1, QuantizeBoundary::Step)
         .unwrap();
@@ -169,8 +167,7 @@ fn selected_editor_compiles_directly_to_realtime_quantized_change() {
 
 #[test]
 fn command_controller_chooses_musical_default_boundaries() {
-    let editors =
-        ProjectPatternEditors::new(vec![(TrackId(3), pattern("three", 60))], 8).unwrap();
+    let editors = ProjectPatternEditors::new(vec![(TrackId(3), pattern("three", 60))], 8).unwrap();
 
     assert_eq!(
         editors.default_quantize_boundary(&PatternEditCommand::Step {
