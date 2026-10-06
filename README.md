@@ -84,6 +84,28 @@ shelloop --project projects/example-multitrack.json --no-midi
 
 The example intentionally uses 15-, 16- and 12-step patterns so the tracks phase against one another while sharing one sample-frame transport. Track gain/pan/mute/solo state is loaded from the project, and panning is rendered through the stereo output path.
 
+### Live pattern editing
+
+When a multi-track project is running, press `:` to enter the live edit command prompt. Step numbers entered by the user are one-based. Examples:
+
+```text
+track 2
+step 5 toggle
+step 5 note 38
+step 5 velocity 0.82
+step 5 gate 0.6
+step 5 probability 0.7
+step 5 ratchets 3
+step 5 micro +120
+length 15
+swing 0.12
+rotate right 1
+undo
+redo
+```
+
+Press Enter to queue the command or Esc to cancel command entry. Step-level edits default to the next step boundary. Pattern length and rotation changes default to the current pattern boundary. The control thread owns the editable draft and undo/redo history; the real-time thread receives only fixed-capacity compiled revisions. Rapid edits to one track coalesce through one pending revision slot, with the newest revision winning before activation.
+
 Run without MIDI:
 
 ```bash
