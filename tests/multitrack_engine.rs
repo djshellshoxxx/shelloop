@@ -1,6 +1,7 @@
 use shelloop::{
-    EngineProjectSnapshot, MultiTrackEngine, MultiTrackProject, Pattern, PatternStep, TrackCommand,
-    TrackDefinition, TrackId, TrackKind, MAX_REALTIME_TRACKS, MULTITRACK_PROJECT_SCHEMA_VERSION,
+    compile_pattern_revision, EngineProjectSnapshot, MultiTrackEngine, MultiTrackProject, Pattern,
+    PatternEditor, PatternStep, QuantizeBoundary, TrackCommand, TrackDefinition, TrackId, TrackKind,
+    MAX_REALTIME_TRACKS, MULTITRACK_PROJECT_SCHEMA_VERSION,
 };
 
 fn pattern(name: &str, seed: u64, note: u8, steps: usize) -> Pattern {
@@ -221,4 +222,68 @@ fn multitrack_project_round_trip_preserves_tracks_and_schema() {
     let mut invalid = loaded;
     invalid.schema_version += 1;
     assert!(invalid.validate().is_err());
+}
+
+#[test]
+fn queued_pattern_revision_activates_on_exact_frame_for_only_target_track() {
+    let tracks = vec![
+        synth_track(1, "one", 60, 1),
+        synth_track(2, "two", 67, 1),
+    ];
+    let mut engine = MultiTrackEngine::new(100, 60.0, 1, 9, 8, tracks).unwrap();
+
+    let replacement = pattern("replacement", 444, 72, 1);
+    let mut editor = PatternEditor::new(replacement, 8).unwrap();
+    editor.set_swing(0.1).unwrap();
+    let queued = editor
+        .queue_revision(1, 100, 60.0, 1, QuantizeBoundary::Step)
+        .unwrap();
+    let compiled = compile_pattern_revision(&queued).unwrap();
+
+    engine
+        .queue_pattern_revision(TrackId(1), compiled)
+        .unwrap();
+
+    for _ in 0..100 {
+        engine.next_stereo_frame();
+    }
+    assert_eq!(engine.track_active_revision(TrackId(1)), Some(0));
+    assert_eq!(engine.track_active_revision(TrackId(2)), Some(0));
+
+    engine.next_stereo_frame();
+    assert_eq!(engine.track_active_revision(TrackId(1)), Some(1));
+    assert_eq!(engine.track_active_revision(TrackId(2)), Some(0));
+}
+
+#[test]
+fn pending_pattern_revision_slot_is_bounded_and_newest_revision_wins() {
+    let mut engine =
+        MultiTrackEngine::new(100, 60.0, 1, 9, 8, vec![synth_track(1, "one", 60, 1)]).unwrap();
+
+    let mut first = PatternEditor::new(pattern("first", 1, 61, 1), 8).unwrap();
+    first.set_swing(0.1).unwrap();
+    let first = compile_pattern_revision(
+        &first
+            .queue_revision(1, 100, 60.0, 1, QuantizeBoundary::Step)
+            .unwrap(),
+    )
+    .unwrap();
+
+    let mut second = PatternEditor::new(pattern("second", 2, 62, 1), 8).unwrap();
+    second.set_swing(0.2).unwrap();
+    second.set_swing(0.3).unwrap();
+    let second = compile_pattern_revision(
+        &second
+            .queue_revision(1, 100, 60.0, 1, QuantizeBoundary::Step)
+            .unwrap(),
+    )
+    .unwrap();
+
+    engine.queue_pattern_revision(TrackId(1), first).unwrap();
+    engine.queue_pattern_revision(TrackId(1), second).unwrap();
+
+    for _ in 0..=100 {
+        engine.next_stereo_frame();
+    }
+    assert_eq!(engine.track_active_revision(TrackId(1)), Some(2));
 }
