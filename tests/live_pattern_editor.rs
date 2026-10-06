@@ -1,6 +1,4 @@
-use shelloop::{
-    Pattern, PatternEditor, PatternStep, QuantizeBoundary,
-};
+use shelloop::{Pattern, PatternEditor, PatternStep, QuantizeBoundary};
 
 fn step(note: u8) -> PatternStep {
     PatternStep {
@@ -41,13 +39,7 @@ fn editor_queues_a_validated_revision_on_existing_quantized_clock() {
     editor.set_step(1, Some(step(67))).unwrap();
 
     let queued = editor
-        .queue_revision(
-            100,
-            48_000,
-            120.0,
-            4,
-            QuantizeBoundary::Step,
-        )
+        .queue_revision(100, 48_000, 120.0, 4, QuantizeBoundary::Step)
         .unwrap();
 
     assert_eq!(queued.apply_at_frame, 6_000);
@@ -81,7 +73,10 @@ fn editor_supports_bounded_undo_and_redo() {
     assert_eq!(editor.pattern().steps.len(), 5);
     assert!(editor.undo());
     assert_eq!(editor.pattern().steps.len(), 4);
-    assert!(!editor.undo(), "oldest history entry should have been discarded");
+    assert!(
+        !editor.undo(),
+        "oldest history entry should have been discarded"
+    );
 
     assert!(editor.redo());
     assert_eq!(editor.pattern().steps.len(), 5);
