@@ -165,11 +165,7 @@ impl VoiceAllocator {
         released
     }
 
-    pub fn release_sustain_into(
-        &mut self,
-        channel: u8,
-        released_ids: &mut Vec<VoiceId>,
-    ) -> usize {
+    pub fn release_sustain_into(&mut self, channel: u8, released_ids: &mut Vec<VoiceId>) -> usize {
         released_ids.clear();
         if channel > 15 {
             return 0;
