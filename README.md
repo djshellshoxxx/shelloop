@@ -9,6 +9,7 @@ Development is active on `continuation/rebuild-baseline` in draft PR #1. The det
 - Sample-frame transport and exact in-block event offsets
 - Deterministic pattern scheduling with independent lengths, probability, swing, microtiming and ratchets
 - Live JSON pattern playback in the CPAL audio callback with preallocated scheduling buffers
+- Bounded 1–16 track synth engine with stable track IDs, independent pattern lengths, mute/solo, smoothed gain/pan and stereo output
 - Space play/pause and Backspace restart controls for loaded patterns
 - Separate real-time synth paths for live keyboard/MIDI performance and sequenced playback
 - Fixed-capacity polyphonic voice allocation with deterministic stealing, sustain and panic/all-voices-off
@@ -38,6 +39,7 @@ Options:
   --midi-index <INDEX>   Select a MIDI input port by zero-based index
   --polyphony <VOICES>   Set synth polyphony from 1 to 256 (default: 16)
   --pattern <FILE>       Load a validated JSON pattern for live playback
+  --project <FILE>       Load a validated multi-track project
   --record <FILE>        Record the mono master output to a 32-bit float WAV
   --pc-speaker-test      Play a short experimental PC-speaker probe tone and exit
   --pc-speaker-frequency <HZ>  Probe frequency, 37-32767 Hz (default: 440)
@@ -74,6 +76,14 @@ Play the included example pattern at 138 BPM:
 shelloop --pattern patterns/example-bassline.json --bpm 138 --steps-per-beat 4
 ```
 
+Run the included three-track example project:
+
+```bash
+shelloop --project projects/example-multitrack.json --no-midi
+```
+
+The example intentionally uses 15-, 16- and 12-step patterns so the tracks phase against one another while sharing one sample-frame transport. Track gain/pan/mute/solo state is loaded from the project, and panning is rendered through the stereo output path.
+
 Run without MIDI:
 
 ```bash
@@ -86,7 +96,7 @@ Enable mouse XY Performance Mode:
 shelloop --mouse-xy
 ```
 
-With a pattern loaded, hold the left mouse button and drag inside the terminal. X crossfades between the live synth (left) and sequencer (right); Y controls overall performance level. Without a loaded pattern, X is ignored and Y controls the live synth level. Mouse capture is disabled again when Shelloop exits.
+With a pattern or multi-track project loaded, hold the left mouse button and drag inside the terminal. X crossfades between the live synth (left) and sequencer/project mix (right); Y controls overall performance level. Without a sequencer source, X is ignored and Y controls the live synth level. Mouse capture is disabled again when Shelloop exits.
 
 Record the protected mono master output while performing:
 
