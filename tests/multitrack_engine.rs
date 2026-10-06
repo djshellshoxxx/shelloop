@@ -1,5 +1,6 @@
 use shelloop::{
-    MultiTrackEngine, Pattern, PatternStep, TrackDefinition, TrackId, TrackKind, MAX_REALTIME_TRACKS,
+    EngineProjectSnapshot, MultiTrackEngine, Pattern, PatternStep, TrackCommand, TrackDefinition,
+    TrackId, TrackKind, MAX_REALTIME_TRACKS,
 };
 
 fn pattern(name: &str, seed: u64, note: u8, steps: usize) -> Pattern {
@@ -150,4 +151,64 @@ fn single_track_engine_preserves_centered_stereo_output() {
         let (left, right) = engine.next_stereo_frame();
         assert!((left - right).abs() < 0.0001);
     }
+}
+
+#[test]
+fn immutable_project_snapshot_validates_before_engine_construction() {
+    let snapshot = EngineProjectSnapshot::new(
+        42,
+        vec![
+            synth_track(11, "drums", 36, 16),
+            synth_track(12, "bass", 48, 15),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.revision(), 42);
+    assert_eq!(snapshot.tracks().len(), 2);
+
+    let duplicate = EngineProjectSnapshot::new(
+        43,
+        vec![
+            synth_track(11, "a", 60, 4),
+            synth_track(11, "b", 62, 4),
+        ],
+    );
+    assert!(duplicate.is_err());
+}
+
+#[test]
+fn typed_track_commands_update_only_the_addressed_track() {
+    let snapshot = EngineProjectSnapshot::new(
+        1,
+        vec![
+            synth_track(1, "one", 60, 4),
+            synth_track(2, "two", 67, 4),
+        ],
+    )
+    .unwrap();
+    let mut engine =
+        MultiTrackEngine::from_snapshot(48_000, 120.0, 4, 5, 8, snapshot).unwrap();
+
+    engine
+        .apply_command(TrackCommand::SetMute {
+            track: TrackId(2),
+            muted: true,
+        })
+        .unwrap();
+    assert!(engine.track_is_audible(TrackId(1)));
+    assert!(!engine.track_is_audible(TrackId(2)));
+
+    engine
+        .apply_command(TrackCommand::SetPan {
+            track: TrackId(1),
+            pan: -1.0,
+        })
+        .unwrap();
+    assert!(engine
+        .apply_command(TrackCommand::SetGain {
+            track: TrackId(999),
+            gain: 1.0,
+        })
+        .is_err());
 }
