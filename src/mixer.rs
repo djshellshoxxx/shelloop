@@ -1,3 +1,62 @@
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SmoothedParam {
+    current: f32,
+    target: f32,
+    step: f32,
+    remaining: u32,
+}
+
+impl SmoothedParam {
+    pub fn new(value: f32) -> Self {
+        let value = if value.is_finite() { value } else { 0.0 };
+        Self {
+            current: value,
+            target: value,
+            step: 0.0,
+            remaining: 0,
+        }
+    }
+
+    pub fn current(&self) -> f32 {
+        self.current
+    }
+
+    pub fn target(&self) -> f32 {
+        self.target
+    }
+
+    pub fn set_target(&mut self, target: f32, frames: u32) {
+        let target = if target.is_finite() { target } else { 0.0 };
+        self.target = target;
+        if frames == 0 {
+            self.current = target;
+            self.step = 0.0;
+            self.remaining = 0;
+            return;
+        }
+
+        self.step = (target - self.current) / frames as f32;
+        self.remaining = frames;
+    }
+
+    pub fn next_value(&mut self) -> f32 {
+        if self.remaining == 0 {
+            return self.current;
+        }
+
+        if self.remaining == 1 {
+            self.current = self.target;
+            self.remaining = 0;
+            self.step = 0.0;
+            return self.current;
+        }
+
+        self.current += self.step;
+        self.remaining -= 1;
+        self.current
+    }
+}
+
 use std::f32::consts::FRAC_PI_4;
 
 #[derive(Debug, Clone, Copy)]
