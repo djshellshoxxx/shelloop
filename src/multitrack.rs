@@ -232,7 +232,8 @@ impl RealtimeTrack {
         if let Some(change) = self.pending_pattern {
             if change.apply_at_frame <= self.sequencer.position_frame() {
                 self.synth.handle(EngineCommand::Panic);
-                self.sequencer.replace_compiled_pattern(change.value.pattern);
+                self.sequencer
+                    .replace_compiled_pattern(change.value.pattern);
                 self.active_revision = change.value.revision;
                 self.pending_pattern = None;
             }
