@@ -125,6 +125,29 @@ impl ProjectPatternEditors {
         })
     }
 
+    pub fn default_quantize_boundary(
+        &self,
+        command: &PatternEditCommand,
+    ) -> QuantizeBoundary {
+        let pattern_steps = self
+            .editor(self.selected_track)
+            .map(|editor| editor.pattern().len() as u32)
+            .unwrap_or(1);
+
+        match command {
+            PatternEditCommand::Length(_)
+            | PatternEditCommand::RotateLeft(_)
+            | PatternEditCommand::RotateRight(_) => QuantizeBoundary::Pattern {
+                steps: pattern_steps,
+            },
+            PatternEditCommand::SelectTrack(_) => QuantizeBoundary::Immediate,
+            PatternEditCommand::Step { .. }
+            | PatternEditCommand::Swing(_)
+            | PatternEditCommand::Undo
+            | PatternEditCommand::Redo => QuantizeBoundary::Step,
+        }
+    }
+
     pub fn queue_selected_revision(
         &self,
         current_frame: u64,
