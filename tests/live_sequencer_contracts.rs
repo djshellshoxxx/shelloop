@@ -1,4 +1,6 @@
-use shelloop::{parse_pattern_json, EngineCommand, LiveSequencer, Pattern, PatternStep};
+use shelloop::{
+    parse_pattern_json, CompiledPattern, EngineCommand, LiveSequencer, Pattern, PatternStep,
+};
 
 fn simple_pattern() -> Pattern {
     Pattern::new(
@@ -95,4 +97,65 @@ fn json_pattern_loading_validates_the_pattern() {
     assert!(parse_pattern_json(&invalid)
         .unwrap_err()
         .contains("ratchets"));
+}
+
+#[test]
+fn compiled_pattern_replacement_preserves_transport_and_uses_new_events() {
+    let old = Pattern::new(
+        "old",
+        1,
+        0.0,
+        0,
+        vec![Some(PatternStep {
+            note: 60,
+            velocity: 1.0,
+            gate: 0.5,
+            probability: 1.0,
+            ratchets: 1,
+            microtiming_frames: 0,
+        })],
+    )
+    .unwrap();
+    let new = Pattern::new(
+        "new",
+        2,
+        0.0,
+        0,
+        vec![Some(PatternStep {
+            note: 72,
+            velocity: 1.0,
+            gate: 0.5,
+            probability: 1.0,
+            ratchets: 1,
+            microtiming_frames: 0,
+        })],
+    )
+    .unwrap();
+
+    let mut sequencer = LiveSequencer::new(100, 60.0, 1, 99, old).unwrap();
+    let mut commands = Vec::with_capacity(LiveSequencer::MAX_COMMANDS_PER_FRAME);
+    sequencer.fill_commands(&mut commands);
+    assert!(commands.iter().any(|command| matches!(
+        command,
+        EngineCommand::NoteOn { note: 60, .. }
+    )));
+
+    for _ in 1..100 {
+        sequencer.fill_commands(&mut commands);
+    }
+    assert_eq!(sequencer.position_frame(), 100);
+
+    let compiled = CompiledPattern::from_pattern(&new).unwrap();
+    sequencer.replace_compiled_pattern(compiled);
+    assert_eq!(sequencer.position_frame(), 100);
+
+    sequencer.fill_commands(&mut commands);
+    assert!(commands.iter().any(|command| matches!(
+        command,
+        EngineCommand::NoteOn { note: 72, .. }
+    )));
+    assert!(!commands.iter().any(|command| matches!(
+        command,
+        EngineCommand::NoteOn { note: 60, .. }
+    )));
 }
