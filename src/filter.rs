@@ -64,6 +64,11 @@ impl StateVariableFilter {
         self.ic2eq = 0.0;
     }
 
+    pub(crate) fn set_mode_and_resonance(&mut self, mode: FilterMode, resonance: f32) {
+        self.params.mode = mode;
+        self.params.resonance = resonance;
+    }
+
     pub fn set_cutoff_hz(&mut self, cutoff_hz: f32) {
         self.params.cutoff_hz = clamp_cutoff(cutoff_hz, self.sample_rate);
     }

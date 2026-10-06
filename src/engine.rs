@@ -1,4 +1,6 @@
-use crate::{protect_master, Oscillator, SynthPatch, SynthVoice, VoiceAllocator, VoiceId};
+use crate::{
+    protect_master, CompiledSynthPatch, Oscillator, SynthPatch, SynthVoice, VoiceAllocator, VoiceId,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EngineCommand {
@@ -55,6 +57,21 @@ impl RealtimeSynth {
             voice_ids: vec![None; polyphony],
             sustain_releases: Vec::with_capacity(polyphony),
         })
+    }
+
+    pub fn patch(&self) -> SynthPatch {
+        self.voices[0].patch()
+    }
+
+    pub fn apply_patch(&mut self, patch: CompiledSynthPatch) -> bool {
+        // Every voice is constructed at the same rate. A mismatch leaves all unchanged.
+        if !self.voices[0].apply_patch(patch) {
+            return false;
+        }
+        for voice in &mut self.voices[1..] {
+            voice.apply_patch(patch);
+        }
+        true
     }
 
     pub fn active_voice_count(&self) -> usize {

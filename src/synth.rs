@@ -1,5 +1,6 @@
 use crate::{
-    clamp_cutoff, AdsrEnvelope, AdsrParams, FilterMode, FilterParams, StateVariableFilter,
+    clamp_cutoff, AdsrEnvelope, AdsrParams, FilterMode, FilterParams, SmoothedParam,
+    StateVariableFilter,
 };
 use serde::{Deserialize, Serialize};
 use std::f32::consts::TAU;
@@ -13,7 +14,8 @@ pub enum Oscillator {
     Pulse,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SynthParamId {
     Oscillator,
     Octave,
@@ -82,6 +84,60 @@ impl SynthPatch {
         }
     }
 
+    pub fn with_parameter(
+        mut self,
+        id: SynthParamId,
+        value: SynthParamValue,
+        sample_rate: f32,
+    ) -> Result<Self, String> {
+        match (id, value) {
+            (SynthParamId::Oscillator, SynthParamValue::Oscillator(value)) => {
+                self.oscillator = value
+            }
+            (SynthParamId::FilterMode, SynthParamValue::FilterMode(value)) => {
+                self.filter.mode = value
+            }
+            (id, SynthParamValue::Number(value)) => {
+                if !value.is_finite() {
+                    return Err("synth value must be finite".into());
+                }
+                match id {
+                    SynthParamId::Octave | SynthParamId::Semitone => {
+                        if value.fract() != 0.0 || !(-12.0..=12.0).contains(&value) {
+                            return Err("tuning offsets must be integers in range".into());
+                        }
+                        if id == SynthParamId::Octave {
+                            self.octave = value as i8;
+                        } else {
+                            self.semitone = value as i8;
+                        }
+                    }
+                    SynthParamId::FineCents => self.fine_cents = value,
+                    SynthParamId::PulseWidth => self.pulse_width = value,
+                    SynthParamId::AmpAttack => self.amp_env.attack_secs = value,
+                    SynthParamId::AmpDecay => self.amp_env.decay_secs = value,
+                    SynthParamId::AmpSustain => self.amp_env.sustain = value,
+                    SynthParamId::AmpRelease => self.amp_env.release_secs = value,
+                    SynthParamId::FilterCutoff => self.filter.cutoff_hz = value,
+                    SynthParamId::FilterResonance => self.filter.resonance = value,
+                    SynthParamId::FilterKeytrack => self.filter.key_tracking = value,
+                    SynthParamId::FilterAttack => self.filter_env.attack_secs = value,
+                    SynthParamId::FilterDecay => self.filter_env.decay_secs = value,
+                    SynthParamId::FilterSustain => self.filter_env.sustain = value,
+                    SynthParamId::FilterRelease => self.filter_env.release_secs = value,
+                    SynthParamId::FilterEnvAmount => self.filter_env_amount = value,
+                    SynthParamId::OutputGain => self.output_gain = value,
+                    SynthParamId::Oscillator | SynthParamId::FilterMode => {
+                        return Err("parameter requires a typed enum value".into())
+                    }
+                }
+            }
+            _ => return Err("value type does not match synth parameter".into()),
+        }
+        self.validate(sample_rate)?;
+        Ok(self)
+    }
+
     pub fn validate(&self, sample_rate: f32) -> Result<(), String> {
         if !(-4..=4).contains(&self.octave) {
             return Err("synth octave must be between -4 and 4".into());
@@ -110,11 +166,77 @@ impl SynthPatch {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SynthParamValue {
+    Number(f32),
+    Oscillator(Oscillator),
+    FilterMode(FilterMode),
+}
+
+/// Validated on the control thread; applying it does not allocate or parse.
+#[derive(Debug, Clone, Copy)]
+pub struct CompiledSynthPatch {
+    patch: SynthPatch,
+    sample_rate: f32,
+    smoothing_frames: u32,
+    parameters: [f32; 7],
+}
+
+impl CompiledSynthPatch {
+    pub fn new(sample_rate: f32, patch: SynthPatch) -> Result<Self, String> {
+        patch.validate(sample_rate)?;
+        Ok(Self {
+            patch,
+            sample_rate,
+            smoothing_frames: (sample_rate * 0.005).round().max(1.0) as u32,
+            parameters: patch_parameters(patch),
+        })
+    }
+}
+
+pub fn parse_synth_parameter_command(
+    line: &str,
+) -> Result<(SynthParamId, SynthParamValue), String> {
+    let mut parts = line.split_whitespace();
+    if parts.next() != Some("synth") {
+        return Err("expected synth <parameter> <value>".into());
+    }
+    let name = parts.next().ok_or("missing synth parameter")?;
+    let raw = parts.next().ok_or("missing synth value")?;
+    if parts.next().is_some() {
+        return Err("expected synth <parameter> <value>".into());
+    }
+    let id: SynthParamId = serde_json::from_value(serde_json::Value::String(name.to_owned()))
+        .map_err(|_| format!("unknown synth parameter: {name}"))?;
+    let value = match id {
+        SynthParamId::Oscillator => SynthParamValue::Oscillator(
+            serde_json::from_value(serde_json::Value::String(raw.to_owned()))
+                .map_err(|_| format!("unknown oscillator: {raw}"))?,
+        ),
+        SynthParamId::FilterMode => SynthParamValue::FilterMode(
+            serde_json::from_value(serde_json::Value::String(raw.to_owned()))
+                .map_err(|_| format!("unknown filter mode: {raw}"))?,
+        ),
+        _ => {
+            let number = raw
+                .parse::<f32>()
+                .map_err(|_| "synth value must be numeric")?;
+            if !number.is_finite() {
+                return Err("synth value must be finite".into());
+            }
+            SynthParamValue::Number(number)
+        }
+    };
+    Ok((id, value))
+}
+
 #[derive(Debug, Clone)]
 pub struct SynthVoice {
     sample_rate: f32,
     patch: SynthPatch,
     frequency_hz: f32,
+    base_frequency_hz: f32,
+    parameters: [SmoothedParam; 7],
     velocity: f32,
     phase: f32,
     amp_env: AdsrEnvelope,
@@ -146,6 +268,8 @@ impl SynthVoice {
             sample_rate,
             patch,
             frequency_hz: 0.0,
+            base_frequency_hz: 0.0,
+            parameters: patch_parameters(patch).map(SmoothedParam::new),
             velocity: 0.0,
             phase: 0.0,
             amp_env: AdsrEnvelope::new(sample_rate, patch.amp_env)?,
@@ -159,15 +283,13 @@ impl SynthVoice {
     }
 
     pub fn note_on(&mut self, frequency_hz: f32, velocity: f32) {
-        let tuning_semitones = f32::from(self.patch.octave) * 12.0
-            + f32::from(self.patch.semitone)
-            + self.patch.fine_cents / 100.0;
-        let tuned = frequency_hz * 2.0_f32.powf(tuning_semitones / 12.0);
-        self.frequency_hz = if tuned.is_finite() {
-            tuned.clamp(0.0, self.sample_rate.max(1.0) * 0.49)
+        self.base_frequency_hz = if frequency_hz.is_finite() {
+            frequency_hz.max(0.0)
         } else {
             0.0
         };
+        // Newly triggered/stolen voices start at the current patch target.
+        self.parameters = patch_parameters(self.patch).map(SmoothedParam::new);
         self.velocity = if velocity.is_finite() {
             velocity.clamp(0.0, 1.0)
         } else {
@@ -177,6 +299,19 @@ impl SynthVoice {
         self.filter.reset();
         self.amp_env.note_on();
         self.filter_env.note_on();
+    }
+
+    pub fn apply_patch(&mut self, compiled: CompiledSynthPatch) -> bool {
+        if compiled.sample_rate != self.sample_rate {
+            return false;
+        }
+        self.patch = compiled.patch;
+        for (parameter, target) in self.parameters.iter_mut().zip(compiled.parameters) {
+            parameter.set_target(target, compiled.smoothing_frames);
+        }
+        self.amp_env.update_params(self.patch.amp_env);
+        self.filter_env.update_params(self.patch.filter_env);
+        true
     }
 
     pub fn note_off(&mut self) {
@@ -200,12 +335,17 @@ impl SynthVoice {
             return 0.0;
         }
 
+        let [tuning, pulse_width, base_cutoff, resonance, key_tracking, env_amount, gain] =
+            std::array::from_fn(|index| self.parameters[index].next_value());
+        self.frequency_hz = (self.base_frequency_hz * tuning).clamp(0.0, self.sample_rate * 0.49);
+        self.filter
+            .set_mode_and_resonance(self.patch.filter.mode, resonance);
         let raw = match self.patch.oscillator {
             Oscillator::Sine => (self.phase * TAU).sin(),
             Oscillator::Triangle => 1.0 - 4.0 * (self.phase - 0.5).abs(),
             Oscillator::Saw => 2.0 * self.phase - 1.0,
             Oscillator::Pulse => {
-                if self.phase < self.patch.pulse_width {
+                if self.phase < pulse_width {
                     1.0
                 } else {
                     -1.0
@@ -216,21 +356,16 @@ impl SynthVoice {
         let amp = self.amp_env.next_value();
         let filter_env = self.filter_env.next_value();
         let keytrack = if self.frequency_hz > 0.0 {
-            (self.frequency_hz / 440.0)
-                .max(0.01)
-                .powf(self.patch.filter.key_tracking)
+            (self.frequency_hz / 440.0).max(0.01).powf(key_tracking)
         } else {
             1.0
         };
-        let env_multiplier = 2.0_f32.powf(self.patch.filter_env_amount * filter_env);
-        let cutoff = clamp_cutoff(
-            self.patch.filter.cutoff_hz * keytrack * env_multiplier,
-            self.sample_rate,
-        );
+        let env_multiplier = 2.0_f32.powf(env_amount * filter_env);
+        let cutoff = clamp_cutoff(base_cutoff * keytrack * env_multiplier, self.sample_rate);
         self.filter.set_cutoff_hz(cutoff);
 
         let filtered = self.filter.process(raw * self.velocity);
-        let sample = (filtered * amp * self.patch.output_gain).clamp(-1.0, 1.0);
+        let sample = (filtered * amp * gain).clamp(-1.0, 1.0);
         let phase_increment = self.frequency_hz / self.sample_rate;
         self.phase = (self.phase + phase_increment).fract();
 
@@ -249,4 +384,19 @@ impl SynthVoice {
         }
         output
     }
+}
+
+fn patch_parameters(patch: SynthPatch) -> [f32; 7] {
+    [
+        2.0_f32.powf(
+            (f32::from(patch.octave) * 12.0 + f32::from(patch.semitone) + patch.fine_cents / 100.0)
+                / 12.0,
+        ),
+        patch.pulse_width,
+        patch.filter.cutoff_hz,
+        patch.filter.resonance,
+        patch.filter.key_tracking,
+        patch.filter_env_amount,
+        patch.output_gain,
+    ]
 }

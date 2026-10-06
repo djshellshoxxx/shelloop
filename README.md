@@ -679,4 +679,39 @@ Patch fields are complete objects: missing, misspelled or unknown patch fields
 are rejected. Invalid ranges are rejected before saving/loading. Startup also
 checks cutoff against the selected output sample rate: a 20 kHz cutoff requires
 a rate above 44.44 kHz. Patch parsing and voice construction happen before the
-audio callback. Live patch replacement and parameter controls remain pending.
+audio callback.
+
+### Edit synth parameters during playback
+
+Start with `--project`, press `:`, and enter a command. Use `track 2` to select a
+track, then `synth <parameter> <value>` to change its sound:
+
+```text
+track 1
+synth filter_mode low_pass
+synth filter_cutoff 900
+synth filter_resonance 0.6
+synth amp_release 0.4
+synth oscillator pulse
+synth pulse_width 0.3
+synth octave -1
+```
+
+Parameter names are `oscillator`, `octave`, `semitone`, `fine_cents`,
+`pulse_width`, `amp_attack`, `amp_decay`, `amp_sustain`, `amp_release`,
+`filter_mode`, `filter_cutoff`, `filter_resonance`, `filter_keytrack`,
+`filter_attack`, `filter_decay`, `filter_sustain`, `filter_release`,
+`filter_env_amount` and `output_gain`. Oscillator and filter mode use the names
+listed above; other values are numeric. Octave and semitone require integers.
+Cutoff is Hz, envelope times are seconds, and fine tuning is cents.
+
+Tuning, pulse width, cutoff, resonance, key tracking, filter envelope amount and
+output gain ramp over 5 ms. Oscillator/filter mode changes are immediate. Held
+notes retain their oscillator phase and envelope state. Timed ADSR stages already
+in progress finish their existing ramp; new timings apply to subsequent stages,
+and sustain-level changes apply immediately. New notes use the current patch.
+
+Live commands affect session memory. Store reusable patches in the project JSON.
+Invalid values and a full/disconnected patch queue leave the control patch intact.
+The queue holds at most 16 prepared patches and the renderer applies at most two
+per sample. Patch application rejects missing tracks and mismatched sample rates.

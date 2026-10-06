@@ -73,6 +73,9 @@ pub use runtime::engine_command_from_midi;
 pub use runtime::run_realtime_session;
 pub use scheduler::{ScheduledEvent, Scheduler, StepEvent};
 pub use sequencer::LiveSequencer;
-pub use synth::{Oscillator, SynthParamId, SynthPatch, SynthVoice};
+pub use synth::{
+    parse_synth_parameter_command, CompiledSynthPatch, Oscillator, SynthParamId, SynthParamValue,
+    SynthPatch, SynthVoice,
+};
 pub use transport::{Transport, TransportState};
 pub use voice::{VoiceAllocator, VoiceId, VoiceState};

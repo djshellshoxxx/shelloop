@@ -1,6 +1,6 @@
 use crate::{
-    ChannelStrip, CompiledPatternRevision, EngineCommand, LiveSequencer, Oscillator, Pattern,
-    QuantizedChange, RealtimeSynth, SmoothedParam, SynthPatch,
+    ChannelStrip, CompiledPatternRevision, CompiledSynthPatch, EngineCommand, LiveSequencer,
+    Oscillator, Pattern, QuantizedChange, RealtimeSynth, SmoothedParam, SynthPatch,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -323,6 +323,14 @@ impl MultiTrackEngine {
             polyphony_per_track,
             snapshot.into_tracks(),
         )
+    }
+
+    /// Infallible bounded callback path: false means missing track or rate mismatch.
+    pub fn apply_synth_patch(&mut self, id: TrackId, patch: CompiledSynthPatch) -> bool {
+        match self.tracks.iter_mut().find(|track| track.id == id) {
+            Some(track) => track.synth.apply_patch(patch),
+            None => false,
+        }
     }
 
     pub fn apply_command(&mut self, command: TrackCommand) -> Result<(), String> {

@@ -38,11 +38,12 @@ mod live {
     };
     use crate::{
         list_output_device_names, map_performance_key, open_stereo_output_stream,
-        parse_pattern_edit_command, parse_pattern_json, pc_speaker_backend, protect_master,
-        shift_octave, spawn_realtime_recording, CompiledPatternRevision, EngineCommand,
-        LiveSequencer, MultiTrackEngine, MultiTrackProject, Oscillator, PerformanceKey,
-        PerformanceMix, ProjectPatternEditors, QuantizedChange, RealtimeSynth, StartupOptions,
-        TrackId, WavRecordingConfig, XyPoint,
+        parse_pattern_edit_command, parse_pattern_json, parse_synth_parameter_command,
+        pc_speaker_backend, protect_master, shift_octave, spawn_realtime_recording,
+        CompiledPatternRevision, CompiledSynthPatch, EngineCommand, LiveSequencer,
+        MultiTrackEngine, MultiTrackProject, Oscillator, PerformanceKey, PerformanceMix,
+        ProjectPatternEditors, QuantizedChange, RealtimeSynth, StartupOptions, SynthPatch, TrackId,
+        WavRecordingConfig, XyPoint,
     };
     use crossbeam_channel::{bounded, Sender};
     use crossterm::event::{
@@ -67,6 +68,8 @@ mod live {
     const PERFORMANCE_QUEUE_CAPACITY: usize = 32;
     const PATTERN_CHANGE_QUEUE_CAPACITY: usize = 16;
     const PATTERN_CHANGES_PER_SAMPLE_LIMIT: usize = 2;
+    const SYNTH_PATCH_QUEUE_CAPACITY: usize = 16;
+    const SYNTH_PATCHES_PER_SAMPLE_LIMIT: usize = 2;
     const EDIT_HISTORY_CAPACITY: usize = 128;
     #[cfg(feature = "midi")]
     const MIDI_QUEUE_CAPACITY: usize = 256;
@@ -218,6 +221,27 @@ mod live {
         ))
     }
 
+    fn queue_live_synth_edit(
+        line: &str,
+        track: TrackId,
+        current: &mut SynthPatch,
+        sample_rate: u32,
+        sender: &Sender<(TrackId, CompiledSynthPatch)>,
+    ) -> Result<String, String> {
+        let (id, value) = parse_synth_parameter_command(line)?;
+        let patch = current.with_parameter(id, value, sample_rate as f32)?;
+        let compiled = CompiledSynthPatch::new(sample_rate as f32, patch)?;
+        sender
+            .try_send((track, compiled))
+            .map_err(|error| format!("synth patch queue unavailable: {error}"))?;
+        // Failed delivery leaves the control snapshot unchanged.
+        *current = patch;
+        Ok(format!(
+            "queued synth parameter {id:?} for track {}",
+            track.0
+        ))
+    }
+
     fn print_devices() -> Result<(), String> {
         println!("Audio output devices:");
         let audio_devices = list_output_device_names()?;
@@ -296,6 +320,23 @@ mod live {
                 )
             })
             .transpose()?;
+        let mut synth_patches: HashMap<TrackId, SynthPatch> = project
+            .as_ref()
+            .map(|project| {
+                project
+                    .tracks
+                    .iter()
+                    .map(|track| {
+                        (
+                            track.id,
+                            track
+                                .synth_patch
+                                .unwrap_or_else(|| SynthPatch::legacy(Oscillator::Saw)),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let has_sequencer = pattern.is_some() || project.is_some();
 
         let (command_sender, command_receiver) = bounded(COMMAND_QUEUE_CAPACITY);
@@ -305,6 +346,8 @@ mod live {
             bounded::<(TrackId, QuantizedChange<CompiledPatternRevision>)>(
                 PATTERN_CHANGE_QUEUE_CAPACITY,
             );
+        let (synth_patch_sender, synth_patch_receiver) =
+            bounded::<(TrackId, CompiledSynthPatch)>(SYNTH_PATCH_QUEUE_CAPACITY);
         let transport_frame = Arc::new(AtomicU64::new(0));
         let audio_transport_frame = Arc::clone(&transport_frame);
         let polyphony = options.polyphony;
@@ -372,6 +415,15 @@ mod live {
                             break;
                         };
                         performance_synth.handle(command);
+                    }
+
+                    for _ in 0..SYNTH_PATCHES_PER_SAMPLE_LIMIT {
+                        let Ok((track, patch)) = synth_patch_receiver.try_recv() else {
+                            break;
+                        };
+                        if let Some(engine) = multitrack.as_mut() {
+                            engine.apply_synth_patch(track, patch);
+                        }
                     }
 
                     for _ in 0..PATTERN_CHANGES_PER_SAMPLE_LIMIT {
@@ -642,15 +694,30 @@ mod live {
                                 (pattern_editors.as_mut(), project_clock)
                             {
                                 let current_frame = transport_frame.load(Ordering::Relaxed);
-                                match queue_live_edit(
-                                    &buffer,
-                                    editors,
-                                    current_frame,
-                                    audio.sample_rate(),
-                                    project_bpm,
-                                    project_steps,
-                                    &pattern_change_sender,
-                                ) {
+                                let result = if buffer.split_whitespace().next() == Some("synth") {
+                                    let track = editors.selected_track();
+                                    match synth_patches.get_mut(&track) {
+                                        Some(current) => queue_live_synth_edit(
+                                            &buffer,
+                                            track,
+                                            current,
+                                            audio.sample_rate(),
+                                            &synth_patch_sender,
+                                        ),
+                                        None => Err("selected track has no synth patch".into()),
+                                    }
+                                } else {
+                                    queue_live_edit(
+                                        &buffer,
+                                        editors,
+                                        current_frame,
+                                        audio.sample_rate(),
+                                        project_bpm,
+                                        project_steps,
+                                        &pattern_change_sender,
+                                    )
+                                };
+                                match result {
                                     Ok(message) => println!("edit: {message}"),
                                     Err(error) => eprintln!("edit error: {error}"),
                                 }
@@ -792,6 +859,66 @@ mod live {
             (Err(session_error), Ok(())) => Err(session_error),
             (Ok(()), Err(recording_error)) => Err(recording_error),
             (Ok(()), Ok(())) => Ok(()),
+        }
+    }
+    #[cfg(test)]
+    mod synth_control_tests {
+        use super::*;
+
+        #[test]
+        fn failed_queue_delivery_preserves_control_patch() {
+            let (sender, receiver) = bounded(1);
+            let mut patch = SynthPatch::legacy(Oscillator::Saw);
+            queue_live_synth_edit(
+                "synth output_gain 0.4",
+                TrackId(1),
+                &mut patch,
+                48_000,
+                &sender,
+            )
+            .unwrap();
+            let accepted = patch;
+            assert!(queue_live_synth_edit(
+                "synth output_gain 0.2",
+                TrackId(1),
+                &mut patch,
+                48_000,
+                &sender
+            )
+            .is_err());
+            assert_eq!(patch, accepted);
+            let (track, compiled) = receiver.try_recv().unwrap();
+            assert_eq!(track, TrackId(1));
+            let mut synth = RealtimeSynth::new(48_000.0, Oscillator::Saw, 4).unwrap();
+            assert!(synth.apply_patch(compiled));
+            assert_eq!(synth.patch(), accepted);
+            drop(receiver);
+            assert!(queue_live_synth_edit(
+                "synth output_gain 0.2",
+                TrackId(1),
+                &mut patch,
+                48_000,
+                &sender
+            )
+            .is_err());
+            assert_eq!(patch, accepted);
+        }
+
+        #[test]
+        fn invalid_edit_never_enters_the_audio_queue() {
+            let (sender, receiver) = bounded(1);
+            let mut patch = SynthPatch::legacy(Oscillator::Saw);
+            let original = patch;
+            assert!(queue_live_synth_edit(
+                "synth filter_cutoff 20000",
+                TrackId(1),
+                &mut patch,
+                32_000,
+                &sender
+            )
+            .is_err());
+            assert_eq!(patch, original);
+            assert!(receiver.try_recv().is_err());
         }
     }
 }

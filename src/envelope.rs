@@ -79,6 +79,15 @@ impl AdsrEnvelope {
         })
     }
 
+    // Current timed stages finish their existing ramp. New timings apply to
+    // subsequent stages; sustain edits take effect without retriggering.
+    pub(crate) fn update_params(&mut self, params: AdsrParams) {
+        self.params = params;
+        if self.stage == EnvelopeStage::Sustain {
+            self.level = params.sustain;
+        }
+    }
+
     pub fn stage(&self) -> EnvelopeStage {
         self.stage
     }
