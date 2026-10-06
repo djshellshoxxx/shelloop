@@ -7,7 +7,7 @@ pub enum QuantizeBoundary {
     Pattern { steps: u32 },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuantizedChange<T> {
     pub apply_at_frame: u64,
     pub value: T,
