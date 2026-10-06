@@ -1,5 +1,5 @@
 use crate::{
-    AdsrEnvelope, AdsrParams, FilterMode, FilterParams, StateVariableFilter, clamp_cutoff,
+    clamp_cutoff, AdsrEnvelope, AdsrParams, FilterMode, FilterParams, StateVariableFilter,
 };
 use std::f32::consts::TAU;
 
