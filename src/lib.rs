@@ -32,7 +32,9 @@ pub use audio::{
     list_output_device_names, open_output_stream, open_stereo_output_stream, AudioOutput,
 };
 pub use command::{parse_command, Command};
-pub use editor::{compile_pattern_revision, CompiledPatternRevision, PatternEditor, PatternRevision};
+pub use editor::{
+    compile_pattern_revision, CompiledPatternRevision, PatternEditor, PatternRevision,
+};
 pub use editor_command::{
     parse_pattern_edit_command, EditOutcome, PatternEditCommand, ProjectPatternEditors, StepEdit,
 };
