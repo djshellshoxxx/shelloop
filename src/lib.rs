@@ -31,7 +31,7 @@ pub use audio::{
     list_output_device_names, open_output_stream, open_stereo_output_stream, AudioOutput,
 };
 pub use command::{parse_command, Command};
-pub use editor::{PatternEditor, PatternRevision};
+pub use editor::{compile_pattern_revision, CompiledPatternRevision, PatternEditor, PatternRevision};
 pub use engine::{midi_note_hz, EngineCommand, RealtimeSynth};
 pub use keyboard::{map_performance_key, shift_octave, PerformanceKey};
 pub use midi::{decode_message, MidiEvent, MidiPerformanceState};
@@ -45,7 +45,10 @@ pub use multitrack::{
     EngineProjectSnapshot, MultiTrackEngine, MultiTrackProject, TrackCommand, TrackDefinition,
     TrackId, TrackKind, MAX_REALTIME_TRACKS, MULTITRACK_PROJECT_SCHEMA_VERSION,
 };
-pub use pattern::{parse_pattern_json, Pattern, PatternEvent, PatternScheduler, PatternStep};
+pub use pattern::{
+    parse_pattern_json, CompiledPattern, Pattern, PatternEvent, PatternScheduler, PatternStep,
+    MAX_PATTERN_STEPS,
+};
 pub use pc_speaker::{pc_speaker_backend, pc_speaker_test, PcSpeakerBackend};
 pub use performance::{AxisCurve, AxisMapping, PerformanceMix, XyPoint};
 pub use project::{Project, Track};
