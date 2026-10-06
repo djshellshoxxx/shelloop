@@ -62,11 +62,7 @@ impl PatternEditor {
         self.commit(candidate)
     }
 
-    pub fn set_step(
-        &mut self,
-        index: usize,
-        step: Option<PatternStep>,
-    ) -> Result<u64, String> {
+    pub fn set_step(&mut self, index: usize, step: Option<PatternStep>) -> Result<u64, String> {
         self.ensure_step_index(index)?;
         let mut candidate = self.pattern.clone();
         candidate.steps[index] = step;
