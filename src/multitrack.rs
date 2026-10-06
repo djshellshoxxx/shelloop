@@ -1,4 +1,6 @@
-use crate::{ChannelStrip, EngineCommand, LiveSequencer, Oscillator, Pattern, RealtimeSynth};
+use crate::{
+    ChannelStrip, EngineCommand, LiveSequencer, Oscillator, Pattern, RealtimeSynth, SmoothedParam,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -167,8 +169,11 @@ struct RealtimeTrack {
     id: TrackId,
     sequencer: LiveSequencer,
     synth: RealtimeSynth,
-    strip: ChannelStrip,
+    gain: SmoothedParam,
+    pan: SmoothedParam,
+    muted: bool,
     soloed: bool,
+    smoothing_frames: u32,
 }
 
 impl RealtimeTrack {
@@ -196,23 +201,22 @@ impl RealtimeTrack {
             definition.pattern,
         )?;
         let synth = RealtimeSynth::new(sample_rate as f32, Oscillator::Saw, polyphony)?;
-        let strip = ChannelStrip {
-            gain: definition.gain,
-            pan: definition.pan,
-            muted: definition.muted,
-        };
+        let smoothing_frames = (sample_rate / 200).max(1);
 
         Ok(Self {
             id: definition.id,
             sequencer,
             synth,
-            strip,
+            gain: SmoothedParam::new(definition.gain),
+            pan: SmoothedParam::new(definition.pan),
+            muted: definition.muted,
             soloed: definition.soloed,
+            smoothing_frames,
         })
     }
 
     fn is_audible(&self, any_soloed: bool) -> bool {
-        !self.strip.muted && (!any_soloed || self.soloed)
+        !self.muted && (!any_soloed || self.soloed)
     }
 
     fn next_stereo_frame(
@@ -226,10 +230,17 @@ impl RealtimeTrack {
         }
 
         let mono = self.synth.next_sample();
+        let gain = self.gain.next_value();
+        let pan = self.pan.next_value();
         if !self.is_audible(any_soloed) {
             return (0.0, 0.0);
         }
-        self.strip.process_mono(mono)
+        ChannelStrip {
+            gain,
+            pan,
+            muted: false,
+        }
+        .process_mono(mono)
     }
 }
 
@@ -340,7 +351,8 @@ impl MultiTrackEngine {
         if !gain.is_finite() || !(0.0..=2.0).contains(&gain) {
             return Err("track gain must be finite and between 0.0 and 2.0".into());
         }
-        self.track_mut(id)?.strip.gain = gain;
+        let track = self.track_mut(id)?;
+        track.gain.set_target(gain, track.smoothing_frames);
         Ok(())
     }
 
@@ -348,12 +360,13 @@ impl MultiTrackEngine {
         if !pan.is_finite() || !(-1.0..=1.0).contains(&pan) {
             return Err("track pan must be finite and between -1.0 and 1.0".into());
         }
-        self.track_mut(id)?.strip.pan = pan;
+        let track = self.track_mut(id)?;
+        track.pan.set_target(pan, track.smoothing_frames);
         Ok(())
     }
 
     pub fn set_mute(&mut self, id: TrackId, muted: bool) -> Result<(), String> {
-        self.track_mut(id)?.strip.muted = muted;
+        self.track_mut(id)?.muted = muted;
         Ok(())
     }
 
