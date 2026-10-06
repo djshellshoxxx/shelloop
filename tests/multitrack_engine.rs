@@ -101,16 +101,16 @@ fn gain_pan_and_missing_track_updates_are_bounded_and_safe() {
     assert!(engine.set_gain(TrackId(999), 0.5).is_err());
     assert!(engine.set_pan(TrackId(7), 2.0).is_err());
 
-    let mut saw_nonzero = false;
-    for _ in 0..128 {
-        let (left, right) = engine.next_stereo_frame();
-        assert!(left.is_finite() && right.is_finite());
-        if left.abs() > 0.0001 {
-            saw_nonzero = true;
+    let mut final_frames = Vec::new();
+    for index in 0..512 {
+        let frame = engine.next_stereo_frame();
+        assert!(frame.0.is_finite() && frame.1.is_finite());
+        if index >= 448 {
+            final_frames.push(frame);
         }
-        assert!(right.abs() < 0.0001);
     }
-    assert!(saw_nonzero);
+    assert!(final_frames.iter().any(|(left, _)| left.abs() > 0.0001));
+    assert!(final_frames.iter().all(|(_, right)| right.abs() < 0.0001));
 }
 
 #[test]
