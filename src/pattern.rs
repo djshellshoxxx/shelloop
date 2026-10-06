@@ -212,10 +212,12 @@ impl PatternScheduler {
             return;
         }
         self.schedule_steps_into(
-            pattern.seed,
-            pattern.swing,
-            pattern.channel,
-            &pattern.steps,
+            PatternScheduleView {
+                seed: pattern.seed,
+                swing: pattern.swing,
+                channel: pattern.channel,
+                steps: &pattern.steps,
+            },
             block_start_frame,
             block_frames,
             events,
@@ -234,10 +236,12 @@ impl PatternScheduler {
             return;
         }
         self.schedule_steps_into(
-            pattern.seed,
-            pattern.swing,
-            pattern.channel,
-            pattern.steps(),
+            PatternScheduleView {
+                seed: pattern.seed,
+                swing: pattern.swing,
+                channel: pattern.channel,
+                steps: pattern.steps(),
+            },
             block_start_frame,
             block_frames,
             events,
@@ -246,16 +250,13 @@ impl PatternScheduler {
 
     fn schedule_steps_into(
         &self,
-        seed: u64,
-        swing: f32,
-        channel: u8,
-        steps: &[Option<PatternStep>],
+        pattern: PatternScheduleView<'_>,
         block_start_frame: u64,
         block_frames: u32,
         events: &mut Vec<PatternEvent>,
     ) {
         let frames_per_step = self.frames_per_step();
-        let loop_frames = frames_per_step * steps.len() as f64;
+        let loop_frames = frames_per_step * pattern.steps.len() as f64;
         let block_end = block_start_frame.saturating_add(block_frames as u64);
         let estimated_first = (block_start_frame as f64 / loop_frames).floor() as i64 - 1;
         let estimated_last = (block_end as f64 / loop_frames).floor() as i64 + 1;
@@ -263,18 +264,18 @@ impl PatternScheduler {
         let last_loop = estimated_last.max(0) as u64;
 
         'loops: for loop_index in first_loop..=last_loop {
-            for (step_index, maybe_step) in steps.iter().enumerate() {
+            for (step_index, maybe_step) in pattern.steps.iter().enumerate() {
                 let Some(step) = maybe_step else { continue };
-                if !self.step_triggers(seed, loop_index, step_index, step.probability) {
+                if !self.step_triggers(pattern.seed, loop_index, step_index, step.probability) {
                     continue;
                 }
 
                 let global_step = loop_index
-                    .saturating_mul(steps.len() as u64)
+                    .saturating_mul(pattern.steps.len() as u64)
                     .saturating_add(step_index as u64);
                 let base_frame = (global_step as f64 * frames_per_step).round() as i128;
                 let swing_frames = if step_index % 2 == 1 {
-                    (frames_per_step * swing as f64).round() as i128
+                    (frames_per_step * pattern.swing as f64).round() as i128
                 } else {
                     0
                 };
@@ -299,7 +300,7 @@ impl PatternScheduler {
                     events.push(PatternEvent {
                         absolute_frame,
                         frame_offset: (absolute_frame - block_start_frame) as u32,
-                        channel,
+                        channel: pattern.channel,
                         note: step.note,
                         velocity: step.velocity,
                         duration_frames,
@@ -341,6 +342,14 @@ impl PatternScheduler {
         let unit = (random >> 11) as f64 * (1.0 / ((1u64 << 53) as f64));
         unit < probability as f64
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PatternScheduleView<'a> {
+    seed: u64,
+    swing: f32,
+    channel: u8,
+    steps: &'a [Option<PatternStep>],
 }
 
 fn splitmix64(mut value: u64) -> u64 {
