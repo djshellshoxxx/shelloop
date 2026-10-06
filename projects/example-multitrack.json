@@ -1,0 +1,103 @@
+{
+  "schema_version": 2,
+  "revision": 1,
+  "seed": 424242,
+  "bpm": 128.0,
+  "steps_per_beat": 4,
+  "tracks": [
+    {
+      "id": 1,
+      "name": "Bass",
+      "kind": "synth",
+      "gain": 0.75,
+      "pan": 0.0,
+      "muted": false,
+      "soloed": false,
+      "pattern": {
+        "name": "15 Step Bass",
+        "seed": 101,
+        "swing": 0.04,
+        "channel": 0,
+        "steps": [
+          {"note": 36, "velocity": 0.90, "gate": 0.65, "probability": 1.0, "ratchets": 1, "microtiming_frames": 0},
+          null,
+          null,
+          {"note": 36, "velocity": 0.65, "gate": 0.45, "probability": 0.8, "ratchets": 1, "microtiming_frames": 0},
+          null,
+          {"note": 43, "velocity": 0.80, "gate": 0.55, "probability": 1.0, "ratchets": 1, "microtiming_frames": 0},
+          null,
+          null,
+          {"note": 39, "velocity": 0.82, "gate": 0.55, "probability": 1.0, "ratchets": 1, "microtiming_frames": -80},
+          null,
+          {"note": 36, "velocity": 0.72, "gate": 0.40, "probability": 0.75, "ratchets": 2, "microtiming_frames": 0},
+          null,
+          null,
+          {"note": 43, "velocity": 0.75, "gate": 0.50, "probability": 1.0, "ratchets": 1, "microtiming_frames": 80},
+          null
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "name": "Pulse Left",
+      "kind": "synth",
+      "gain": 0.45,
+      "pan": -0.55,
+      "muted": false,
+      "soloed": false,
+      "pattern": {
+        "name": "16 Step Pulse",
+        "seed": 202,
+        "swing": 0.0,
+        "channel": 1,
+        "steps": [
+          {"note": 60, "velocity": 0.55, "gate": 0.18, "probability": 1.0, "ratchets": 1, "microtiming_frames": 0},
+          null,
+          null,
+          null,
+          {"note": 67, "velocity": 0.48, "gate": 0.18, "probability": 0.85, "ratchets": 1, "microtiming_frames": 0},
+          null,
+          null,
+          null,
+          {"note": 63, "velocity": 0.52, "gate": 0.18, "probability": 1.0, "ratchets": 1, "microtiming_frames": 0},
+          null,
+          null,
+          null,
+          {"note": 70, "velocity": 0.45, "gate": 0.18, "probability": 0.7, "ratchets": 1, "microtiming_frames": 0},
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "name": "Pulse Right",
+      "kind": "synth",
+      "gain": 0.38,
+      "pan": 0.55,
+      "muted": false,
+      "soloed": false,
+      "pattern": {
+        "name": "12 Step Counter",
+        "seed": 303,
+        "swing": 0.02,
+        "channel": 2,
+        "steps": [
+          null,
+          null,
+          {"note": 72, "velocity": 0.42, "gate": 0.2, "probability": 0.9, "ratchets": 1, "microtiming_frames": 0},
+          null,
+          null,
+          {"note": 75, "velocity": 0.40, "gate": 0.2, "probability": 0.75, "ratchets": 1, "microtiming_frames": 0},
+          null,
+          null,
+          {"note": 79, "velocity": 0.38, "gate": 0.2, "probability": 0.85, "ratchets": 1, "microtiming_frames": 0},
+          null,
+          null,
+          {"note": 75, "velocity": 0.36, "gate": 0.2, "probability": 0.7, "ratchets": 1, "microtiming_frames": 0}
+        ]
+      }
+    }
+  ]
+}
