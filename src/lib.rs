@@ -38,7 +38,7 @@ pub use midi_io::{connect_midi_input, list_midi_input_names, MidiInputHandle};
 pub use midi_io::{
     reconnect_decision, select_midi_port_index, MidiPortSelector, ReconnectDecision,
 };
-pub use mixer::{protect_master, ChannelStrip};
+pub use mixer::{protect_master, ChannelStrip, SmoothedParam};
 pub use multitrack::{
     EngineProjectSnapshot, MultiTrackEngine, MultiTrackProject, TrackCommand, TrackDefinition,
     TrackId, TrackKind, MULTITRACK_PROJECT_SCHEMA_VERSION, MAX_REALTIME_TRACKS,
