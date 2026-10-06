@@ -1,5 +1,6 @@
 use shelloop::{
     create_sample_renderer, sanitize_sample, select_named_device_index, write_mono_interleaved,
+    write_stereo_interleaved,
 };
 
 #[test]
@@ -52,4 +53,40 @@ fn renderer_factory_receives_the_device_sample_rate() {
 
     assert_eq!(renderer(), 48_000.0);
     assert!(create_sample_renderer(0, |_| Ok::<_, String>(|| 0.0)).is_err());
+}
+
+#[test]
+fn stereo_samples_preserve_left_and_right_on_two_channel_output() {
+    let mut output = [0.0_f32; 4];
+    let written = write_stereo_interleaved(
+        &mut output,
+        2,
+        &[(0.25, -0.5), (0.75, -0.25)],
+    )
+    .unwrap();
+
+    assert_eq!(written, 2);
+    assert_eq!(output, [0.25, -0.5, 0.75, -0.25]);
+}
+
+#[test]
+fn stereo_writer_downmixes_for_mono_and_silences_extra_channels() {
+    let mut mono = [0.0_f32; 2];
+    write_stereo_interleaved(&mut mono, 1, &[(1.0, 0.0), (-1.0, 1.0)]).unwrap();
+    assert_eq!(mono, [0.5, 0.0]);
+
+    let mut surround = [99.0_f32; 4];
+    write_stereo_interleaved(&mut surround, 4, &[(0.25, -0.5)]).unwrap();
+    assert_eq!(surround, [0.25, -0.5, 0.0, 0.0]);
+}
+
+#[test]
+fn stereo_writer_sanitizes_each_channel_and_rejects_short_buffers() {
+    let mut output = [0.0_f32; 2];
+    write_stereo_interleaved(&mut output, 2, &[(f32::NAN, 2.0)]).unwrap();
+    assert_eq!(output, [0.0, 1.0]);
+
+    let mut short = [0.0_f32; 3];
+    assert!(write_stereo_interleaved(&mut short, 2, &[(0.0, 0.0), (0.0, 0.0)]).is_err());
+    assert!(write_stereo_interleaved(&mut [], 0, &[(0.0, 0.0)]).is_err());
 }
