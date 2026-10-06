@@ -1,4 +1,4 @@
-use crate::{Pattern, PatternStep, QuantizeBoundary, QuantizedChange};
+use crate::{CompiledPattern, Pattern, PatternStep, QuantizeBoundary, QuantizedChange};
 use std::collections::VecDeque;
 
 const MAX_EDITOR_PATTERN_STEPS: usize = 256;
@@ -7,6 +7,24 @@ const MAX_EDITOR_PATTERN_STEPS: usize = 256;
 pub struct PatternRevision {
     pub revision: u64,
     pub pattern: Pattern,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompiledPatternRevision {
+    pub revision: u64,
+    pub pattern: CompiledPattern,
+}
+
+pub fn compile_pattern_revision(
+    change: &QuantizedChange<PatternRevision>,
+) -> Result<QuantizedChange<CompiledPatternRevision>, String> {
+    Ok(QuantizedChange {
+        apply_at_frame: change.apply_at_frame,
+        value: CompiledPatternRevision {
+            revision: change.value.revision,
+            pattern: CompiledPattern::from_pattern(&change.value.pattern)?,
+        },
+    })
 }
 
 #[derive(Debug, Clone)]
