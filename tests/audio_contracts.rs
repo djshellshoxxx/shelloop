@@ -58,12 +58,7 @@ fn renderer_factory_receives_the_device_sample_rate() {
 #[test]
 fn stereo_samples_preserve_left_and_right_on_two_channel_output() {
     let mut output = [0.0_f32; 4];
-    let written = write_stereo_interleaved(
-        &mut output,
-        2,
-        &[(0.25, -0.5), (0.75, -0.25)],
-    )
-    .unwrap();
+    let written = write_stereo_interleaved(&mut output, 2, &[(0.25, -0.5), (0.75, -0.25)]).unwrap();
 
     assert_eq!(written, 2);
     assert_eq!(output, [0.25, -0.5, 0.75, -0.25]);
