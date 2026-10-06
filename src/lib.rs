@@ -1,8 +1,8 @@
 pub mod app;
 pub mod audio;
 pub mod command;
-pub mod engine;
 pub mod editor;
+pub mod engine;
 pub mod keyboard;
 pub mod midi;
 pub mod midi_io;
@@ -43,7 +43,7 @@ pub use midi_io::{
 pub use mixer::{protect_master, ChannelStrip, SmoothedParam};
 pub use multitrack::{
     EngineProjectSnapshot, MultiTrackEngine, MultiTrackProject, TrackCommand, TrackDefinition,
-    TrackId, TrackKind, MULTITRACK_PROJECT_SCHEMA_VERSION, MAX_REALTIME_TRACKS,
+    TrackId, TrackKind, MAX_REALTIME_TRACKS, MULTITRACK_PROJECT_SCHEMA_VERSION,
 };
 pub use pattern::{parse_pattern_json, Pattern, PatternEvent, PatternScheduler, PatternStep};
 pub use pc_speaker::{pc_speaker_backend, pc_speaker_test, PcSpeakerBackend};
