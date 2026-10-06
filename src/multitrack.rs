@@ -1,6 +1,6 @@
 use crate::{
     ChannelStrip, CompiledPatternRevision, EngineCommand, LiveSequencer, Oscillator, Pattern,
-    QuantizedChange, RealtimeSynth, SmoothedParam,
+    QuantizedChange, RealtimeSynth, SmoothedParam, SynthPatch,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -148,6 +148,8 @@ pub struct TrackDefinition {
     pub muted: bool,
     pub soloed: bool,
     pub pattern: Pattern,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synth_patch: Option<SynthPatch>,
 }
 
 impl TrackDefinition {
@@ -160,6 +162,14 @@ impl TrackDefinition {
         }
         if !self.pan.is_finite() || !(-1.0..=1.0).contains(&self.pan) {
             return Err("track pan must be finite and between -1.0 and 1.0".into());
+        }
+        if let Some(patch) = self.synth_patch {
+            if self.kind != TrackKind::Synth {
+                return Err("synth patches are only supported on synth tracks".into());
+            }
+            // File validation uses the absolute supported cutoff ceiling.
+            // Engine construction validates again at the actual device rate.
+            patch.validate(48_000.0)?;
         }
         self.pattern.validate()
     }
@@ -203,7 +213,10 @@ impl RealtimeTrack {
             project_seed,
             definition.pattern,
         )?;
-        let synth = RealtimeSynth::new(sample_rate as f32, Oscillator::Saw, polyphony)?;
+        let patch = definition
+            .synth_patch
+            .unwrap_or_else(|| SynthPatch::legacy(Oscillator::Saw));
+        let synth = RealtimeSynth::new_with_patch(sample_rate as f32, patch, polyphony)?;
         let smoothing_frames = (sample_rate / 200).max(1);
 
         Ok(Self {

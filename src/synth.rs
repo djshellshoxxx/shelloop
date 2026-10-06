@@ -1,9 +1,11 @@
 use crate::{
     clamp_cutoff, AdsrEnvelope, AdsrParams, FilterMode, FilterParams, StateVariableFilter,
 };
+use serde::{Deserialize, Serialize};
 use std::f32::consts::TAU;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Oscillator {
     Sine,
     Triangle,
@@ -34,7 +36,8 @@ pub enum SynthParamId {
     OutputGain,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SynthPatch {
     pub oscillator: Oscillator,
     pub octave: i8,

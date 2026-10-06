@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::f32::consts::PI;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FilterMode {
     Bypass,
     LowPass,
@@ -8,7 +10,8 @@ pub enum FilterMode {
     BandPass,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FilterParams {
     pub mode: FilterMode,
     pub cutoff_hz: f32,

@@ -116,3 +116,24 @@ Add DSP property tests where practical: finite input plus valid parameters must 
 ## Completion criteria
 
 Every synth track can load an independent patch, all parameters are addressable by stable IDs, patches can be changed without restarting audio, and CI proves stable finite behavior across supported sample rates. Hardware QA checks clicks, resonance behavior, long releases and CPU use at maximum polyphony.
+
+## Implementation status (2026-10-06)
+
+Implemented: deterministic ADSR and release tails, oscillator/tuning/pulse width,
+state-variable filter and envelope modulation, stable parameter ID declarations,
+and schema-v2 per-track patch persistence and startup wiring. Legacy projects
+without patches retain the original saw sound. Patch objects reject unknown
+fields and validate ranges; engine construction revalidates at the device rate.
+`projects/example-synth-patches.json` demonstrates three independent patches.
+
+Pending: live patch replacement, parameter-ID dispatch and smoothing of changing
+synth parameters, preset directory management, and physical audio/CPU QA. Spec 03
+is not complete until those live-control requirements and hardware gates pass.
+
+Continuation validation: Linux stable Rust passed `cargo fmt --all -- --check`,
+`cargo test --all-targets` (131 tests), `cargo test --all-targets --all-features`
+(130 tests), strict Clippy for both configurations, and `cargo build --release
+--all-features`. New regressions cover legacy sound equivalence, independent
+track patches, JSON round trips, invalid-field/range rejection, actual-rate
+cutoff validation, and finite bounded example rendering at 32/44.1/48/96 kHz.
+Windows validation is delegated to the existing CI job; hardware QA remains open.

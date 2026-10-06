@@ -659,3 +659,24 @@ Windows and Linux remain the primary targets; macOS can be evaluated separately.
 ## Status
 
 Automated CI validates deterministic logic, runtime feature builds and optimized binaries. Physical playback, MIDI hardware, latency and sound-quality validation cannot be claimed from CI and remain required before the beta tag is published.
+
+### Independent synth patches
+
+Schema-v2 projects can embed a `synth_patch` on each synth track. Omit the field
+(or use `null`) to keep the original saw sound. Patches store oscillator, tuning,
+pulse width, amplitude ADSR, filter mode/cutoff/resonance/key tracking, filter
+ADSR/amount and output gain. Time values are seconds; filter envelope amount is
+in octaves. Oscillators are `sine`, `triangle`, `saw` and `pulse`; filter modes are
+`bypass`, `low_pass`, `high_pass` and `band_pass`.
+
+Try the three independent bass/pulse/triangle patches:
+
+```sh
+cargo run --release --features realtime-audio,midi,terminal-ui -- --project projects/example-synth-patches.json
+```
+
+Patch fields are complete objects: missing, misspelled or unknown patch fields
+are rejected. Invalid ranges are rejected before saving/loading. Startup also
+checks cutoff against the selected output sample rate: a 20 kHz cutoff requires
+a rate above 44.44 kHz. Patch parsing and voice construction happen before the
+audio callback. Live patch replacement and parameter controls remain pending.

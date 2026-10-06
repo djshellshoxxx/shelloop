@@ -27,6 +27,7 @@ fn synth_track(id: u16, name: &str, note: u8, steps: usize) -> TrackDefinition {
         muted: false,
         soloed: false,
         pattern: pattern(name, u64::from(id), note, steps),
+        synth_patch: None,
     }
 }
 
@@ -306,4 +307,98 @@ fn late_compiled_revision_activates_on_next_rendered_frame() {
 
     engine.next_stereo_frame();
     assert_eq!(engine.track_active_revision(TrackId(1)), Some(1));
+}
+
+#[test]
+fn legacy_projects_keep_the_same_sound_without_an_embedded_patch() {
+    let project: MultiTrackProject =
+        serde_json::from_str(include_str!("../projects/example-multitrack.json")).unwrap();
+    assert!(project
+        .tracks
+        .iter()
+        .all(|track| track.synth_patch.is_none()));
+    let original = synth_track(1, "legacy", 60, 4);
+    let mut explicit = original.clone();
+    explicit.synth_patch = Some(shelloop::SynthPatch::legacy(shelloop::Oscillator::Saw));
+    let mut a = MultiTrackEngine::new(48_000, 120.0, 4, 5, 4, vec![original]).unwrap();
+    let mut b = MultiTrackEngine::new(48_000, 120.0, 4, 5, 4, vec![explicit]).unwrap();
+    for _ in 0..512 {
+        assert_eq!(a.next_stereo_frame(), b.next_stereo_frame());
+    }
+}
+
+#[test]
+fn embedded_patch_controls_the_addressed_tracks_sound() {
+    let mut silent = synth_track(1, "silent", 60, 4);
+    let mut patch = shelloop::SynthPatch::legacy(shelloop::Oscillator::Pulse);
+    patch.output_gain = 0.0;
+    silent.synth_patch = Some(patch);
+    silent.pan = -1.0;
+    let mut audible = synth_track(2, "audible", 67, 4);
+    audible.pan = 1.0;
+    audible.synth_patch = Some(shelloop::SynthPatch::legacy(shelloop::Oscillator::Triangle));
+    let mut engine = MultiTrackEngine::new(48_000, 120.0, 4, 5, 4, vec![silent, audible]).unwrap();
+    let frames: Vec<_> = (0..512).map(|_| engine.next_stereo_frame()).collect();
+    assert!(frames.iter().all(|frame| frame.0.abs() < 0.0001));
+    assert!(frames.iter().any(|frame| frame.1.abs() > 0.001));
+}
+
+#[test]
+fn embedded_patches_round_trip_and_reject_invalid_fields() {
+    let mut project: MultiTrackProject =
+        serde_json::from_str(include_str!("../projects/example-multitrack.json")).unwrap();
+    let mut patch = shelloop::SynthPatch::legacy(shelloop::Oscillator::Pulse);
+    patch.amp_env = shelloop::AdsrParams::new(0.01, 0.2, 0.6, 0.3).unwrap();
+    patch.filter.mode = shelloop::FilterMode::LowPass;
+    patch.filter.cutoff_hz = 1200.0;
+    project.tracks[0].synth_patch = Some(patch);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("patched.json");
+    project.save_atomic(&path).unwrap();
+    assert_eq!(MultiTrackProject::load(&path).unwrap(), project);
+    let mut json = serde_json::to_value(&project).unwrap();
+    json["tracks"][0]["synth_patch"]["output_gian"] = serde_json::json!(1.0);
+    assert!(serde_json::from_value::<MultiTrackProject>(json).is_err());
+    patch.pulse_width = 2.0;
+    project.tracks[0].synth_patch = Some(patch);
+    assert!(project.validate().is_err());
+    assert!(project.save_atomic(&path).is_err());
+    assert!(MultiTrackProject::load(&path).unwrap().validate().is_ok());
+}
+
+#[test]
+fn patch_cutoff_is_validated_against_the_actual_output_rate() {
+    let mut track = synth_track(1, "cutoff", 60, 4);
+    let mut patch = shelloop::SynthPatch::legacy(shelloop::Oscillator::Sine);
+    patch.filter.cutoff_hz = 20_000.0;
+    track.synth_patch = Some(patch);
+    assert!(track.validate().is_ok());
+    assert!(MultiTrackEngine::new(32_000, 120.0, 4, 5, 4, vec![track.clone()]).is_err());
+    assert!(MultiTrackEngine::new(48_000, 120.0, 4, 5, 4, vec![track]).is_ok());
+}
+
+#[test]
+fn example_synth_patches_load_and_render_at_common_device_rates() {
+    let project: MultiTrackProject =
+        serde_json::from_str(include_str!("../projects/example-synth-patches.json")).unwrap();
+    project.validate().unwrap();
+    for rate in [32_000, 44_100, 48_000, 96_000] {
+        let mut engine = MultiTrackEngine::from_snapshot(
+            rate,
+            project.bpm,
+            u32::from(project.steps_per_beat),
+            project.seed,
+            8,
+            project.to_snapshot().unwrap(),
+        )
+        .unwrap();
+        let mut energy = 0.0;
+        for _ in 0..rate {
+            let (left, right) = engine.next_stereo_frame();
+            assert!(left.is_finite() && right.is_finite());
+            assert!(left.abs() <= 1.0 && right.abs() <= 1.0);
+            energy += left.abs() + right.abs();
+        }
+        assert!(energy > 1.0);
+    }
 }
