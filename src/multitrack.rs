@@ -351,6 +351,13 @@ impl MultiTrackEngine {
         self.tracks.iter().map(|track| track.id).collect()
     }
 
+    pub fn position_frame(&self) -> u64 {
+        self.tracks
+            .first()
+            .map(|track| track.sequencer.position_frame())
+            .unwrap_or(0)
+    }
+
     pub fn track_position(&self, id: TrackId) -> Option<u64> {
         self.track(id).map(|track| track.sequencer.position_frame())
     }
@@ -371,9 +378,6 @@ impl MultiTrackEngine {
         change: QuantizedChange<CompiledPatternRevision>,
     ) -> Result<(), String> {
         let track = self.track_mut(id)?;
-        if change.apply_at_frame < track.sequencer.position_frame() {
-            return Err("pattern revision activation frame is already in the past".into());
-        }
         if change.value.revision <= track.active_revision {
             return Err("pattern revision must be newer than the active revision".into());
         }
