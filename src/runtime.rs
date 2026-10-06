@@ -39,9 +39,9 @@ mod live {
     use crate::{
         list_output_device_names, map_performance_key, open_stereo_output_stream,
         parse_pattern_json, pc_speaker_backend, protect_master, shift_octave,
-        spawn_realtime_recording, EngineCommand, LiveSequencer, MultiTrackEngine, MultiTrackProject,
-        Oscillator, PerformanceKey, PerformanceMix, RealtimeSynth, StartupOptions,
-        WavRecordingConfig, XyPoint,
+        spawn_realtime_recording, EngineCommand, LiveSequencer, MultiTrackEngine,
+        MultiTrackProject, Oscillator, PerformanceKey, PerformanceMix, RealtimeSynth,
+        StartupOptions, WavRecordingConfig, XyPoint,
     };
     use crossbeam_channel::{bounded, Sender};
     use crossterm::event::{
@@ -225,13 +225,13 @@ mod live {
         };
         let pattern_name = pattern.as_ref().map(|pattern| pattern.name.clone());
 
-        let project = match options.project_path.as_deref() {
-            Some(path) => Some(
-                MultiTrackProject::load(path)
-                    .map_err(|error| format!("failed to load multitrack project {path:?}: {error}"))?,
-            ),
-            None => None,
-        };
+        let project =
+            match options.project_path.as_deref() {
+                Some(path) => Some(MultiTrackProject::load(path).map_err(|error| {
+                    format!("failed to load multitrack project {path:?}: {error}")
+                })?),
+                None => None,
+            };
         let project_track_count = project.as_ref().map(|project| project.tracks.len());
         let has_sequencer = pattern.is_some() || project.is_some();
 
@@ -244,119 +244,123 @@ mod live {
         let record_path = options.record_path.clone();
         let (recording_finalizer_sender, recording_finalizer_receiver) =
             std::sync::mpsc::sync_channel(1);
-        let audio = open_stereo_output_stream(options.audio_device.as_deref(), move |sample_rate| {
-            let mut recorder = match record_path.as_deref() {
-                Some(path) => {
-                    let config = WavRecordingConfig::new(sample_rate, 1, RECORDING_QUEUE_CAPACITY)?;
-                    let (producer, finalizer) =
-                        spawn_realtime_recording(path, config, RECORDING_BLOCK_FRAMES)?;
-                    recording_finalizer_sender
-                        .send(Some(finalizer))
-                        .map_err(|_| "failed to publish recording finalizer".to_string())?;
-                    Some(producer)
-                }
-                None => {
-                    recording_finalizer_sender
-                        .send(None)
-                        .map_err(|_| "failed to publish recording state".to_string())?;
-                    None
-                }
-            };
-            let mut performance_synth =
-                RealtimeSynth::new(sample_rate as f32, Oscillator::Saw, polyphony)?;
-            let mut multitrack = match project {
-                Some(project) => Some(MultiTrackEngine::new(
-                    sample_rate,
-                    project.bpm,
-                    u32::from(project.steps_per_beat),
-                    project.seed,
-                    polyphony,
-                    project.tracks,
-                )?),
-                None => None,
-            };
-            let mut sequenced = match pattern {
-                Some(pattern) => Some((
-                    LiveSequencer::new(
-                        sample_rate,
-                        f64::from(bpm),
-                        u32::from(steps_per_beat),
-                        pattern.seed,
-                        pattern,
-                    )?,
-                    RealtimeSynth::new(sample_rate as f32, Oscillator::Saw, polyphony)?,
-                )),
-                None => None,
-            };
-            let mut sequencer_commands = Vec::with_capacity(LiveSequencer::MAX_COMMANDS_PER_FRAME);
-            let mut performance_mix = PerformanceMix::UNITY;
-
-            Ok(move || {
-                while let Ok(next_mix) = performance_receiver.try_recv() {
-                    performance_mix = next_mix;
-                }
-                for _ in 0..COMMANDS_PER_SAMPLE_LIMIT {
-                    let Ok(command) = command_receiver.try_recv() else {
-                        break;
-                    };
-                    performance_synth.handle(command);
-                }
-
-                for _ in 0..SEQUENCER_CONTROLS_PER_SAMPLE_LIMIT {
-                    let Ok(control) = sequencer_receiver.try_recv() else {
-                        break;
-                    };
-                    if let Some(engine) = multitrack.as_mut() {
-                        match control {
-                            SequencerControl::TogglePlay => {
-                                engine.toggle_playing_all();
-                            }
-                            SequencerControl::Restart => engine.restart_all(),
-                            SequencerControl::Panic => engine.panic_all(),
-                        }
-                    } else if let Some((sequencer, synth)) = sequenced.as_mut() {
-                        match control {
-                            SequencerControl::TogglePlay => {
-                                if sequencer.is_playing() {
-                                    synth.handle(EngineCommand::Panic);
-                                }
-                                sequencer.toggle_playing();
-                            }
-                            SequencerControl::Restart => {
-                                synth.handle(EngineCommand::Panic);
-                                sequencer.restart();
-                            }
-                            SequencerControl::Panic => synth.handle(EngineCommand::Panic),
-                        }
+        let audio =
+            open_stereo_output_stream(options.audio_device.as_deref(), move |sample_rate| {
+                let mut recorder = match record_path.as_deref() {
+                    Some(path) => {
+                        let config =
+                            WavRecordingConfig::new(sample_rate, 1, RECORDING_QUEUE_CAPACITY)?;
+                        let (producer, finalizer) =
+                            spawn_realtime_recording(path, config, RECORDING_BLOCK_FRAMES)?;
+                        recording_finalizer_sender
+                            .send(Some(finalizer))
+                            .map_err(|_| "failed to publish recording finalizer".to_string())?;
+                        Some(producer)
                     }
-                }
-
-                let (sequencer_left, sequencer_right) = if let Some(engine) = multitrack.as_mut() {
-                    engine.next_stereo_frame()
-                } else if let Some((sequencer, synth)) = sequenced.as_mut() {
-                    sequencer.fill_commands(&mut sequencer_commands);
-                    for command in sequencer_commands.drain(..) {
-                        synth.handle(command);
+                    None => {
+                        recording_finalizer_sender
+                            .send(None)
+                            .map_err(|_| "failed to publish recording state".to_string())?;
+                        None
                     }
-                    let sample = synth.next_sample();
-                    (sample, sample)
-                } else {
-                    (0.0, 0.0)
                 };
+                let mut performance_synth =
+                    RealtimeSynth::new(sample_rate as f32, Oscillator::Saw, polyphony)?;
+                let mut multitrack = match project {
+                    Some(project) => Some(MultiTrackEngine::new(
+                        sample_rate,
+                        project.bpm,
+                        u32::from(project.steps_per_beat),
+                        project.seed,
+                        polyphony,
+                        project.tracks,
+                    )?),
+                    None => None,
+                };
+                let mut sequenced = match pattern {
+                    Some(pattern) => Some((
+                        LiveSequencer::new(
+                            sample_rate,
+                            f64::from(bpm),
+                            u32::from(steps_per_beat),
+                            pattern.seed,
+                            pattern,
+                        )?,
+                        RealtimeSynth::new(sample_rate as f32, Oscillator::Saw, polyphony)?,
+                    )),
+                    None => None,
+                };
+                let mut sequencer_commands =
+                    Vec::with_capacity(LiveSequencer::MAX_COMMANDS_PER_FRAME);
+                let mut performance_mix = PerformanceMix::UNITY;
 
-                let live_sample = performance_synth.next_sample() * performance_mix.live_gain;
-                let left = protect_master(
-                    live_sample + sequencer_left * performance_mix.sequencer_gain,
-                );
-                let right = protect_master(
-                    live_sample + sequencer_right * performance_mix.sequencer_gain,
-                );
-                if let Some(recorder) = recorder.as_mut() {
-                    let _ = recorder.push_sample(protect_master((left + right) * 0.5));
-                }
-                (left, right)
-            })
-        })?;
+                Ok(move || {
+                    while let Ok(next_mix) = performance_receiver.try_recv() {
+                        performance_mix = next_mix;
+                    }
+                    for _ in 0..COMMANDS_PER_SAMPLE_LIMIT {
+                        let Ok(command) = command_receiver.try_recv() else {
+                            break;
+                        };
+                        performance_synth.handle(command);
+                    }
+
+                    for _ in 0..SEQUENCER_CONTROLS_PER_SAMPLE_LIMIT {
+                        let Ok(control) = sequencer_receiver.try_recv() else {
+                            break;
+                        };
+                        if let Some(engine) = multitrack.as_mut() {
+                            match control {
+                                SequencerControl::TogglePlay => {
+                                    engine.toggle_playing_all();
+                                }
+                                SequencerControl::Restart => engine.restart_all(),
+                                SequencerControl::Panic => engine.panic_all(),
+                            }
+                        } else if let Some((sequencer, synth)) = sequenced.as_mut() {
+                            match control {
+                                SequencerControl::TogglePlay => {
+                                    if sequencer.is_playing() {
+                                        synth.handle(EngineCommand::Panic);
+                                    }
+                                    sequencer.toggle_playing();
+                                }
+                                SequencerControl::Restart => {
+                                    synth.handle(EngineCommand::Panic);
+                                    sequencer.restart();
+                                }
+                                SequencerControl::Panic => synth.handle(EngineCommand::Panic),
+                            }
+                        }
+                    }
+
+                    let (sequencer_left, sequencer_right) =
+                        if let Some(engine) = multitrack.as_mut() {
+                            engine.next_stereo_frame()
+                        } else if let Some((sequencer, synth)) = sequenced.as_mut() {
+                            sequencer.fill_commands(&mut sequencer_commands);
+                            for command in sequencer_commands.drain(..) {
+                                synth.handle(command);
+                            }
+                            let sample = synth.next_sample();
+                            (sample, sample)
+                        } else {
+                            (0.0, 0.0)
+                        };
+
+                    let live_sample = performance_synth.next_sample() * performance_mix.live_gain;
+                    let left = protect_master(
+                        live_sample + sequencer_left * performance_mix.sequencer_gain,
+                    );
+                    let right = protect_master(
+                        live_sample + sequencer_right * performance_mix.sequencer_gain,
+                    );
+                    if let Some(recorder) = recorder.as_mut() {
+                        let _ = recorder.push_sample(protect_master((left + right) * 0.5));
+                    }
+                    (left, right)
+                })
+            })?;
         let recording_finalizer = recording_finalizer_receiver
             .recv()
             .map_err(|_| "audio renderer did not publish recording state".to_string())?;
