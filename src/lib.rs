@@ -23,9 +23,12 @@ pub mod voice;
 pub use app::{parse_startup_options, StartupOptions};
 pub use audio::{
     create_sample_renderer, sanitize_sample, select_named_device_index, write_mono_interleaved,
+    write_stereo_interleaved,
 };
 #[cfg(feature = "realtime-audio")]
-pub use audio::{list_output_device_names, open_output_stream, AudioOutput};
+pub use audio::{
+    list_output_device_names, open_output_stream, open_stereo_output_stream, AudioOutput,
+};
 pub use command::{parse_command, Command};
 pub use engine::{midi_note_hz, EngineCommand, RealtimeSynth};
 pub use keyboard::{map_performance_key, shift_octave, PerformanceKey};
