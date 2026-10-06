@@ -1,6 +1,4 @@
-use crate::{
-    protect_master, Oscillator, SynthPatch, SynthVoice, VoiceAllocator, VoiceId,
-};
+use crate::{Oscillator, SynthPatch, SynthVoice, VoiceAllocator, VoiceId, protect_master};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EngineCommand {
