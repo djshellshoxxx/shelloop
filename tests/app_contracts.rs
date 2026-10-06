@@ -116,3 +116,17 @@ fn startup_options_reject_invalid_pc_speaker_probe_values() {
     assert!(parse_startup_options(["--pc-speaker-test", "--pc-speaker-duration", "0"]).is_err());
     assert!(parse_startup_options(["--pc-speaker-test", "--pc-speaker-duration", "5001"]).is_err());
 }
+
+#[test]
+fn startup_options_support_multitrack_project_and_reject_pattern_conflict() {
+    let options = parse_startup_options(["--project", "sets/live.json"]).unwrap();
+    assert_eq!(options.project_path.as_deref(), Some("sets/live.json"));
+
+    assert!(parse_startup_options([
+        "--project",
+        "sets/live.json",
+        "--pattern",
+        "patterns/bass.json",
+    ])
+    .is_err());
+}
