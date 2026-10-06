@@ -9,6 +9,7 @@ Options:\n\
   --midi-index <INDEX>   Select a MIDI input port by zero-based index\n\
   --polyphony <VOICES>   Set synth polyphony from 1 to 256 (default: 16)\n\
   --pattern <FILE>       Load a validated JSON pattern for live playback\n\
+  --project <FILE>       Load a validated multi-track project\n\
   --record <FILE>        Record the mono master output to a 32-bit float WAV\n\
   --pc-speaker-test      Play a short experimental PC-speaker probe tone and exit\n\
   --pc-speaker-frequency <HZ>  Probe frequency, 37-32767 Hz (default: 440)\n\
