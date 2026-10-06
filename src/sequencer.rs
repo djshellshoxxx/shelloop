@@ -1,4 +1,4 @@
-use crate::{EngineCommand, Pattern, PatternEvent, PatternScheduler};
+use crate::{CompiledPattern, EngineCommand, Pattern, PatternEvent, PatternScheduler};
 
 const EVENT_BUFFER_CAPACITY: usize = 4096;
 const PENDING_NOTE_OFF_CAPACITY: usize = 8192;
@@ -14,7 +14,7 @@ struct PendingNoteOff {
 #[derive(Debug, Clone)]
 pub struct LiveSequencer {
     scheduler: PatternScheduler,
-    pattern: Pattern,
+    pattern: CompiledPattern,
     position_frame: u64,
     playing: bool,
     cache_start: u64,
@@ -34,7 +34,7 @@ impl LiveSequencer {
         project_seed: u64,
         pattern: Pattern,
     ) -> Result<Self, String> {
-        pattern.validate()?;
+        let pattern = CompiledPattern::from_pattern(&pattern)?;
         Ok(Self {
             scheduler: PatternScheduler::new(sample_rate, bpm, steps_per_beat, project_seed)?,
             pattern,
@@ -71,11 +71,12 @@ impl LiveSequencer {
     pub fn restart(&mut self) {
         self.position_frame = 0;
         self.playing = true;
-        self.cache_start = 0;
-        self.cache_end = 0;
-        self.event_buffer.clear();
-        self.event_index = 0;
-        self.pending_note_offs.clear();
+        self.invalidate_cache();
+    }
+
+    pub fn replace_compiled_pattern(&mut self, pattern: CompiledPattern) {
+        self.pattern = pattern;
+        self.invalidate_cache();
     }
 
     pub fn fill_commands(&mut self, output: &mut Vec<EngineCommand>) {
@@ -90,6 +91,14 @@ impl LiveSequencer {
         self.position_frame = self.position_frame.saturating_add(1);
     }
 
+    fn invalidate_cache(&mut self) {
+        self.cache_start = 0;
+        self.cache_end = 0;
+        self.event_buffer.clear();
+        self.event_index = 0;
+        self.pending_note_offs.clear();
+    }
+
     fn ensure_cache(&mut self) {
         if self.position_frame >= self.cache_start && self.position_frame < self.cache_end {
             return;
@@ -98,7 +107,7 @@ impl LiveSequencer {
         self.cache_start =
             (self.position_frame / u64::from(CACHE_FRAMES)) * u64::from(CACHE_FRAMES);
         self.cache_end = self.cache_start.saturating_add(u64::from(CACHE_FRAMES));
-        self.scheduler.schedule_block_into(
+        self.scheduler.schedule_compiled_block_into(
             &self.pattern,
             self.cache_start,
             CACHE_FRAMES,
