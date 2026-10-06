@@ -6,6 +6,7 @@ pub mod keyboard;
 pub mod midi;
 pub mod midi_io;
 pub mod mixer;
+pub mod multitrack;
 pub mod pattern;
 pub mod pc_speaker;
 pub mod performance;
@@ -35,6 +36,7 @@ pub use midi_io::{
     reconnect_decision, select_midi_port_index, MidiPortSelector, ReconnectDecision,
 };
 pub use mixer::{protect_master, ChannelStrip};
+pub use multitrack::{MultiTrackEngine, TrackDefinition, TrackId, TrackKind, MAX_REALTIME_TRACKS};
 pub use pattern::{parse_pattern_json, Pattern, PatternEvent, PatternScheduler, PatternStep};
 pub use pc_speaker::{pc_speaker_backend, pc_speaker_test, PcSpeakerBackend};
 pub use performance::{AxisCurve, AxisMapping, PerformanceMix, XyPoint};
