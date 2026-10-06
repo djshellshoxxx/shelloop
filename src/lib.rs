@@ -40,8 +40,8 @@ pub use midi_io::{
 };
 pub use mixer::{protect_master, ChannelStrip};
 pub use multitrack::{
-    EngineProjectSnapshot, MultiTrackEngine, TrackCommand, TrackDefinition, TrackId, TrackKind,
-    MAX_REALTIME_TRACKS,
+    EngineProjectSnapshot, MultiTrackEngine, MultiTrackProject, TrackCommand, TrackDefinition,
+    TrackId, TrackKind, MULTITRACK_PROJECT_SCHEMA_VERSION, MAX_REALTIME_TRACKS,
 };
 pub use pattern::{parse_pattern_json, Pattern, PatternEvent, PatternScheduler, PatternStep};
 pub use pc_speaker::{pc_speaker_backend, pc_speaker_test, PcSpeakerBackend};
