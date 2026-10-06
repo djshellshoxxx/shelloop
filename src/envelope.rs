@@ -30,7 +30,9 @@ impl AdsrParams {
             ("release", self.release_secs, 60.0),
         ] {
             if !value.is_finite() || !(0.0..=max).contains(&value) {
-                return Err(format!("{name} must be finite and between 0 and {max} seconds"));
+                return Err(format!(
+                    "{name} must be finite and between 0 and {max} seconds"
+                ));
             }
         }
         if !self.sustain.is_finite() || !(0.0..=1.0).contains(&self.sustain) {
