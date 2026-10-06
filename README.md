@@ -607,13 +607,22 @@ The tag is intentionally not created yet. Remaining release gates are physical W
 
 ## v1 direction
 
-- Quantized live pattern and scene replacement
-- Terminal command mode and richer full-screen performance display
-- Terminal mouse XY performance control
-- Drum synthesis and WAV sample playback
-- Mixer sends, delay/reverb/saturation and metering
-- Expanded project/preset schema for patterns, scenes, mappings and audio settings
-- Windows and Linux first; macOS evaluated separately
+The detailed v1 implementation sequence is defined in `docs/specs/V1-ROADMAP.md`. The current planned order is:
+
+1. Multi-track engine
+2. Live pattern editor
+3. Synth/filter/ADSR expansion
+4. WAV sample playback
+5. Scenes and pattern chaining
+6. MIDI learn
+7. Effects engine
+8. Full-screen terminal UI
+9. Per-step parameter locks
+10. Internal resampling
+
+Each feature has a separate implementation-ready spec under `docs/specs/` covering module boundaries, data contracts, real-time constraints, persistence, failure behavior, tests and completion criteria.
+
+Windows and Linux remain the primary targets; macOS can be evaluated separately.
 
 ## Status
 
