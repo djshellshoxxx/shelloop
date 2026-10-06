@@ -1,6 +1,6 @@
 use shelloop::{
     EngineProjectSnapshot, MultiTrackEngine, MultiTrackProject, Pattern, PatternStep, TrackCommand,
-    TrackDefinition, TrackId, TrackKind, MULTITRACK_PROJECT_SCHEMA_VERSION, MAX_REALTIME_TRACKS,
+    TrackDefinition, TrackId, TrackKind, MAX_REALTIME_TRACKS, MULTITRACK_PROJECT_SCHEMA_VERSION,
 };
 
 fn pattern(name: &str, seed: u64, note: u8, steps: usize) -> Pattern {
@@ -31,10 +31,7 @@ fn synth_track(id: u16, name: &str, note: u8, steps: usize) -> TrackDefinition {
 
 #[test]
 fn multitrack_validates_stable_unique_ids_and_bounds() {
-    let duplicate = vec![
-        synth_track(1, "a", 60, 4),
-        synth_track(1, "b", 62, 4),
-    ];
+    let duplicate = vec![synth_track(1, "a", 60, 4), synth_track(1, "b", 62, 4)];
     assert!(MultiTrackEngine::new(48_000, 120.0, 4, 99, 8, duplicate).is_err());
 
     let too_many = (0..=MAX_REALTIME_TRACKS)
@@ -77,7 +74,10 @@ fn mute_and_solo_follow_explicit_truth_table() {
 
     engine.set_solo(TrackId(1), true).unwrap();
     assert!(!engine.track_is_audible(TrackId(1)), "mute wins over solo");
-    assert!(!engine.track_is_audible(TrackId(2)), "a soloed track suppresses non-solo tracks");
+    assert!(
+        !engine.track_is_audible(TrackId(2)),
+        "a soloed track suppresses non-solo tracks"
+    );
 
     engine.set_mute(TrackId(1), false).unwrap();
     assert!(engine.track_is_audible(TrackId(1)));
@@ -86,15 +86,9 @@ fn mute_and_solo_follow_explicit_truth_table() {
 
 #[test]
 fn gain_pan_and_missing_track_updates_are_bounded_and_safe() {
-    let mut engine = MultiTrackEngine::new(
-        48_000,
-        120.0,
-        4,
-        99,
-        8,
-        vec![synth_track(7, "lead", 72, 4)],
-    )
-    .unwrap();
+    let mut engine =
+        MultiTrackEngine::new(48_000, 120.0, 4, 99, 8, vec![synth_track(7, "lead", 72, 4)])
+            .unwrap();
 
     engine.set_gain(TrackId(7), 0.5).unwrap();
     engine.set_pan(TrackId(7), -1.0).unwrap();
@@ -115,10 +109,7 @@ fn gain_pan_and_missing_track_updates_are_bounded_and_safe() {
 
 #[test]
 fn restart_and_panic_apply_to_every_track_without_changing_ids() {
-    let tracks = vec![
-        synth_track(3, "bass", 36, 4),
-        synth_track(9, "lead", 72, 7),
-    ];
+    let tracks = vec![synth_track(3, "bass", 36, 4), synth_track(9, "lead", 72, 7)];
     let mut engine = MultiTrackEngine::new(44_100, 128.0, 4, 1234, 8, tracks).unwrap();
 
     for _ in 0..500 {
@@ -169,10 +160,7 @@ fn immutable_project_snapshot_validates_before_engine_construction() {
 
     let duplicate = EngineProjectSnapshot::new(
         43,
-        vec![
-            synth_track(11, "a", 60, 4),
-            synth_track(11, "b", 62, 4),
-        ],
+        vec![synth_track(11, "a", 60, 4), synth_track(11, "b", 62, 4)],
     );
     assert!(duplicate.is_err());
 }
@@ -181,14 +169,10 @@ fn immutable_project_snapshot_validates_before_engine_construction() {
 fn typed_track_commands_update_only_the_addressed_track() {
     let snapshot = EngineProjectSnapshot::new(
         1,
-        vec![
-            synth_track(1, "one", 60, 4),
-            synth_track(2, "two", 67, 4),
-        ],
+        vec![synth_track(1, "one", 60, 4), synth_track(2, "two", 67, 4)],
     )
     .unwrap();
-    let mut engine =
-        MultiTrackEngine::from_snapshot(48_000, 120.0, 4, 5, 8, snapshot).unwrap();
+    let mut engine = MultiTrackEngine::from_snapshot(48_000, 120.0, 4, 5, 8, snapshot).unwrap();
 
     engine
         .apply_command(TrackCommand::SetMute {
