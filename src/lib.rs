@@ -2,6 +2,7 @@ pub mod app;
 pub mod audio;
 pub mod command;
 pub mod editor;
+pub mod editor_command;
 pub mod engine;
 pub mod keyboard;
 pub mod midi;
@@ -32,6 +33,9 @@ pub use audio::{
 };
 pub use command::{parse_command, Command};
 pub use editor::{compile_pattern_revision, CompiledPatternRevision, PatternEditor, PatternRevision};
+pub use editor_command::{
+    parse_pattern_edit_command, EditOutcome, PatternEditCommand, ProjectPatternEditors, StepEdit,
+};
 pub use engine::{midi_note_hz, EngineCommand, RealtimeSynth};
 pub use keyboard::{map_performance_key, shift_octave, PerformanceKey};
 pub use midi::{decode_message, MidiEvent, MidiPerformanceState};
