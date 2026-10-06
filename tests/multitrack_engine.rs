@@ -1,6 +1,6 @@
 use shelloop::{
-    EngineProjectSnapshot, MultiTrackEngine, Pattern, PatternStep, TrackCommand, TrackDefinition,
-    TrackId, TrackKind, MAX_REALTIME_TRACKS,
+    EngineProjectSnapshot, MultiTrackEngine, MultiTrackProject, Pattern, PatternStep, TrackCommand,
+    TrackDefinition, TrackId, TrackKind, MULTITRACK_PROJECT_SCHEMA_VERSION, MAX_REALTIME_TRACKS,
 };
 
 fn pattern(name: &str, seed: u64, note: u8, steps: usize) -> Pattern {
@@ -211,4 +211,30 @@ fn typed_track_commands_update_only_the_addressed_track() {
             gain: 1.0,
         })
         .is_err());
+}
+
+#[test]
+fn multitrack_project_round_trip_preserves_tracks_and_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("multitrack.json");
+    let project = MultiTrackProject {
+        schema_version: MULTITRACK_PROJECT_SCHEMA_VERSION,
+        revision: 9,
+        seed: 12345,
+        bpm: 132.0,
+        steps_per_beat: 4,
+        tracks: vec![
+            synth_track(1, "drums", 36, 16),
+            synth_track(2, "bass", 48, 15),
+        ],
+    };
+
+    project.save_atomic(&path).unwrap();
+    let loaded = MultiTrackProject::load(&path).unwrap();
+    assert_eq!(loaded, project);
+    assert_eq!(loaded.to_snapshot().unwrap().revision(), 9);
+
+    let mut invalid = loaded;
+    invalid.schema_version += 1;
+    assert!(invalid.validate().is_err());
 }
