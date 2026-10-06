@@ -38,10 +38,11 @@ mod live {
     };
     use crate::{
         list_output_device_names, map_performance_key, open_stereo_output_stream,
-        parse_pattern_json, pc_speaker_backend, protect_master, shift_octave,
-        spawn_realtime_recording, EngineCommand, LiveSequencer, MultiTrackEngine,
-        MultiTrackProject, Oscillator, PerformanceKey, PerformanceMix, RealtimeSynth,
-        StartupOptions, WavRecordingConfig, XyPoint,
+        parse_pattern_edit_command, parse_pattern_json, pc_speaker_backend, protect_master,
+        shift_octave, spawn_realtime_recording, CompiledPatternRevision, EngineCommand,
+        LiveSequencer, MultiTrackEngine, MultiTrackProject, Oscillator, PerformanceKey,
+        PerformanceMix, ProjectPatternEditors, QuantizedChange, RealtimeSynth, StartupOptions,
+        TrackId, WavRecordingConfig, XyPoint,
     };
     use crossbeam_channel::{bounded, Sender};
     use crossterm::event::{
@@ -54,12 +55,19 @@ mod live {
     use std::collections::HashMap;
     use std::fs;
     use std::io::{self, Write};
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    };
     use std::thread;
     use std::time::{Duration, Instant};
 
     const COMMAND_QUEUE_CAPACITY: usize = 256;
     const SEQUENCER_CONTROL_QUEUE_CAPACITY: usize = 32;
     const PERFORMANCE_QUEUE_CAPACITY: usize = 32;
+    const PATTERN_CHANGE_QUEUE_CAPACITY: usize = 16;
+    const PATTERN_CHANGES_PER_SAMPLE_LIMIT: usize = 2;
+    const EDIT_HISTORY_CAPACITY: usize = 128;
     #[cfg(feature = "midi")]
     const MIDI_QUEUE_CAPACITY: usize = 256;
     const COMMANDS_PER_SAMPLE_LIMIT: usize = 64;
@@ -170,6 +178,46 @@ mod live {
         thread::sleep(Duration::from_millis(5));
     }
 
+    fn render_edit_prompt(buffer: &str) -> Result<(), String> {
+        print!("\x1b[2K\r:{buffer}");
+        io::stdout()
+            .flush()
+            .map_err(|error| format!("failed to render edit command prompt: {error}"))
+    }
+
+    fn queue_live_edit(
+        line: &str,
+        editors: &mut ProjectPatternEditors,
+        current_frame: u64,
+        sample_rate: u32,
+        bpm: f64,
+        steps_per_beat: u32,
+        sender: &Sender<(TrackId, QuantizedChange<CompiledPatternRevision>)>,
+    ) -> Result<String, String> {
+        let command = parse_pattern_edit_command(line)?;
+        let boundary = editors.default_quantize_boundary(&command);
+        let outcome = editors.apply(command)?;
+        if !outcome.changed {
+            return Ok(format!("selected track {}", outcome.track.0));
+        }
+
+        let (track, change) = editors.queue_selected_revision(
+            current_frame,
+            sample_rate,
+            bpm,
+            steps_per_beat,
+            boundary,
+        )?;
+        sender
+            .try_send((track, change))
+            .map_err(|error| format!("pattern change queue unavailable: {error}"))?;
+
+        Ok(format!(
+            "queued track {} revision {} for frame {}",
+            track.0, change.value.revision, change.apply_at_frame
+        ))
+    }
+
     fn print_devices() -> Result<(), String> {
         println!("Audio output devices:");
         let audio_devices = list_output_device_names()?;
@@ -233,11 +281,32 @@ mod live {
                 None => None,
             };
         let project_track_count = project.as_ref().map(|project| project.tracks.len());
+        let project_clock = project
+            .as_ref()
+            .map(|project| (project.bpm, u32::from(project.steps_per_beat)));
+        let mut pattern_editors = project
+            .as_ref()
+            .map(|project| {
+                ProjectPatternEditors::new(
+                    project
+                        .tracks
+                        .iter()
+                        .map(|track| (track.id, track.pattern.clone())),
+                    EDIT_HISTORY_CAPACITY,
+                )
+            })
+            .transpose()?;
         let has_sequencer = pattern.is_some() || project.is_some();
 
         let (command_sender, command_receiver) = bounded(COMMAND_QUEUE_CAPACITY);
         let (sequencer_sender, sequencer_receiver) = bounded(SEQUENCER_CONTROL_QUEUE_CAPACITY);
         let (performance_sender, performance_receiver) = bounded(PERFORMANCE_QUEUE_CAPACITY);
+        let (pattern_change_sender, pattern_change_receiver) =
+            bounded::<(TrackId, QuantizedChange<CompiledPatternRevision>)>(
+                PATTERN_CHANGE_QUEUE_CAPACITY,
+            );
+        let transport_frame = Arc::new(AtomicU64::new(0));
+        let audio_transport_frame = Arc::clone(&transport_frame);
         let polyphony = options.polyphony;
         let bpm = options.bpm;
         let steps_per_beat = options.steps_per_beat;
@@ -305,6 +374,15 @@ mod live {
                         performance_synth.handle(command);
                     }
 
+                    for _ in 0..PATTERN_CHANGES_PER_SAMPLE_LIMIT {
+                        let Ok((track, change)) = pattern_change_receiver.try_recv() else {
+                            break;
+                        };
+                        if let Some(engine) = multitrack.as_mut() {
+                            let _ = engine.queue_pattern_revision(track, change);
+                        }
+                    }
+
                     for _ in 0..SEQUENCER_CONTROLS_PER_SAMPLE_LIMIT {
                         let Ok(control) = sequencer_receiver.try_recv() else {
                             break;
@@ -336,7 +414,9 @@ mod live {
 
                     let (sequencer_left, sequencer_right) =
                         if let Some(engine) = multitrack.as_mut() {
-                            engine.next_stereo_frame()
+                            let frame = engine.next_stereo_frame();
+                            audio_transport_frame.store(engine.position_frame(), Ordering::Relaxed);
+                            frame
                         } else if let Some((sequencer, synth)) = sequenced.as_mut() {
                             sequencer.fill_commands(&mut sequencer_commands);
                             for command in sequencer_commands.drain(..) {
@@ -406,6 +486,7 @@ mod live {
         {
             println!("Project: {path} ({track_count} tracks)");
             println!("Sequencer: Space play/pause all tracks, Backspace restart all tracks");
+            println!("Live editor: press : for track/step/length/swing/rotate/undo/redo commands");
         }
         println!("Keys: Z-M/Q-U notes, [ ] octave, ! panic, ~ or Esc quit");
         if let Err(error) = io::stdout().flush() {
@@ -440,6 +521,7 @@ mod live {
 
         let mut octave = 0_i8;
         let mut held_notes = HashMap::<char, HeldNote>::new();
+        let mut edit_command_buffer = None::<String>;
         #[cfg(feature = "midi")]
         let mut last_midi_scan = Instant::now();
 
@@ -543,6 +625,62 @@ mod live {
                     Event::Key(key_event) => key_event,
                     _ => continue,
                 };
+
+                if let Some(mut buffer) = edit_command_buffer.take() {
+                    if key_event.kind == KeyEventKind::Release {
+                        edit_command_buffer = Some(buffer);
+                        continue;
+                    }
+
+                    match key_event.code {
+                        KeyCode::Esc => {
+                            println!();
+                        }
+                        KeyCode::Enter => {
+                            println!();
+                            if let (Some(editors), Some((project_bpm, project_steps))) =
+                                (pattern_editors.as_mut(), project_clock)
+                            {
+                                let current_frame = transport_frame.load(Ordering::Relaxed);
+                                match queue_live_edit(
+                                    &buffer,
+                                    editors,
+                                    current_frame,
+                                    audio.sample_rate(),
+                                    project_bpm,
+                                    project_steps,
+                                    &pattern_change_sender,
+                                ) {
+                                    Ok(message) => println!("edit: {message}"),
+                                    Err(error) => eprintln!("edit error: {error}"),
+                                }
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            buffer.pop();
+                            render_edit_prompt(&buffer)?;
+                            edit_command_buffer = Some(buffer);
+                        }
+                        KeyCode::Char(character) if !character.is_control() => {
+                            buffer.push(character);
+                            render_edit_prompt(&buffer)?;
+                            edit_command_buffer = Some(buffer);
+                        }
+                        _ => {
+                            edit_command_buffer = Some(buffer);
+                        }
+                    }
+                    continue;
+                }
+
+                if key_event.code == KeyCode::Char(':')
+                    && key_event.kind == KeyEventKind::Press
+                    && pattern_editors.is_some()
+                {
+                    edit_command_buffer = Some(String::new());
+                    render_edit_prompt("")?;
+                    continue;
+                }
 
                 if key_event.code == KeyCode::Esc && key_event.kind != KeyEventKind::Release {
                     break 'session;
