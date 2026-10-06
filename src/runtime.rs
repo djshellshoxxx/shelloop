@@ -37,9 +37,10 @@ mod live {
         connect_midi_input, list_midi_input_names, select_midi_port_index, MidiPortSelector,
     };
     use crate::{
-        list_output_device_names, map_performance_key, open_output_stream, parse_pattern_json,
-        pc_speaker_backend, protect_master, shift_octave, spawn_realtime_recording, EngineCommand,
-        LiveSequencer, Oscillator, PerformanceKey, PerformanceMix, RealtimeSynth, StartupOptions,
+        list_output_device_names, map_performance_key, open_stereo_output_stream,
+        parse_pattern_json, pc_speaker_backend, protect_master, shift_octave,
+        spawn_realtime_recording, EngineCommand, LiveSequencer, MultiTrackEngine, MultiTrackProject,
+        Oscillator, PerformanceKey, PerformanceMix, RealtimeSynth, StartupOptions,
         WavRecordingConfig, XyPoint,
     };
     use crossbeam_channel::{bounded, Sender};
@@ -224,6 +225,16 @@ mod live {
         };
         let pattern_name = pattern.as_ref().map(|pattern| pattern.name.clone());
 
+        let project = match options.project_path.as_deref() {
+            Some(path) => Some(
+                MultiTrackProject::load(path)
+                    .map_err(|error| format!("failed to load multitrack project {path:?}: {error}"))?,
+            ),
+            None => None,
+        };
+        let project_track_count = project.as_ref().map(|project| project.tracks.len());
+        let has_sequencer = pattern.is_some() || project.is_some();
+
         let (command_sender, command_receiver) = bounded(COMMAND_QUEUE_CAPACITY);
         let (sequencer_sender, sequencer_receiver) = bounded(SEQUENCER_CONTROL_QUEUE_CAPACITY);
         let (performance_sender, performance_receiver) = bounded(PERFORMANCE_QUEUE_CAPACITY);
@@ -233,7 +244,7 @@ mod live {
         let record_path = options.record_path.clone();
         let (recording_finalizer_sender, recording_finalizer_receiver) =
             std::sync::mpsc::sync_channel(1);
-        let audio = open_output_stream(options.audio_device.as_deref(), move |sample_rate| {
+        let audio = open_stereo_output_stream(options.audio_device.as_deref(), move |sample_rate| {
             let mut recorder = match record_path.as_deref() {
                 Some(path) => {
                     let config = WavRecordingConfig::new(sample_rate, 1, RECORDING_QUEUE_CAPACITY)?;
@@ -253,6 +264,17 @@ mod live {
             };
             let mut performance_synth =
                 RealtimeSynth::new(sample_rate as f32, Oscillator::Saw, polyphony)?;
+            let mut multitrack = match project {
+                Some(project) => Some(MultiTrackEngine::new(
+                    sample_rate,
+                    project.bpm,
+                    u32::from(project.steps_per_beat),
+                    project.seed,
+                    polyphony,
+                    project.tracks,
+                )?),
+                None => None,
+            };
             let mut sequenced = match pattern {
                 Some(pattern) => Some((
                     LiveSequencer::new(
@@ -284,7 +306,15 @@ mod live {
                     let Ok(control) = sequencer_receiver.try_recv() else {
                         break;
                     };
-                    if let Some((sequencer, synth)) = sequenced.as_mut() {
+                    if let Some(engine) = multitrack.as_mut() {
+                        match control {
+                            SequencerControl::TogglePlay => {
+                                engine.toggle_playing_all();
+                            }
+                            SequencerControl::Restart => engine.restart_all(),
+                            SequencerControl::Panic => engine.panic_all(),
+                        }
+                    } else if let Some((sequencer, synth)) = sequenced.as_mut() {
                         match control {
                             SequencerControl::TogglePlay => {
                                 if sequencer.is_playing() {
@@ -301,24 +331,30 @@ mod live {
                     }
                 }
 
-                let sequencer_sample = if let Some((sequencer, synth)) = sequenced.as_mut() {
+                let (sequencer_left, sequencer_right) = if let Some(engine) = multitrack.as_mut() {
+                    engine.next_stereo_frame()
+                } else if let Some((sequencer, synth)) = sequenced.as_mut() {
                     sequencer.fill_commands(&mut sequencer_commands);
                     for command in sequencer_commands.drain(..) {
                         synth.handle(command);
                     }
-                    synth.next_sample()
+                    let sample = synth.next_sample();
+                    (sample, sample)
                 } else {
-                    0.0
+                    (0.0, 0.0)
                 };
 
-                let sample = protect_master(
-                    performance_synth.next_sample() * performance_mix.live_gain
-                        + sequencer_sample * performance_mix.sequencer_gain,
+                let live_sample = performance_synth.next_sample() * performance_mix.live_gain;
+                let left = protect_master(
+                    live_sample + sequencer_left * performance_mix.sequencer_gain,
+                );
+                let right = protect_master(
+                    live_sample + sequencer_right * performance_mix.sequencer_gain,
                 );
                 if let Some(recorder) = recorder.as_mut() {
-                    let _ = recorder.push_sample(sample);
+                    let _ = recorder.push_sample(protect_master((left + right) * 0.5));
                 }
-                sample
+                (left, right)
             })
         })?;
         let recording_finalizer = recording_finalizer_receiver
@@ -360,6 +396,12 @@ mod live {
                 options.bpm, options.steps_per_beat
             );
             println!("Sequencer: Space play/pause, Backspace restart");
+        }
+        if let (Some(path), Some(track_count)) =
+            (options.project_path.as_deref(), project_track_count)
+        {
+            println!("Project: {path} ({track_count} tracks)");
+            println!("Sequencer: Space play/pause all tracks, Backspace restart all tracks");
         }
         println!("Keys: Z-M/Q-U notes, [ ] octave, ! panic, ~ or Esc quit");
         if let Err(error) = io::stdout().flush() {
@@ -489,7 +531,7 @@ mod live {
                                 width,
                                 height,
                             );
-                            let mix = PerformanceMix::from_xy(point, pattern_name.is_some());
+                            let mix = PerformanceMix::from_xy(point, has_sequencer);
                             let _ = performance_sender.try_send(mix);
                         }
                         continue;
@@ -503,7 +545,7 @@ mod live {
                 }
                 if key_event.code == KeyCode::Backspace
                     && key_event.kind == KeyEventKind::Press
-                    && pattern_name.is_some()
+                    && has_sequencer
                 {
                     send_sequencer_control(&sequencer_sender, SequencerControl::Restart)?;
                     continue;
@@ -550,7 +592,7 @@ mod live {
                             held_notes.clear();
                         }
                         Some(PerformanceKey::Quit) => break 'session,
-                        Some(PerformanceKey::TogglePlay) if pattern_name.is_some() => {
+                        Some(PerformanceKey::TogglePlay) if has_sequencer => {
                             send_sequencer_control(
                                 &sequencer_sender,
                                 SequencerControl::TogglePlay,
