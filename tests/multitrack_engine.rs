@@ -287,3 +287,28 @@ fn pending_pattern_revision_slot_is_bounded_and_newest_revision_wins() {
     }
     assert_eq!(engine.track_active_revision(TrackId(1)), Some(2));
 }
+
+#[test]
+fn late_compiled_revision_activates_on_next_rendered_frame() {
+    let mut engine =
+        MultiTrackEngine::new(100, 60.0, 1, 9, 8, vec![synth_track(1, "one", 60, 1)]).unwrap();
+
+    for _ in 0..101 {
+        engine.next_stereo_frame();
+    }
+
+    let mut editor = PatternEditor::new(pattern("late", 8, 75, 1), 8).unwrap();
+    editor.set_swing(0.1).unwrap();
+    let queued = editor
+        .queue_revision(1, 100, 60.0, 1, QuantizeBoundary::Step)
+        .unwrap();
+    assert_eq!(queued.apply_at_frame, 100);
+
+    engine
+        .queue_pattern_revision(TrackId(1), compile_pattern_revision(&queued).unwrap())
+        .unwrap();
+    assert_eq!(engine.track_active_revision(TrackId(1)), Some(0));
+
+    engine.next_stereo_frame();
+    assert_eq!(engine.track_active_revision(TrackId(1)), Some(1));
+}
