@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-const MAX_PATTERN_STEPS: usize = 256;
+pub const MAX_PATTERN_STEPS: usize = 256;
 const MAX_RATCHETS: u8 = 8;
 const MAX_MICROTIMING_FRAMES: i32 = 192_000;
 const MAX_EVENTS_PER_BLOCK: usize = 4096;
@@ -97,6 +97,43 @@ impl Pattern {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompiledPattern {
+    seed: u64,
+    swing: f32,
+    channel: u8,
+    len: u16,
+    steps: [Option<PatternStep>; MAX_PATTERN_STEPS],
+}
+
+impl CompiledPattern {
+    pub fn from_pattern(pattern: &Pattern) -> Result<Self, String> {
+        pattern.validate()?;
+        let mut steps = [None; MAX_PATTERN_STEPS];
+        steps[..pattern.steps.len()].copy_from_slice(&pattern.steps);
+
+        Ok(Self {
+            seed: pattern.seed,
+            swing: pattern.swing,
+            channel: pattern.channel,
+            len: pattern.steps.len() as u16,
+            steps,
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        usize::from(self.len)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn steps(&self) -> &[Option<PatternStep>] {
+        &self.steps[..self.len()]
+    }
+}
+
 pub fn parse_pattern_json(json: &str) -> Result<Pattern, String> {
     let pattern: Pattern =
         serde_json::from_str(json).map_err(|error| format!("invalid pattern JSON: {error}"))?;
@@ -174,9 +211,51 @@ impl PatternScheduler {
         if block_frames == 0 || pattern.validate().is_err() {
             return;
         }
+        self.schedule_steps_into(
+            pattern.seed,
+            pattern.swing,
+            pattern.channel,
+            &pattern.steps,
+            block_start_frame,
+            block_frames,
+            events,
+        );
+    }
 
+    pub fn schedule_compiled_block_into(
+        &self,
+        pattern: &CompiledPattern,
+        block_start_frame: u64,
+        block_frames: u32,
+        events: &mut Vec<PatternEvent>,
+    ) {
+        events.clear();
+        if block_frames == 0 || pattern.is_empty() {
+            return;
+        }
+        self.schedule_steps_into(
+            pattern.seed,
+            pattern.swing,
+            pattern.channel,
+            pattern.steps(),
+            block_start_frame,
+            block_frames,
+            events,
+        );
+    }
+
+    fn schedule_steps_into(
+        &self,
+        seed: u64,
+        swing: f32,
+        channel: u8,
+        steps: &[Option<PatternStep>],
+        block_start_frame: u64,
+        block_frames: u32,
+        events: &mut Vec<PatternEvent>,
+    ) {
         let frames_per_step = self.frames_per_step();
-        let loop_frames = frames_per_step * pattern.len() as f64;
+        let loop_frames = frames_per_step * steps.len() as f64;
         let block_end = block_start_frame.saturating_add(block_frames as u64);
         let estimated_first = (block_start_frame as f64 / loop_frames).floor() as i64 - 1;
         let estimated_last = (block_end as f64 / loop_frames).floor() as i64 + 1;
@@ -184,18 +263,18 @@ impl PatternScheduler {
         let last_loop = estimated_last.max(0) as u64;
 
         'loops: for loop_index in first_loop..=last_loop {
-            for (step_index, maybe_step) in pattern.steps.iter().enumerate() {
+            for (step_index, maybe_step) in steps.iter().enumerate() {
                 let Some(step) = maybe_step else { continue };
-                if !self.step_triggers(pattern, loop_index, step_index, step.probability) {
+                if !self.step_triggers(seed, loop_index, step_index, step.probability) {
                     continue;
                 }
 
                 let global_step = loop_index
-                    .saturating_mul(pattern.len() as u64)
+                    .saturating_mul(steps.len() as u64)
                     .saturating_add(step_index as u64);
                 let base_frame = (global_step as f64 * frames_per_step).round() as i128;
                 let swing_frames = if step_index % 2 == 1 {
-                    (frames_per_step * pattern.swing as f64).round() as i128
+                    (frames_per_step * swing as f64).round() as i128
                 } else {
                     0
                 };
@@ -220,7 +299,7 @@ impl PatternScheduler {
                     events.push(PatternEvent {
                         absolute_frame,
                         frame_offset: (absolute_frame - block_start_frame) as u32,
-                        channel: pattern.channel,
+                        channel,
                         note: step.note,
                         velocity: step.velocity,
                         duration_frames,
@@ -243,7 +322,7 @@ impl PatternScheduler {
 
     fn step_triggers(
         &self,
-        pattern: &Pattern,
+        pattern_seed: u64,
         loop_index: u64,
         step_index: usize,
         probability: f32,
@@ -255,7 +334,7 @@ impl PatternScheduler {
             return true;
         }
 
-        let mut key = self.project_seed ^ pattern.seed.rotate_left(17);
+        let mut key = self.project_seed ^ pattern_seed.rotate_left(17);
         key ^= loop_index.wrapping_mul(0x9E37_79B9_7F4A_7C15);
         key ^= (step_index as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         let random = splitmix64(key);
