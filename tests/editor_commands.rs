@@ -166,3 +166,25 @@ fn selected_editor_compiles_directly_to_realtime_quantized_change() {
     assert_eq!(queued.value.revision, 1);
     assert_eq!(queued.value.pattern.len(), 4);
 }
+
+#[test]
+fn command_controller_chooses_musical_default_boundaries() {
+    let editors =
+        ProjectPatternEditors::new(vec![(TrackId(3), pattern("three", 60))], 8).unwrap();
+
+    assert_eq!(
+        editors.default_quantize_boundary(&PatternEditCommand::Step {
+            index: 0,
+            edit: StepEdit::Toggle,
+        }),
+        QuantizeBoundary::Step
+    );
+    assert_eq!(
+        editors.default_quantize_boundary(&PatternEditCommand::Length(8)),
+        QuantizeBoundary::Pattern { steps: 4 }
+    );
+    assert_eq!(
+        editors.default_quantize_boundary(&PatternEditCommand::RotateLeft(1)),
+        QuantizeBoundary::Pattern { steps: 4 }
+    );
+}
