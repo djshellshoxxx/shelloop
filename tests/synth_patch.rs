@@ -1,6 +1,6 @@
 use shelloop::{
-    AdsrEnvelope, AdsrParams, EngineCommand, EnvelopeStage, FilterMode, FilterParams,
-    Oscillator, RealtimeSynth, StateVariableFilter, SynthPatch, SynthVoice,
+    AdsrEnvelope, AdsrParams, EngineCommand, EnvelopeStage, FilterMode, FilterParams, Oscillator,
+    RealtimeSynth, StateVariableFilter, SynthPatch, SynthVoice,
 };
 
 #[test]
@@ -90,24 +90,30 @@ fn filter_validation_enforces_nyquist_safe_cutoff_and_ranges() {
     };
     assert!(valid.validate(48_000.0).is_ok());
 
-    assert!(FilterParams {
-        cutoff_hz: 10.0,
-        ..valid
-    }
-    .validate(48_000.0)
-    .is_err());
-    assert!(FilterParams {
-        cutoff_hz: 21_601.0,
-        ..valid
-    }
-    .validate(48_000.0)
-    .is_err());
-    assert!(FilterParams {
-        resonance: 1.1,
-        ..valid
-    }
-    .validate(48_000.0)
-    .is_err());
+    assert!(
+        FilterParams {
+            cutoff_hz: 10.0,
+            ..valid
+        }
+        .validate(48_000.0)
+        .is_err()
+    );
+    assert!(
+        FilterParams {
+            cutoff_hz: 21_601.0,
+            ..valid
+        }
+        .validate(48_000.0)
+        .is_err()
+    );
+    assert!(
+        FilterParams {
+            resonance: 1.1,
+            ..valid
+        }
+        .validate(48_000.0)
+        .is_err()
+    );
 }
 
 #[test]
@@ -115,24 +121,27 @@ fn synth_patch_validation_covers_tuning_pulse_width_and_gain() {
     let patch = SynthPatch::legacy(Oscillator::Saw);
     assert!(patch.validate(48_000.0).is_ok());
 
-    assert!(SynthPatch {
-        pulse_width: 0.0,
-        ..patch
-    }
-    .validate(48_000.0)
-    .is_err());
-    assert!(SynthPatch {
-        octave: 5,
-        ..patch
-    }
-    .validate(48_000.0)
-    .is_err());
-    assert!(SynthPatch {
-        fine_cents: 101.0,
-        ..patch
-    }
-    .validate(48_000.0)
-    .is_err());
+    assert!(
+        SynthPatch {
+            pulse_width: 0.0,
+            ..patch
+        }
+        .validate(48_000.0)
+        .is_err()
+    );
+    assert!(
+        SynthPatch { octave: 5, ..patch }
+            .validate(48_000.0)
+            .is_err()
+    );
+    assert!(
+        SynthPatch {
+            fine_cents: 101.0,
+            ..patch
+        }
+        .validate(48_000.0)
+        .is_err()
+    );
 }
 
 #[test]
