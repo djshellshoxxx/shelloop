@@ -2,6 +2,7 @@ pub mod app;
 pub mod audio;
 pub mod command;
 pub mod engine;
+pub mod editor;
 pub mod keyboard;
 pub mod midi;
 pub mod midi_io;
@@ -30,6 +31,7 @@ pub use audio::{
     list_output_device_names, open_output_stream, open_stereo_output_stream, AudioOutput,
 };
 pub use command::{parse_command, Command};
+pub use editor::{PatternEditor, PatternRevision};
 pub use engine::{midi_note_hz, EngineCommand, RealtimeSynth};
 pub use keyboard::{map_performance_key, shift_octave, PerformanceKey};
 pub use midi::{decode_message, MidiEvent, MidiPerformanceState};
