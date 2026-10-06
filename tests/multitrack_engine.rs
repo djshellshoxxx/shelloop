@@ -1,7 +1,7 @@
 use shelloop::{
     compile_pattern_revision, EngineProjectSnapshot, MultiTrackEngine, MultiTrackProject, Pattern,
-    PatternEditor, PatternStep, QuantizeBoundary, TrackCommand, TrackDefinition, TrackId, TrackKind,
-    MAX_REALTIME_TRACKS, MULTITRACK_PROJECT_SCHEMA_VERSION,
+    PatternEditor, PatternStep, QuantizeBoundary, TrackCommand, TrackDefinition, TrackId,
+    TrackKind, MAX_REALTIME_TRACKS, MULTITRACK_PROJECT_SCHEMA_VERSION,
 };
 
 fn pattern(name: &str, seed: u64, note: u8, steps: usize) -> Pattern {
@@ -226,10 +226,7 @@ fn multitrack_project_round_trip_preserves_tracks_and_schema() {
 
 #[test]
 fn queued_pattern_revision_activates_on_exact_frame_for_only_target_track() {
-    let tracks = vec![
-        synth_track(1, "one", 60, 1),
-        synth_track(2, "two", 67, 1),
-    ];
+    let tracks = vec![synth_track(1, "one", 60, 1), synth_track(2, "two", 67, 1)];
     let mut engine = MultiTrackEngine::new(100, 60.0, 1, 9, 8, tracks).unwrap();
 
     let replacement = pattern("replacement", 444, 72, 1);
@@ -240,9 +237,7 @@ fn queued_pattern_revision_activates_on_exact_frame_for_only_target_track() {
         .unwrap();
     let compiled = compile_pattern_revision(&queued).unwrap();
 
-    engine
-        .queue_pattern_revision(TrackId(1), compiled)
-        .unwrap();
+    engine.queue_pattern_revision(TrackId(1), compiled).unwrap();
 
     for _ in 0..100 {
         engine.next_stereo_frame();
