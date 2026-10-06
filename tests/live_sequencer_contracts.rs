@@ -135,10 +135,9 @@ fn compiled_pattern_replacement_preserves_transport_and_uses_new_events() {
     let mut sequencer = LiveSequencer::new(100, 60.0, 1, 99, old).unwrap();
     let mut commands = Vec::with_capacity(LiveSequencer::MAX_COMMANDS_PER_FRAME);
     sequencer.fill_commands(&mut commands);
-    assert!(commands.iter().any(|command| matches!(
-        command,
-        EngineCommand::NoteOn { note: 60, .. }
-    )));
+    assert!(commands
+        .iter()
+        .any(|command| matches!(command, EngineCommand::NoteOn { note: 60, .. })));
 
     for _ in 1..100 {
         sequencer.fill_commands(&mut commands);
@@ -150,12 +149,10 @@ fn compiled_pattern_replacement_preserves_transport_and_uses_new_events() {
     assert_eq!(sequencer.position_frame(), 100);
 
     sequencer.fill_commands(&mut commands);
-    assert!(commands.iter().any(|command| matches!(
-        command,
-        EngineCommand::NoteOn { note: 72, .. }
-    )));
-    assert!(!commands.iter().any(|command| matches!(
-        command,
-        EngineCommand::NoteOn { note: 60, .. }
-    )));
+    assert!(commands
+        .iter()
+        .any(|command| matches!(command, EngineCommand::NoteOn { note: 72, .. })));
+    assert!(!commands
+        .iter()
+        .any(|command| matches!(command, EngineCommand::NoteOn { note: 60, .. })));
 }
