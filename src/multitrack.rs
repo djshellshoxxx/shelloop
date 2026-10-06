@@ -1,5 +1,6 @@
 use crate::{
-    ChannelStrip, EngineCommand, LiveSequencer, Oscillator, Pattern, RealtimeSynth, SmoothedParam,
+    ChannelStrip, CompiledPatternRevision, EngineCommand, LiveSequencer, Oscillator, Pattern,
+    QuantizedChange, RealtimeSynth, SmoothedParam,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -174,6 +175,8 @@ struct RealtimeTrack {
     muted: bool,
     soloed: bool,
     smoothing_frames: u32,
+    pending_pattern: Option<QuantizedChange<CompiledPatternRevision>>,
+    active_revision: u64,
 }
 
 impl RealtimeTrack {
@@ -212,6 +215,8 @@ impl RealtimeTrack {
             muted: definition.muted,
             soloed: definition.soloed,
             smoothing_frames,
+            pending_pattern: None,
+            active_revision: 0,
         })
     }
 
@@ -224,6 +229,15 @@ impl RealtimeTrack {
         any_soloed: bool,
         commands: &mut Vec<EngineCommand>,
     ) -> (f32, f32) {
+        if let Some(change) = self.pending_pattern {
+            if change.apply_at_frame <= self.sequencer.position_frame() {
+                self.synth.handle(EngineCommand::Panic);
+                self.sequencer.replace_compiled_pattern(change.value.pattern);
+                self.active_revision = change.value.revision;
+                self.pending_pattern = None;
+            }
+        }
+
         self.sequencer.fill_commands(commands);
         for command in commands.drain(..) {
             self.synth.handle(command);
@@ -345,6 +359,32 @@ impl MultiTrackEngine {
         let any_soloed = self.tracks.iter().any(|track| track.soloed);
         self.track(id)
             .is_some_and(|track| track.is_audible(any_soloed))
+    }
+
+    pub fn track_active_revision(&self, id: TrackId) -> Option<u64> {
+        self.track(id).map(|track| track.active_revision)
+    }
+
+    pub fn queue_pattern_revision(
+        &mut self,
+        id: TrackId,
+        change: QuantizedChange<CompiledPatternRevision>,
+    ) -> Result<(), String> {
+        let track = self.track_mut(id)?;
+        if change.apply_at_frame < track.sequencer.position_frame() {
+            return Err("pattern revision activation frame is already in the past".into());
+        }
+        if change.value.revision <= track.active_revision {
+            return Err("pattern revision must be newer than the active revision".into());
+        }
+        if track
+            .pending_pattern
+            .is_some_and(|pending| pending.value.revision >= change.value.revision)
+        {
+            return Err("pattern revision must be newer than the queued revision".into());
+        }
+        track.pending_pattern = Some(change);
+        Ok(())
     }
 
     pub fn set_gain(&mut self, id: TrackId, gain: f32) -> Result<(), String> {
