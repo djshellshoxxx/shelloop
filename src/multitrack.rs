@@ -4,6 +4,41 @@ use std::collections::HashSet;
 
 pub const MAX_REALTIME_TRACKS: usize = 16;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct EngineProjectSnapshot {
+    revision: u64,
+    tracks: Vec<TrackDefinition>,
+}
+
+impl EngineProjectSnapshot {
+    pub fn new(revision: u64, tracks: Vec<TrackDefinition>) -> Result<Self, String> {
+        validate_track_definitions(&tracks)?;
+        Ok(Self { revision, tracks })
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn tracks(&self) -> &[TrackDefinition] {
+        &self.tracks
+    }
+
+    pub fn into_tracks(self) -> Vec<TrackDefinition> {
+        self.tracks
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TrackCommand {
+    SetGain { track: TrackId, gain: f32 },
+    SetPan { track: TrackId, pan: f32 },
+    SetMute { track: TrackId, muted: bool },
+    SetSolo { track: TrackId, soloed: bool },
+    Panic { track: Option<TrackId> },
+    RestartAll,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TrackId(pub u16);
 
@@ -128,22 +163,7 @@ impl MultiTrackEngine {
         polyphony_per_track: usize,
         definitions: Vec<TrackDefinition>,
     ) -> Result<Self, String> {
-        if definitions.is_empty() {
-            return Err("multi-track engine requires at least one track".into());
-        }
-        if definitions.len() > MAX_REALTIME_TRACKS {
-            return Err(format!(
-                "multi-track engine supports at most {MAX_REALTIME_TRACKS} tracks"
-            ));
-        }
-
-        let mut ids = HashSet::with_capacity(definitions.len());
-        for definition in &definitions {
-            definition.validate()?;
-            if !ids.insert(definition.id) {
-                return Err(format!("duplicate track id: {}", definition.id.0));
-            }
-        }
+        validate_track_definitions(&definitions)?;
 
         let mut tracks = Vec::with_capacity(definitions.len());
         for definition in definitions {
@@ -161,6 +181,45 @@ impl MultiTrackEngine {
             tracks,
             command_buffer: Vec::with_capacity(LiveSequencer::MAX_COMMANDS_PER_FRAME),
         })
+    }
+
+    pub fn from_snapshot(
+        sample_rate: u32,
+        bpm: f64,
+        steps_per_beat: u32,
+        project_seed: u64,
+        polyphony_per_track: usize,
+        snapshot: EngineProjectSnapshot,
+    ) -> Result<Self, String> {
+        Self::new(
+            sample_rate,
+            bpm,
+            steps_per_beat,
+            project_seed,
+            polyphony_per_track,
+            snapshot.into_tracks(),
+        )
+    }
+
+    pub fn apply_command(&mut self, command: TrackCommand) -> Result<(), String> {
+        match command {
+            TrackCommand::SetGain { track, gain } => self.set_gain(track, gain),
+            TrackCommand::SetPan { track, pan } => self.set_pan(track, pan),
+            TrackCommand::SetMute { track, muted } => self.set_mute(track, muted),
+            TrackCommand::SetSolo { track, soloed } => self.set_solo(track, soloed),
+            TrackCommand::Panic { track: Some(track) } => {
+                self.track_mut(track)?.synth.handle(EngineCommand::Panic);
+                Ok(())
+            }
+            TrackCommand::Panic { track: None } => {
+                self.panic_all();
+                Ok(())
+            }
+            TrackCommand::RestartAll => {
+                self.restart_all();
+                Ok(())
+            }
+        }
     }
 
     pub fn next_stereo_frame(&mut self) -> (f32, f32) {
@@ -241,4 +300,25 @@ impl MultiTrackEngine {
             .find(|track| track.id == id)
             .ok_or_else(|| format!("track id {} does not exist", id.0))
     }
+}
+
+
+fn validate_track_definitions(definitions: &[TrackDefinition]) -> Result<(), String> {
+    if definitions.is_empty() {
+        return Err("multi-track engine requires at least one track".into());
+    }
+    if definitions.len() > MAX_REALTIME_TRACKS {
+        return Err(format!(
+            "multi-track engine supports at most {MAX_REALTIME_TRACKS} tracks"
+        ));
+    }
+
+    let mut ids = HashSet::with_capacity(definitions.len());
+    for definition in definitions {
+        definition.validate()?;
+        if !ids.insert(definition.id) {
+            return Err(format!("duplicate track id: {}", definition.id.0));
+        }
+    }
+    Ok(())
 }
