@@ -6,6 +6,7 @@ pub struct StartupOptions {
     pub midi_port: Option<MidiPortSelector>,
     pub polyphony: usize,
     pub pattern_path: Option<String>,
+    pub project_path: Option<String>,
     pub record_path: Option<String>,
     pub mouse_xy: bool,
     pub bpm: u16,
@@ -26,6 +27,7 @@ impl Default for StartupOptions {
             midi_port: Some(MidiPortSelector::First),
             polyphony: 16,
             pattern_path: None,
+            project_path: None,
             record_path: None,
             mouse_xy: false,
             bpm: 120,
@@ -119,6 +121,16 @@ where
                 }
                 options.pattern_path = Some(value.clone());
             }
+            "--project" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--project requires a JSON project file path".to_string())?;
+                if value.trim().is_empty() {
+                    return Err("--project requires a non-empty JSON project file path".into());
+                }
+                options.project_path = Some(value.clone());
+            }
             "--record" => {
                 index += 1;
                 let value = args
@@ -194,6 +206,9 @@ where
         index += 1;
     }
 
+    if options.pattern_path.is_some() && options.project_path.is_some() {
+        return Err("--pattern cannot be combined with --project".into());
+    }
     if options.no_midi && explicit_midi {
         return Err("--no-midi cannot be combined with a MIDI port selector".into());
     }
