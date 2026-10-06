@@ -1,5 +1,5 @@
 use crate::{
-    clamp_cutoff, AdsrEnvelope, AdsrParams, FilterMode, FilterParams, StateVariableFilter,
+    AdsrEnvelope, AdsrParams, FilterMode, FilterParams, StateVariableFilter, clamp_cutoff,
 };
 use std::f32::consts::TAU;
 
@@ -95,10 +95,10 @@ impl SynthPatch {
         self.amp_env.validate()?;
         self.filter.validate(sample_rate)?;
         self.filter_env.validate()?;
-        if !self.filter_env_amount.is_finite()
-            || !(-8.0..=8.0).contains(&self.filter_env_amount)
-        {
-            return Err("filter envelope amount must be finite and between -8 and 8 octaves".into());
+        if !self.filter_env_amount.is_finite() || !(-8.0..=8.0).contains(&self.filter_env_amount) {
+            return Err(
+                "filter envelope amount must be finite and between -8 and 8 octaves".into(),
+            );
         }
         if !self.output_gain.is_finite() || !(0.0..=2.0).contains(&self.output_gain) {
             return Err("synth output gain must be finite and between 0.0 and 2.0".into());
