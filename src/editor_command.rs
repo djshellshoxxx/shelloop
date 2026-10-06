@@ -56,7 +56,10 @@ impl ProjectPatternEditors {
     ) -> Result<Self, String> {
         let mut editors = Vec::new();
         for (id, pattern) in tracks {
-            if editors.iter().any(|entry: &TrackPatternEditor| entry.id == id) {
+            if editors
+                .iter()
+                .any(|entry: &TrackPatternEditor| entry.id == id)
+            {
                 return Err(format!("duplicate pattern editor track id: {}", id.0));
             }
             if editors.len() >= MAX_REALTIME_TRACKS {
@@ -95,7 +98,10 @@ impl ProjectPatternEditors {
     pub fn apply(&mut self, command: PatternEditCommand) -> Result<EditOutcome, String> {
         if let PatternEditCommand::SelectTrack(track) = command {
             if self.editor(track).is_none() {
-                return Err(format!("track id {} does not have a pattern editor", track.0));
+                return Err(format!(
+                    "track id {} does not have a pattern editor",
+                    track.0
+                ));
             }
             self.selected_track = track;
             return Ok(EditOutcome {
@@ -125,10 +131,7 @@ impl ProjectPatternEditors {
         })
     }
 
-    pub fn default_quantize_boundary(
-        &self,
-        command: &PatternEditCommand,
-    ) -> QuantizeBoundary {
+    pub fn default_quantize_boundary(&self, command: &PatternEditCommand) -> QuantizeBoundary {
         let pattern_steps = self
             .editor(self.selected_track)
             .map(|editor| editor.pattern().len() as u32)
@@ -271,9 +274,7 @@ fn parse_step_command(parts: &[&str]) -> Result<PatternEditCommand, String> {
             require_len(parts, 4, "step ratchets requires a count")?;
             let ratchets = parse_u8(parts[3], "ratchets")?;
             if !(1..=MAX_RATCHETS).contains(&ratchets) {
-                return Err(format!(
-                    "ratchets must be between 1 and {MAX_RATCHETS}"
-                ));
+                return Err(format!("ratchets must be between 1 and {MAX_RATCHETS}"));
             }
             StepEdit::Ratchets(ratchets)
         }
