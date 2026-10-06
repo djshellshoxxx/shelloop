@@ -362,6 +362,25 @@ impl MultiTrackEngine {
         Ok(())
     }
 
+    pub fn is_playing(&self) -> bool {
+        self.tracks.first().is_some_and(|track| track.sequencer.is_playing())
+    }
+
+    pub fn set_playing_all(&mut self, playing: bool) {
+        for track in &mut self.tracks {
+            if track.sequencer.is_playing() && !playing {
+                track.synth.handle(EngineCommand::Panic);
+            }
+            track.sequencer.set_playing(playing);
+        }
+    }
+
+    pub fn toggle_playing_all(&mut self) -> bool {
+        let playing = !self.is_playing();
+        self.set_playing_all(playing);
+        playing
+    }
+
     pub fn restart_all(&mut self) {
         for track in &mut self.tracks {
             track.synth.handle(EngineCommand::Panic);
