@@ -25,6 +25,7 @@ Development is active on `continuation/rebuild-baseline` in draft PR #1. The det
 - Background WAV writer and preallocated real-time recording bridge
 - Experimental PC-speaker probe: Linux console speaker ioctl and Windows Beep compatibility mode
 - Bounded recording queues and master-output protection
+- Optional live ASCII waveform (oscilloscope or scrolling peak history), toggled with Tab
 - Windows/Linux all-feature compile, test, strict Clippy and optimized-release CI gates
 - `v0.01-beta` packaging workflow for Windows x86-64 and Linux x86-64 with SHA-256 checksums
 
@@ -48,6 +49,8 @@ Options:
   --steps-per-beat <N>   Set sequencer grid density from 1 to 64 (default: 4)
   --list-devices         List available audio and MIDI devices
   --mouse-xy             Enable terminal mouse XY performance control
+  --waveform             Show the ASCII waveform at startup (Tab toggles it)
+  --waveform-style <S>   Waveform style: scope or history (default: scope)
   --no-midi              Disable MIDI input
   -h, --help             Print help
 ```
@@ -119,6 +122,42 @@ shelloop --mouse-xy
 ```
 
 With a pattern or multi-track project loaded, hold the left mouse button and drag inside the terminal. X crossfades between the live synth (left) and sequencer/project mix (right); Y controls overall performance level. Without a sequencer source, X is ignored and Y controls the live synth level. Mouse capture is disabled again when Shelloop exits.
+
+### ASCII waveform
+
+Press **Tab** at any time (outside the `:` edit prompt) to show or hide a live
+ASCII waveform of the master output. It is pinned to the bottom third of the
+terminal and redraws about 30 times a second; status and edit messages keep
+scrolling in the rows above it. Press **Shift+Tab** to switch style:
+
+- `scope` — a triggered oscilloscope of the last ~40 ms. Periodic sounds hold
+  still, so you can see the oscillator shape, filter sweeps and chords beating.
+- `history` — a scrolling peak overview, newest on the right, that pulses with
+  the beat like a DAW clip.
+
+```text
+-- wave: scope   peak   -2.1 dBFS -- Tab hide, Shift+Tab style -----------------
+    ##                  ###                 ###                  ##
+#######             ##### #              #### #              #######
+#........##........##........##......####......####......####......####......###
+          ##### #              #### #              #### #              #######
+              ##                  ###                  ##                  ##
+```
+
+Start with it visible, or pick the style up front:
+
+```bash
+shelloop --waveform
+shelloop --waveform --waveform-style history
+```
+
+The display is off by default and costs the audio thread one atomic load per
+sample while hidden. When visible, the audio callback only stores samples into
+a fixed 16384-sample lock-free ring; all drawing happens on the terminal thread.
+Quiet signals are drawn at their true size and loud ones are scaled to fit, so
+silence stays flat. The terminal must be at least 20 columns by 12 rows; if it
+is resized below that, the waveform hides itself and says why. Resizing clears
+the screen and redraws the panel.
 
 Record the protected mono master output while performing:
 
@@ -588,7 +627,7 @@ Lower: Z S X D C V G B H N J M
 Upper: Q 2 W 3 E R 5 T 6 Y 7 U
 ```
 
-`[` and `]` shift octave, `!` sends panic/all-notes-off, and `~` or `Esc` quits. With a pattern loaded, Space toggles sequencer play/pause and Backspace restarts from frame zero. `--mouse-xy` enables left-button drag performance control, using X as live/sequencer crossfade and Y as overall level. Windows provides key press/repeat/release events directly. On Unix-like terminals, Shelloop requests the crossterm/kitty keyboard enhancement protocol so notes can be released correctly. If the terminal does not support it, Shelloop falls back to bounded timed note releases and reports that limitation at startup.
+`[` and `]` shift octave, `!` sends panic/all-notes-off, `Tab` shows/hides the ASCII waveform, `Shift+Tab` switches its style, and `~` or `Esc` quits. With a pattern loaded, Space toggles sequencer play/pause and Backspace restarts from frame zero. `--mouse-xy` enables left-button drag performance control, using X as live/sequencer crossfade and Y as overall level. Windows provides key press/repeat/release events directly. On Unix-like terminals, Shelloop requests the crossterm/kitty keyboard enhancement protocol so notes can be released correctly. If the terminal does not support it, Shelloop falls back to bounded timed note releases and reports that limitation at startup.
 
 ## Build
 
