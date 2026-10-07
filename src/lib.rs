@@ -1,8 +1,10 @@
 pub mod app;
 pub mod audio;
+pub mod blackbox;
 pub mod command;
 pub mod editor;
 pub mod editor_command;
+pub mod effects;
 pub mod engine;
 pub mod envelope;
 pub mod filter;
@@ -11,6 +13,7 @@ pub mod midi;
 pub mod midi_io;
 pub mod mixer;
 pub mod multitrack;
+pub mod params;
 pub mod pattern;
 pub mod pc_speaker;
 pub mod performance;
@@ -24,6 +27,7 @@ pub mod scope;
 pub mod sequencer;
 pub mod synth;
 pub mod transport;
+pub mod variation;
 pub mod voice;
 
 pub use app::{parse_startup_options, StartupOptions};
@@ -58,7 +62,8 @@ pub use multitrack::{
     TrackDefinition, TrackId, TrackKind, MAX_REALTIME_TRACKS, MULTITRACK_PROJECT_SCHEMA_VERSION,
 };
 pub use pattern::{
-    parse_pattern_json, CompiledPattern, Pattern, PatternEvent, PatternScheduler, PatternStep,
+    parse_pattern_json, CompiledPattern, LockBoundary, LockTarget, ParameterLock, Pattern,
+    PatternEvent, PatternScheduler, PatternStep, StepLocks, MAX_LOCKS_PER_STEP, MAX_PATTERN_LOCKS,
     MAX_PATTERN_STEPS,
 };
 pub use pc_speaker::{pc_speaker_backend, pc_speaker_test, PcSpeakerBackend};
@@ -87,3 +92,8 @@ pub use synth::{
 };
 pub use transport::{Transport, TransportState};
 pub use voice::{VoiceAllocator, VoiceId, VoiceState};
+pub use params::{
+    ActionId, EffectLocation, EffectParamId, EffectSlotId, GlobalParamId, ParamCurve,
+    ParamDescriptor, ParameterTarget, SampleParamId, TrackParamId,
+};
+pub use variation::{InvariantKind, InvariantProfile, InvariantRule};

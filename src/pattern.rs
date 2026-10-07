@@ -1,6 +1,20 @@
+use crate::params::{
+    sample_param_descriptor, synth_param_descriptor, track_param_descriptor, EffectParamId,
+    EffectSlotId, SampleParamId, TrackParamId,
+};
+use crate::variation::InvariantProfile;
+use crate::SynthParamId;
 use serde::{Deserialize, Serialize};
 
 pub const MAX_PATTERN_STEPS: usize = 256;
+/// Maximum parameter locks on one step.
+pub const MAX_LOCKS_PER_STEP: usize = 16;
+/// Maximum parameter locks across a whole pattern; bounds the compiled pool.
+pub const MAX_PATTERN_LOCKS: usize = 512;
+/// Effect insert slots a lock may address on its own track.
+pub const MAX_LOCK_EFFECT_SLOTS: u8 = 4;
+/// Upper bound on effect parameter indices a lock may address.
+pub const MAX_LOCK_EFFECT_PARAMS: u8 = 16;
 const MAX_RATCHETS: u8 = 8;
 const MAX_MICROTIMING_FRAMES: i32 = 192_000;
 const MAX_EVENTS_PER_BLOCK: usize = 4096;
@@ -15,6 +29,72 @@ pub struct PatternStep {
     pub microtiming_frames: i32,
 }
 
+/// What a per-step parameter lock overrides on its own track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LockTarget {
+    Track(TrackParamId),
+    Synth(SynthParamId),
+    Sample(SampleParamId),
+    /// A parameter of one of this track's insert effects.
+    Effect {
+        slot: EffectSlotId,
+        param: EffectParamId,
+    },
+}
+
+impl LockTarget {
+    /// Validate that the target is lockable and the value is in range.
+    /// Effect parameter ranges are checked again when the engine resolves
+    /// the effect type; here only the address bounds are enforced.
+    pub fn validate_value(self, value: f32) -> Result<(), String> {
+        if !value.is_finite() {
+            return Err("lock value must be finite".into());
+        }
+        let descriptor = match self {
+            Self::Track(param) => track_param_descriptor(param),
+            Self::Synth(param) => synth_param_descriptor(param),
+            Self::Sample(param) => sample_param_descriptor(param),
+            Self::Effect { slot, param } => {
+                if slot.0 >= MAX_LOCK_EFFECT_SLOTS {
+                    return Err(format!(
+                        "effect lock slot {} exceeds {} insert slots",
+                        slot.0, MAX_LOCK_EFFECT_SLOTS
+                    ));
+                }
+                if param.0 >= MAX_LOCK_EFFECT_PARAMS {
+                    return Err(format!("effect lock parameter {} is out of range", param.0));
+                }
+                return Ok(());
+            }
+        };
+        if !descriptor.lockable {
+            return Err(format!("parameter {} is not lockable", descriptor.name));
+        }
+        if !(descriptor.min..=descriptor.max).contains(&value) {
+            return Err(format!(
+                "lock value {value} for {} must be between {} and {}",
+                descriptor.name, descriptor.min, descriptor.max
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ParameterLock {
+    pub target: LockTarget,
+    pub value: f32,
+}
+
+/// Locks attached to one zero-based step. A step whose `steps` entry is
+/// `None` but has locks is a trigless lock step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StepLocks {
+    pub step: u16,
+    pub locks: Vec<ParameterLock>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pattern {
     pub name: String,
@@ -22,6 +102,10 @@ pub struct Pattern {
     pub swing: f32,
     pub channel: u8,
     pub steps: Vec<Option<PatternStep>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locks: Vec<StepLocks>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invariants: Option<InvariantProfile>,
 }
 
 impl Pattern {
@@ -38,6 +122,8 @@ impl Pattern {
             swing,
             channel,
             steps,
+            locks: Vec::new(),
+            invariants: None,
         };
         pattern.validate()?;
         Ok(pattern)
@@ -85,7 +171,69 @@ impl Pattern {
                 ));
             }
         }
+        self.validate_locks()?;
+        if let Some(profile) = &self.invariants {
+            profile.validate(self.steps.len())?;
+        }
         Ok(())
+    }
+
+    fn validate_locks(&self) -> Result<(), String> {
+        let mut total = 0_usize;
+        let mut seen_steps = std::collections::HashSet::new();
+        for entry in &self.locks {
+            let index = usize::from(entry.step);
+            if index >= self.steps.len() {
+                return Err(format!("locks reference step {index} beyond pattern length"));
+            }
+            if !seen_steps.insert(entry.step) {
+                return Err(format!("step {index} has more than one lock list"));
+            }
+            if entry.locks.len() > MAX_LOCKS_PER_STEP {
+                return Err(format!(
+                    "step {index} has {} locks; the maximum is {MAX_LOCKS_PER_STEP}",
+                    entry.locks.len()
+                ));
+            }
+            for (position, lock) in entry.locks.iter().enumerate() {
+                lock.target
+                    .validate_value(lock.value)
+                    .map_err(|error| format!("step {index} lock: {error}"))?;
+                if entry.locks[..position]
+                    .iter()
+                    .any(|other| other.target == lock.target)
+                {
+                    return Err(format!("step {index} locks the same target twice"));
+                }
+            }
+            total += entry.locks.len();
+        }
+        if total > MAX_PATTERN_LOCKS {
+            return Err(format!(
+                "pattern has {total} locks; the maximum is {MAX_PATTERN_LOCKS}"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Locks for a zero-based step, empty when none.
+    pub fn step_locks(&self, step: usize) -> &[ParameterLock] {
+        self.locks
+            .iter()
+            .find(|entry| usize::from(entry.step) == step)
+            .map_or(&[], |entry| entry.locks.as_slice())
+    }
+
+    /// Replace a step's locks, dropping the entry when empty.
+    pub fn set_step_locks(&mut self, step: usize, locks: Vec<ParameterLock>) {
+        self.locks.retain(|entry| usize::from(entry.step) != step);
+        if !locks.is_empty() {
+            self.locks.push(StepLocks {
+                step: step as u16,
+                locks,
+            });
+            self.locks.sort_by_key(|entry| entry.step);
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -97,6 +245,11 @@ impl Pattern {
     }
 }
 
+const EMPTY_LOCK: ParameterLock = ParameterLock {
+    target: LockTarget::Track(TrackParamId::Gain),
+    value: 0.0,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CompiledPattern {
     seed: u64,
@@ -104,6 +257,10 @@ pub struct CompiledPattern {
     channel: u8,
     len: u16,
     steps: [Option<PatternStep>; MAX_PATTERN_STEPS],
+    /// (start, len) into `lock_pool` per step.
+    lock_ranges: [(u16, u8); MAX_PATTERN_STEPS],
+    lock_pool: [ParameterLock; MAX_PATTERN_LOCKS],
+    lock_count: u16,
 }
 
 impl CompiledPattern {
@@ -111,6 +268,17 @@ impl CompiledPattern {
         pattern.validate()?;
         let mut steps = [None; MAX_PATTERN_STEPS];
         steps[..pattern.steps.len()].copy_from_slice(&pattern.steps);
+        let mut lock_ranges = [(0_u16, 0_u8); MAX_PATTERN_STEPS];
+        let mut lock_pool = [EMPTY_LOCK; MAX_PATTERN_LOCKS];
+        let mut lock_count = 0_usize;
+        for entry in &pattern.locks {
+            let start = lock_count;
+            for lock in &entry.locks {
+                lock_pool[lock_count] = *lock;
+                lock_count += 1;
+            }
+            lock_ranges[usize::from(entry.step)] = (start as u16, entry.locks.len() as u8);
+        }
 
         Ok(Self {
             seed: pattern.seed,
@@ -118,7 +286,33 @@ impl CompiledPattern {
             channel: pattern.channel,
             len: pattern.steps.len() as u16,
             steps,
+            lock_ranges,
+            lock_pool,
+            lock_count: lock_count as u16,
         })
+    }
+
+    pub fn has_locks(&self) -> bool {
+        self.lock_count > 0
+    }
+
+    /// Locks compiled for a zero-based step.
+    pub fn step_locks(&self, step: usize) -> &[ParameterLock] {
+        match self.lock_ranges.get(step) {
+            Some(&(start, len)) if len > 0 => {
+                let start = usize::from(start);
+                &self.lock_pool[start..start + usize::from(len)]
+            }
+            _ => &[],
+        }
+    }
+
+    pub fn swing(&self) -> f32 {
+        self.swing
+    }
+
+    pub fn seed(&self) -> u64 {
+        self.seed
     }
 
     pub fn len(&self) -> usize {
@@ -151,6 +345,15 @@ pub struct PatternEvent {
     pub duration_frames: u32,
     pub step_index: u16,
     pub ratchet_index: u8,
+}
+
+/// A step boundary for parameter-lock ownership (see
+/// [`PatternScheduler::schedule_lock_boundaries_into`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LockBoundary {
+    pub absolute_frame: u64,
+    pub step_index: u16,
+    pub triggered: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -319,6 +522,66 @@ impl PatternScheduler {
                 event.note,
             )
         });
+    }
+
+    /// Step boundaries used for parameter-lock ownership: one per grid step,
+    /// at the step's swung (and, for active steps, microtimed) start frame.
+    /// `triggered` carries the same deterministic probability decision used
+    /// for notes, so probability gates trigger and locks together.
+    pub fn schedule_lock_boundaries_into(
+        &self,
+        pattern: &CompiledPattern,
+        block_start_frame: u64,
+        block_frames: u32,
+        boundaries: &mut Vec<LockBoundary>,
+    ) {
+        boundaries.clear();
+        if block_frames == 0 || pattern.is_empty() || !pattern.has_locks() {
+            return;
+        }
+        let steps = pattern.steps();
+        let frames_per_step = self.frames_per_step();
+        let loop_frames = frames_per_step * steps.len() as f64;
+        let block_end = block_start_frame.saturating_add(u64::from(block_frames));
+        let first_loop = ((block_start_frame as f64 / loop_frames).floor() as i64 - 1).max(0) as u64;
+        let last_loop = ((block_end as f64 / loop_frames).floor() as i64 + 1).max(0) as u64;
+        'loops: for loop_index in first_loop..=last_loop {
+            for (step_index, step) in steps.iter().enumerate() {
+                let global_step = loop_index
+                    .saturating_mul(steps.len() as u64)
+                    .saturating_add(step_index as u64);
+                let base = (global_step as f64 * frames_per_step).round() as i128;
+                let swing = if step_index % 2 == 1 {
+                    (frames_per_step * pattern.swing as f64).round() as i128
+                } else {
+                    0
+                };
+                let micro = step.map_or(0, |step| step.microtiming_frames as i128);
+                let absolute = base + swing + micro;
+                if absolute < 0 {
+                    continue;
+                }
+                let absolute = absolute as u64;
+                if absolute < block_start_frame || absolute >= block_end {
+                    continue;
+                }
+                if boundaries.len() >= MAX_EVENTS_PER_BLOCK {
+                    break 'loops;
+                }
+                let triggered = match step {
+                    Some(step) => {
+                        self.step_triggers(pattern.seed, loop_index, step_index, step.probability)
+                    }
+                    None => true,
+                };
+                boundaries.push(LockBoundary {
+                    absolute_frame: absolute,
+                    step_index: step_index as u16,
+                    triggered,
+                });
+            }
+        }
+        boundaries.sort_by_key(|boundary| (boundary.absolute_frame, boundary.step_index));
     }
 
     fn step_triggers(

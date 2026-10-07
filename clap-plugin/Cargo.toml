@@ -1,0 +1,13 @@
+[package]
+name = "shelloop-clap"
+version = "0.1.0-beta.1"
+edition = "2021"
+description = "SHELLOOP synthesizer and step sequencer as a CLAP instrument plugin"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+shelloop = { path = ".." }
