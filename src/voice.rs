@@ -165,6 +165,28 @@ impl VoiceAllocator {
         released
     }
 
+    pub fn release_sustain_into(&mut self, channel: u8, released_ids: &mut Vec<VoiceId>) -> usize {
+        released_ids.clear();
+        if channel > 15 {
+            return 0;
+        }
+
+        self.sustain[channel as usize] = false;
+        let mut released = 0;
+        for voice in &mut self.voices {
+            if voice.active && voice.channel == channel && !voice.key_held && voice.sustained {
+                let id = voice.id;
+                voice.active = false;
+                voice.sustained = false;
+                if released_ids.len() < released_ids.capacity() {
+                    released_ids.push(id);
+                }
+                released += 1;
+            }
+        }
+        released
+    }
+
     pub fn panic(&mut self) -> usize {
         let active = self.active_count();
         for voice in &mut self.voices {

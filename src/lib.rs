@@ -4,6 +4,8 @@ pub mod command;
 pub mod editor;
 pub mod editor_command;
 pub mod engine;
+pub mod envelope;
+pub mod filter;
 pub mod keyboard;
 pub mod midi;
 pub mod midi_io;
@@ -39,6 +41,8 @@ pub use editor_command::{
     parse_pattern_edit_command, EditOutcome, PatternEditCommand, ProjectPatternEditors, StepEdit,
 };
 pub use engine::{midi_note_hz, EngineCommand, RealtimeSynth};
+pub use envelope::{AdsrEnvelope, AdsrParams, EnvelopeStage};
+pub use filter::{clamp_cutoff, max_cutoff, FilterMode, FilterParams, StateVariableFilter};
 pub use keyboard::{map_performance_key, shift_octave, PerformanceKey};
 pub use midi::{decode_message, MidiEvent, MidiPerformanceState};
 #[cfg(feature = "midi")]
@@ -69,6 +73,9 @@ pub use runtime::engine_command_from_midi;
 pub use runtime::run_realtime_session;
 pub use scheduler::{ScheduledEvent, Scheduler, StepEvent};
 pub use sequencer::LiveSequencer;
-pub use synth::{Oscillator, SynthVoice};
+pub use synth::{
+    parse_synth_parameter_command, CompiledSynthPatch, Oscillator, SynthParamId, SynthParamValue,
+    SynthPatch, SynthVoice,
+};
 pub use transport::{Transport, TransportState};
 pub use voice::{VoiceAllocator, VoiceId, VoiceState};

@@ -116,3 +116,41 @@ Add DSP property tests where practical: finite input plus valid parameters must 
 ## Completion criteria
 
 Every synth track can load an independent patch, all parameters are addressable by stable IDs, patches can be changed without restarting audio, and CI proves stable finite behavior across supported sample rates. Hardware QA checks clicks, resonance behavior, long releases and CPU use at maximum polyphony.
+
+## Implementation status (2026-10-06)
+
+Implemented: deterministic ADSR and release tails, oscillator/tuning/pulse width,
+state-variable filter and envelope modulation, schema-v2 per-track patch
+persistence and startup wiring, and live parameter controls. Legacy projects
+without patches retain the original saw sound. Patch objects reject unknown
+fields and validate ranges; construction revalidates at the device sample rate.
+`projects/example-synth-patches.json` demonstrates three independent patches.
+
+All 19 `SynthParamId` entries dispatch through typed `SynthParamValue` values and
+atomic `SynthPatch::with_parameter` validation. `CompiledSynthPatch` captures the
+device rate, prepared continuous targets and a 5 ms smoothing duration off the
+audio thread. Per-track application rejects missing IDs/rate mismatches without
+allocating. The project `:` prompt accepts `synth <parameter> <value>` for the
+selected track, delivering prepared patches through a bounded 16-slot queue with
+a two-updates-per-sample consumption limit. Delivery failure preserves the
+control snapshot.
+
+Tuning, pulse width, cutoff, resonance, key tracking, filter envelope amount and
+gain are smoothed. Held notes preserve phase and ADSR state, including release
+tails. Envelope timing edits affect subsequent stages; in-progress timed ramps
+finish at their original duration and sustain edits apply immediately. Newly
+triggered/stolen voices start at the latest patch targets. Oscillator and filter
+mode switches are immediate and still need subjective click QA.
+
+Remaining work: preset directory management, saving live control snapshots,
+physical audio/CPU QA, and integration with later MIDI-learn/TUI/parameter-lock
+specs. Automated checks do not close the hardware acceptance gate.
+
+Linux stable Rust passed formatting, 140 default tests, 141 all-feature tests,
+strict Clippy for both configurations, and the optimized all-feature build.
+New regressions cover all parameter dispatch paths, typed/range rejection,
+5 ms gain smoothing, held-note retuning, release-tail preservation, track
+isolation, rate mismatches, full/disconnected queue handling and finite bounded
+filter modulation at 32/44.1/48/96 kHz. The preceding patch-persistence commit
+`03a192b` passed all Windows/Linux CI jobs. CI must validate the new live-control
+head before these changes are considered validated on Windows.
