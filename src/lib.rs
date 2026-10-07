@@ -18,6 +18,7 @@ pub mod project;
 pub mod quantize;
 pub mod recording;
 pub mod runtime;
+pub mod sample;
 pub mod scheduler;
 pub mod scope;
 pub mod sequencer;
@@ -53,8 +54,8 @@ pub use midi_io::{
 };
 pub use mixer::{protect_master, ChannelStrip, SmoothedParam};
 pub use multitrack::{
-    EngineProjectSnapshot, MultiTrackEngine, MultiTrackProject, TrackCommand, TrackDefinition,
-    TrackId, TrackKind, MAX_REALTIME_TRACKS, MULTITRACK_PROJECT_SCHEMA_VERSION,
+    EngineProjectSnapshot, MultiTrackEngine, MultiTrackProject, SampleContext, TrackCommand,
+    TrackDefinition, TrackId, TrackKind, MAX_REALTIME_TRACKS, MULTITRACK_PROJECT_SCHEMA_VERSION,
 };
 pub use pattern::{
     parse_pattern_json, CompiledPattern, Pattern, PatternEvent, PatternScheduler, PatternStep,
@@ -72,6 +73,11 @@ pub use recording::{
 pub use runtime::engine_command_from_midi;
 #[cfg(all(feature = "realtime-audio", feature = "terminal-ui"))]
 pub use runtime::run_realtime_session;
+pub use sample::{
+    decode_wav_file, decode_wav_reader, CompiledSamplePlayback, DecodedWav, RealtimeSampler,
+    SampleAsset, SampleAssetBank, SampleAssetId, SampleMode, SampleSettings, StereoFrame,
+    DEFAULT_SAMPLE_MEMORY_BUDGET,
+};
 pub use scheduler::{ScheduledEvent, Scheduler, StepEvent};
 pub use scope::{PanelLayout, PeakHistory, ScopeTap, WaveformStyle, SCOPE_CAPACITY};
 pub use sequencer::LiveSequencer;
