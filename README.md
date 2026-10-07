@@ -26,6 +26,7 @@ Development is active on `continuation/rebuild-baseline` in draft PR #1. The det
 - Experimental PC-speaker probe: Linux console speaker ioctl and Windows Beep compatibility mode
 - Bounded recording queues and master-output protection
 - Optional live ASCII waveform (oscilloscope or scrolling peak history), toggled with Tab
+- WAV sample tracks (spec 04): one-shot, gate and loop playback, reverse, pitch, fades, bounded voices and memory budget
 - Windows/Linux all-feature compile, test, strict Clippy and optimized-release CI gates
 - `v0.01-beta` packaging workflow for Windows x86-64 and Linux x86-64 with SHA-256 checksums
 
@@ -79,7 +80,7 @@ Play the included example pattern at 138 BPM:
 shelloop --pattern patterns/example-bassline.json --bpm 138 --steps-per-beat 4
 ```
 
-Run the included three-track example project:
+Run the included three-track example project (more examples, including WAV drum tracks, are in `projects/`):
 
 ```bash
 shelloop --project projects/example-multitrack.json --no-midi
@@ -754,3 +755,49 @@ Live commands affect session memory. Store reusable patches in the project JSON.
 Invalid values and a full/disconnected patch queue leave the control patch intact.
 The queue holds at most 16 prepared patches and the renderer applies at most two
 per sample. Patch application rejects missing tracks and mismatched sample rates.
+
+### WAV sample tracks
+
+Projects can mix synth tracks with sample tracks that play WAV files from the
+same patterns. Try the included drum kit over a synth bass:
+
+```sh
+shelloop --project projects/example-samples.json --no-midi --waveform
+```
+
+A sample track uses `"kind": "sample"` and a `sample` object. Only `path` and
+`mode` are required; the path is relative to the project file's folder:
+
+```json
+{
+  "id": 2, "name": "Kick", "kind": "sample",
+  "gain": 0.9, "pan": 0.0, "muted": false, "soloed": false,
+  "pattern": { "name": "Four On Floor", "seed": 11, "swing": 0.0, "channel": 9, "steps": [ ... ] },
+  "sample": { "path": "samples/kick.wav", "mode": "one_shot" }
+}
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `path` | required | WAV file, relative to the project folder unless absolute |
+| `mode` | required | `one_shot` (plays to the end, ignores note-off), `gate` (stops on note-off), `loop` (loops while held) |
+| `start`, `end` | `0.0`, `1.0` | Play region as a fraction of the file length |
+| `loop_start`, `loop_end` | `0.0`, `1.0` | Loop region for `loop` mode; must sit inside `start`..`end` |
+| `gain` | `1.0` | 0.0-2.0, multiplied by step velocity |
+| `pan` | `0.0` | -1.0 (left) to 1.0 (right) balance, on top of the track pan |
+| `pitch_semitones`, `fine_cents` | `0` | Transpose, -48..48 semitones and -100..100 cents |
+| `root_note` | none | If set, pattern notes play chromatically relative to this MIDI note; if not, every note plays at the sample's own pitch (what drums want) |
+| `reverse` | `false` | Play backwards |
+| `attack_secs`, `release_secs` | `0.0`, `0.01` | Fade-in, and fade-out after note-off in gate/loop mode (0-1 s) |
+| `voices` | `16` | Simultaneous hits, 1-64. When full, the oldest released voice is reused first, then the oldest voice |
+
+Supported files: mono or stereo WAV, 8/16/24/32-bit integer PCM or 32-bit
+float, 1-384 kHz. Mono is played on both channels. Files are decoded once,
+before audio starts, and resampled to the device rate with linear
+interpolation. Unknown fields are rejected, so typos are caught.
+
+If any sample is missing, unreadable or unsupported, Shelloop lists every
+problem file and exits before opening the audio device. Decoded audio is
+limited to 512 MiB per project; the budget is checked against the WAV header
+before decoding, so an oversized file is refused without filling memory.
+`synth ...` live edit commands apply to synth tracks only.

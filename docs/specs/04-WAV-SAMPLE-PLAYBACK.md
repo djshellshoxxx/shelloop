@@ -1,5 +1,20 @@
 # Spec 04 — WAV Sample Playback
 
+Status: implemented in `src/sample.rs`, wired through `src/multitrack.rs` and
+`src/runtime.rs`, covered by `tests/wav_sample_playback.rs`. Decisions taken
+where the spec left a choice:
+
+- Positions (`start`, `end`, `loop_start`, `loop_end`) are normalized 0.0-1.0,
+  so a project survives replacing a file with one of a different length.
+- Pattern notes are ignored unless `root_note` is set, so drum patterns written
+  with GM note numbers do not transpose one-shots by octaves.
+- Files with more than two channels are rejected rather than downmixed.
+- Missing or invalid files use the default fail-before-activation load mode;
+  no "mark track unavailable" mode is exposed yet.
+- Sustain pedal messages are ignored by sample tracks.
+- Stereo samples use a balance law (centre is unity) rather than the mono
+  constant-power pan used by synth tracks.
+
 ## Objective
 
 Add bounded in-memory WAV sample instruments for drum hits, one-shots and loops without filesystem access in the audio callback.
