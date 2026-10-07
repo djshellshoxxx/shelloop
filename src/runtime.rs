@@ -46,8 +46,9 @@ mod live {
         pc_speaker_backend, protect_master, shift_octave, spawn_realtime_recording,
         CompiledPatternRevision, CompiledSynthPatch, EngineCommand, LiveSequencer,
         MultiTrackEngine, MultiTrackProject, Oscillator, PanelLayout, PeakHistory, PerformanceKey,
-        PerformanceMix, ProjectPatternEditors, QuantizedChange, RealtimeSynth, ScopeTap,
-        StartupOptions, SynthPatch, TrackId, WavRecordingConfig, WaveformStyle, XyPoint,
+        PerformanceMix, ProjectPatternEditors, QuantizedChange, RealtimeSynth, SampleContext,
+        ScopeTap, StartupOptions, SynthPatch, TrackId, TrackKind, WavRecordingConfig,
+        WaveformStyle, XyPoint, DEFAULT_SAMPLE_MEMORY_BUDGET,
     };
     use crossbeam_channel::{bounded, Sender};
     use crossterm::event::{
@@ -487,6 +488,23 @@ mod live {
                 })?),
                 None => None,
             };
+        let project_dir = options
+            .project_path
+            .as_deref()
+            .and_then(|path| std::path::Path::new(path).parent())
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
+        // Decode every sample before audio starts; a missing or invalid file
+        // stops startup with a report of all of them.
+        let sample_assets = project
+            .as_ref()
+            .map(|project| project.load_sample_assets(&project_dir, DEFAULT_SAMPLE_MEMORY_BUDGET))
+            .transpose()
+            .map_err(|error| format!("failed to load project samples: {error}"))?;
+        let sample_memory = sample_assets
+            .as_ref()
+            .filter(|bank| !bank.is_empty())
+            .map(|bank| (bank.len(), bank.used_bytes()));
         let project_track_count = project.as_ref().map(|project| project.tracks.len());
         let project_clock = project
             .as_ref()
@@ -509,6 +527,7 @@ mod live {
                 project
                     .tracks
                     .iter()
+                    .filter(|track| track.kind == TrackKind::Synth)
                     .map(|track| {
                         (
                             track.id,
@@ -564,16 +583,23 @@ mod live {
                 let mut performance_synth =
                     RealtimeSynth::new(sample_rate as f32, Oscillator::Saw, polyphony)?;
                 let mut multitrack = match project {
-                    Some(project) => Some(MultiTrackEngine::new(
+                    Some(project) => Some(MultiTrackEngine::with_sample_assets(
                         sample_rate,
                         project.bpm,
                         u32::from(project.steps_per_beat),
                         project.seed,
                         polyphony,
                         project.tracks,
+                        sample_assets.as_ref().map(|assets| SampleContext {
+                            assets,
+                            base_dir: &project_dir,
+                        }),
                     )?),
                     None => None,
                 };
+                // Compiled playback holds its own references to the decoded
+                // frames; the bank itself is not needed by the audio thread.
+                drop(sample_assets);
                 let mut sequenced = match pattern {
                     Some(pattern) => Some((
                         LiveSequencer::new(
@@ -723,6 +749,12 @@ mod live {
             (options.project_path.as_deref(), project_track_count)
         {
             println!("Project: {path} ({track_count} tracks)");
+            if let Some((count, bytes)) = sample_memory {
+                println!(
+                    "Samples: {count} file(s) decoded, {:.1} MiB in memory",
+                    bytes as f64 / (1024.0 * 1024.0)
+                );
+            }
             println!("Sequencer: Space play/pause all tracks, Backspace restart all tracks");
             println!("Live editor: press : for track/step/length/swing/rotate/undo/redo commands");
         }
@@ -914,7 +946,7 @@ mod live {
                                             audio.sample_rate(),
                                             &synth_patch_sender,
                                         ),
-                                        None => Err("selected track has no synth patch".into()),
+                                        None => Err("selected track is not a synth track".into()),
                                     }
                                 } else {
                                     queue_live_edit(
