@@ -98,6 +98,31 @@ impl ChannelStrip {
         let right = protect_master(scaled * angle.sin());
         (left, right)
     }
+
+    /// Stereo sources use a balance law instead of the mono constant-power
+    /// pan: centre leaves both channels untouched, and panning attenuates the
+    /// opposite side only, so a stereo image is never folded or boosted.
+    pub fn process_stereo(&self, left: f32, right: f32) -> (f32, f32) {
+        if self.muted || !left.is_finite() || !right.is_finite() {
+            return (0.0, 0.0);
+        }
+        let gain = if self.gain.is_finite() {
+            self.gain.max(0.0)
+        } else {
+            0.0
+        };
+        let pan = if self.pan.is_finite() {
+            self.pan.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        let left_gain = (1.0 - pan).min(1.0);
+        let right_gain = (1.0 + pan).min(1.0);
+        (
+            protect_master(left * gain * left_gain),
+            protect_master(right * gain * right_gain),
+        )
+    }
 }
 
 pub fn protect_master(sample: f32) -> f32 {
