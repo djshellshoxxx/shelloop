@@ -21,6 +21,7 @@ pub mod performance;
 pub mod project;
 pub mod quantize;
 pub mod recording;
+pub mod resample;
 pub mod runtime;
 pub mod sample;
 pub mod scenes;
@@ -40,6 +41,14 @@ pub use audio::{
 #[cfg(feature = "realtime-audio")]
 pub use audio::{
     list_output_device_names, open_output_stream, open_stereo_output_stream, AudioOutput,
+};
+pub use blackbox::{
+    new_black_box_session_id, quick_save_file_stem, spawn_black_box, BlackBoxConfig,
+    BlackBoxHandle, BlackBoxProducer, BlackBoxStatus, ControlEvent, ControlEventKind, EventSource,
+    SaveOutcome, SaveTarget, SavedTake, SessionMetadata, BLACK_BOX_BLOCK_FRAMES,
+    BLACK_BOX_SIDECAR_SCHEMA, BLACK_BOX_STALL_TOLERANCE_MS, DEFAULT_BLACK_BOX_DIRECTORY,
+    DEFAULT_BLACK_BOX_MEMORY_BUDGET, MAX_BLACK_BOX_EVENTS, MAX_BLACK_BOX_EVENT_TEXT_BYTES,
+    MAX_BLACK_BOX_SECONDS, MAX_PENDING_BLACK_BOX_SAVES, MIN_BLACK_BOX_SECONDS,
 };
 pub use command::{parse_command, Command};
 pub use editor::{
@@ -94,6 +103,12 @@ pub use recording::{
     spawn_realtime_recording, RealtimeRecordingBridge, RealtimeRecordingFinalizer,
     RealtimeRecordingProducer, RecordingQueue, RecordingSummary, RecordingWriter,
     WavRecordingConfig,
+};
+pub use resample::{
+    capture_channel, normalize_wav_file, parse_resample_command, resolve_capture_frames,
+    CaptureClock, CaptureControl, CaptureId, CaptureReturn, CaptureTap, DestinationSpec,
+    FinishedCapture, NormalizeOutcome, ResampleCommand, ResampleDestination, ResampleRequest,
+    ResampleSource, ResampleSourceSpec, ResampleState, ResampleStop, Resampler,
 };
 pub use runtime::engine_command_from_midi;
 #[cfg(all(feature = "realtime-audio", feature = "terminal-ui"))]
