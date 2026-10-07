@@ -30,6 +30,7 @@ pub mod scope;
 pub mod sequencer;
 pub mod synth;
 pub mod transport;
+pub mod tui;
 pub mod variation;
 pub mod voice;
 
@@ -130,6 +131,7 @@ pub use synth::{
     SynthPatch, SynthVoice,
 };
 pub use transport::{Transport, TransportState};
+pub use tui::{route_input, TuiLayout, TuiSnapshot, UiAction, UiInput, UiMode};
 pub use variation::{
     apply_lock_command, derive_seed, diff_patterns, evaluate_invariants, format_locks,
     format_proposal, generate_variation, parse_variation_command, pattern_hash, FieldChange,
