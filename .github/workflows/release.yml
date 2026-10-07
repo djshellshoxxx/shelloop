@@ -44,7 +44,7 @@ jobs:
           mkdir -p dist/shelloop-v0.01-beta-linux-x86_64
           cp target/release/shelloop dist/shelloop-v0.01-beta-linux-x86_64/
           cp README.md LICENSE dist/shelloop-v0.01-beta-linux-x86_64/
-          cp -r patterns dist/shelloop-v0.01-beta-linux-x86_64/
+          cp -r patterns projects dist/shelloop-v0.01-beta-linux-x86_64/
           tar -C dist -czf dist/${{ matrix.archive }} shelloop-v0.01-beta-linux-x86_64
           cd dist
           sha256sum ${{ matrix.archive }} > ${{ matrix.archive }}.sha256
@@ -59,6 +59,7 @@ jobs:
           Copy-Item 'README.md' $package
           Copy-Item 'LICENSE' $package
           Copy-Item 'patterns' $package -Recurse
+          Copy-Item 'projects' $package -Recurse
           Compress-Archive -Path "$package/*" -DestinationPath "dist/${{ matrix.archive }}" -Force
           $hash = (Get-FileHash "dist/${{ matrix.archive }}" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  ${{ matrix.archive }}" | Set-Content -NoNewline "dist/${{ matrix.archive }}.sha256"

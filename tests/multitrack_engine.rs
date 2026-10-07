@@ -28,6 +28,7 @@ fn synth_track(id: u16, name: &str, note: u8, steps: usize) -> TrackDefinition {
         soloed: false,
         pattern: pattern(name, u64::from(id), note, steps),
         synth_patch: None,
+        sample: None,
     }
 }
 

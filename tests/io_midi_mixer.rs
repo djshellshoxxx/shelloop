@@ -128,3 +128,31 @@ fn smoothed_parameter_reaches_target_without_overshoot() {
     assert_eq!(value.next_value(), 1.0);
     assert_eq!(value.target(), 1.0);
 }
+
+#[test]
+fn stereo_balance_keeps_centre_unity_and_only_attenuates_the_far_side() {
+    use shelloop::ChannelStrip;
+    let strip = |pan: f32| ChannelStrip {
+        gain: 1.0,
+        pan,
+        muted: false,
+    };
+    let (left, right) = strip(0.0).process_stereo(0.3, -0.2);
+    assert!((left - 0.3_f32.tanh()).abs() < 1e-6);
+    assert!((right - (-0.2_f32).tanh()).abs() < 1e-6);
+
+    let (left, right) = strip(-1.0).process_stereo(0.3, 0.3);
+    assert!((left - 0.3_f32.tanh()).abs() < 1e-6);
+    assert_eq!(right, 0.0);
+
+    let (left, right) = strip(0.5).process_stereo(0.3, 0.3);
+    assert!((left - 0.15_f32.tanh()).abs() < 1e-6);
+    assert!((right - 0.3_f32.tanh()).abs() < 1e-6);
+
+    assert_eq!(strip(0.0).process_stereo(f32::NAN, 0.1), (0.0, 0.0));
+    let muted = ChannelStrip {
+        muted: true,
+        ..strip(0.0)
+    };
+    assert_eq!(muted.process_stereo(0.5, 0.5), (0.0, 0.0));
+}

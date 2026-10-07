@@ -25,10 +25,23 @@ def verify(archive):
                 bundle.extractall(root, filter="data")
             binary = root / archive.name.removesuffix(".tar.gz") / "shelloop"
         package = binary.parent
-        for name in ("README.md", "LICENSE", "patterns/example-bassline.json"):
+        resources = (
+            "README.md",
+            "LICENSE",
+            "patterns/example-bassline.json",
+            "projects/example-multitrack.json",
+            "projects/example-synth-patches.json",
+            "projects/example-samples.json",
+            "projects/samples/kick.wav",
+            "projects/samples/snare.wav",
+            "projects/samples/hat.wav",
+        )
+        for name in resources:
             if not (package / name).is_file():
                 raise ValueError(f"missing packaged resource: {name}")
-        json.loads((package / "patterns/example-bassline.json").read_text())
+        for name in resources:
+            if name.endswith(".json"):
+                json.loads((package / name).read_text())
         result = subprocess.run([str(binary), "--help"], cwd=package,
                                 capture_output=True, text=True, timeout=15, check=True)
         if "--pattern" not in result.stdout:
