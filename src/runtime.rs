@@ -32,6 +32,10 @@ pub fn engine_command_from_midi(event: MidiEvent) -> Option<EngineCommand> {
 mod live {
     #[cfg(feature = "midi")]
     use super::engine_command_from_midi;
+    use crate::scope::{
+        draw_panel_sequence, header_line, open_panel_sequence, peak_dbfs, raw_mode_line,
+        release_panel_sequence, render_scope, reserve_panel_sequence, scope_window, trigger_start,
+    };
     #[cfg(feature = "midi")]
     use crate::{
         connect_midi_input, list_midi_input_names, select_midi_port_index, MidiPortSelector,
@@ -41,13 +45,13 @@ mod live {
         parse_pattern_edit_command, parse_pattern_json, parse_synth_parameter_command,
         pc_speaker_backend, protect_master, shift_octave, spawn_realtime_recording,
         CompiledPatternRevision, CompiledSynthPatch, EngineCommand, LiveSequencer,
-        MultiTrackEngine, MultiTrackProject, Oscillator, PerformanceKey, PerformanceMix,
-        ProjectPatternEditors, QuantizedChange, RealtimeSynth, StartupOptions, SynthPatch, TrackId,
-        WavRecordingConfig, XyPoint,
+        MultiTrackEngine, MultiTrackProject, Oscillator, PanelLayout, PeakHistory, PerformanceKey,
+        PerformanceMix, ProjectPatternEditors, QuantizedChange, RealtimeSynth, ScopeTap,
+        StartupOptions, SynthPatch, TrackId, WavRecordingConfig, WaveformStyle, XyPoint,
     };
     use crossbeam_channel::{bounded, Sender};
     use crossterm::event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
         KeyboardEnhancementFlags, MouseButton, MouseEventKind, PopKeyboardEnhancementFlags,
         PushKeyboardEnhancementFlags,
     };
@@ -81,6 +85,7 @@ mod live {
     const KEYBOARD_VELOCITY: f32 = 0.8;
     const FALLBACK_INITIAL_HOLD: Duration = Duration::from_millis(650);
     const FALLBACK_REPEAT_GRACE: Duration = Duration::from_millis(180);
+    const WAVEFORM_REDRAW_INTERVAL: Duration = Duration::from_millis(33);
 
     #[derive(Debug, Clone, Copy)]
     enum SequencerControl {
@@ -154,6 +159,184 @@ mod live {
                 let _ = execute!(stdout, PopKeyboardEnhancementFlags);
             }
             let _ = disable_raw_mode();
+        }
+    }
+
+    fn write_terminal(text: &str) -> Result<(), String> {
+        let mut stdout = io::stdout().lock();
+        stdout
+            .write_all(text.as_bytes())
+            .and_then(|()| stdout.flush())
+            .map_err(|error| format!("failed to write to terminal: {error}"))
+    }
+
+    /// Print a status line while the terminal is in raw mode, where a bare
+    /// `\n` would leave the next line starting under the end of this one.
+    fn session_line(text: &str) {
+        let _ = write_terminal(&raw_mode_line(text));
+    }
+
+    fn session_error_line(text: &str) {
+        let mut stderr = io::stderr().lock();
+        let _ = stderr
+            .write_all(raw_mode_line(text).as_bytes())
+            .and_then(|()| stderr.flush());
+    }
+
+    /// Optional ASCII waveform pinned to the bottom of the terminal. Normal
+    /// status output keeps scrolling in the rows above it.
+    struct WaveformPanel {
+        tap: Arc<ScopeTap>,
+        style: WaveformStyle,
+        sample_rate: u32,
+        layout: Option<PanelLayout>,
+        history: PeakHistory,
+        cursor: u64,
+        scratch: Vec<f32>,
+        last_draw: Instant,
+    }
+
+    impl WaveformPanel {
+        fn new(tap: Arc<ScopeTap>, style: WaveformStyle, sample_rate: u32) -> Self {
+            Self {
+                tap,
+                style,
+                sample_rate,
+                layout: None,
+                history: PeakHistory::new(1),
+                cursor: 0,
+                scratch: Vec::with_capacity(crate::SCOPE_CAPACITY),
+                last_draw: Instant::now(),
+            }
+        }
+
+        fn is_visible(&self) -> bool {
+            self.layout.is_some()
+        }
+
+        fn layout_for_current_terminal() -> Result<PanelLayout, String> {
+            #[cfg(windows)]
+            if !crossterm::ansi_support::supports_ansi() {
+                return Err("this console does not support ANSI escape sequences".into());
+            }
+            let (columns, rows) = crossterm::terminal::size()
+                .map_err(|error| format!("failed to query terminal size: {error}"))?;
+            PanelLayout::for_terminal(columns, rows).ok_or_else(|| {
+                format!(
+                    "terminal is {columns}x{rows}; the waveform needs at least {}x{}",
+                    crate::scope::MIN_TERMINAL_COLUMNS,
+                    crate::scope::MIN_TERMINAL_ROWS
+                )
+            })
+        }
+
+        fn show(&mut self) -> Result<(), String> {
+            if self.is_visible() {
+                return Ok(());
+            }
+            let layout = Self::layout_for_current_terminal()?;
+            write_terminal(&open_panel_sequence(&layout))?;
+            self.activate(layout)
+        }
+
+        fn activate(&mut self, layout: PanelLayout) -> Result<(), String> {
+            self.layout = Some(layout);
+            self.history.clear();
+            self.history.resize(usize::from(layout.columns));
+            self.cursor = self.tap.written();
+            self.tap.set_enabled(true);
+            self.draw()
+        }
+
+        fn hide(&mut self) -> Result<(), String> {
+            let Some(layout) = self.layout.take() else {
+                return Ok(());
+            };
+            self.tap.set_enabled(false);
+            write_terminal(&release_panel_sequence(&layout))
+        }
+
+        fn toggle(&mut self) -> Result<(), String> {
+            if self.is_visible() {
+                self.hide()
+            } else {
+                self.show()
+            }
+        }
+
+        fn cycle_style(&mut self) -> Result<(), String> {
+            self.style = self.style.next();
+            self.history.clear();
+            if self.is_visible() {
+                self.draw()?;
+            }
+            Ok(())
+        }
+
+        /// Rebuild the panel for a new terminal size. Old row positions are
+        /// meaningless after a resize, so the screen is cleared and the scroll
+        /// region re-established from scratch.
+        fn resize(&mut self) -> Result<(), String> {
+            if !self.is_visible() {
+                return Ok(());
+            }
+            self.layout = None;
+            write_terminal("\x1b[r\x1b[2J\x1b[H")?;
+            match Self::layout_for_current_terminal() {
+                Ok(layout) => {
+                    write_terminal(&reserve_panel_sequence(&layout))?;
+                    self.activate(layout)
+                }
+                Err(error) => {
+                    self.tap.set_enabled(false);
+                    Err(format!("waveform hidden: {error}"))
+                }
+            }
+        }
+
+        fn tick(&mut self) -> Result<(), String> {
+            if self.is_visible() && self.last_draw.elapsed() >= WAVEFORM_REDRAW_INTERVAL {
+                self.draw()?;
+            }
+            Ok(())
+        }
+
+        fn draw(&mut self) -> Result<(), String> {
+            let Some(layout) = self.layout else {
+                return Ok(());
+            };
+            self.last_draw = Instant::now();
+            let width = usize::from(layout.columns);
+            let height = layout.wave_rows();
+            let (wave, dbfs) = match self.style {
+                WaveformStyle::Scope => {
+                    let window = scope_window(self.sample_rate);
+                    self.tap.copy_latest(window * 2, &mut self.scratch);
+                    self.cursor = self.tap.written();
+                    let start = trigger_start(&self.scratch, window);
+                    let end = (start + window).min(self.scratch.len());
+                    let view = &self.scratch[start..end];
+                    (render_scope(view, width, height), peak_dbfs(view))
+                }
+                WaveformStyle::History => {
+                    self.tap.copy_since(&mut self.cursor, &mut self.scratch);
+                    self.history.push_block(&self.scratch);
+                    (
+                        self.history.render(width, height),
+                        peak_dbfs(&[self.history.latest()]),
+                    )
+                }
+            };
+            let mut lines = Vec::with_capacity(wave.len() + 1);
+            lines.push(header_line(self.style, dbfs, width));
+            lines.extend(wave);
+            write_terminal(&draw_panel_sequence(&layout, &lines))
+        }
+    }
+
+    impl Drop for WaveformPanel {
+        fn drop(&mut self) {
+            let _ = self.hide();
         }
     }
 
@@ -348,6 +531,8 @@ mod live {
             );
         let (synth_patch_sender, synth_patch_receiver) =
             bounded::<(TrackId, CompiledSynthPatch)>(SYNTH_PATCH_QUEUE_CAPACITY);
+        let scope_tap = Arc::new(ScopeTap::new());
+        let audio_scope_tap = Arc::clone(&scope_tap);
         let transport_frame = Arc::new(AtomicU64::new(0));
         let audio_transport_frame = Arc::clone(&transport_frame);
         let polyphony = options.polyphony;
@@ -490,6 +675,7 @@ mod live {
                     if let Some(recorder) = recorder.as_mut() {
                         let _ = recorder.push_sample(protect_master((left + right) * 0.5));
                     }
+                    audio_scope_tap.push((left + right) * 0.5);
                     (left, right)
                 })
             })?;
@@ -541,6 +727,7 @@ mod live {
             println!("Live editor: press : for track/step/length/swing/rotate/undo/redo commands");
         }
         println!("Keys: Z-M/Q-U notes, [ ] octave, ! panic, ~ or Esc quit");
+        println!("Waveform: Tab show/hide, Shift+Tab scope/history style");
         if let Err(error) = io::stdout().flush() {
             request_panic(&command_sender, &sequencer_sender);
             drop(audio);
@@ -562,13 +749,26 @@ mod live {
             }
         };
         if options.mouse_xy {
-            eprintln!("Mouse XY enabled: X crossfades live ↔ sequencer; Y controls overall level");
+            session_error_line(
+                "Mouse XY enabled: X crossfades live ↔ sequencer; Y controls overall level",
+            );
         }
         if !terminal.release_events_supported() {
-            eprintln!(
+            session_error_line(
                 "terminal does not expose key-release events; keyboard notes use a timed fallback. \
-                 MIDI input or a terminal supporting the kitty keyboard protocol gives better note gating"
+                 MIDI input or a terminal supporting the kitty keyboard protocol gives better note gating",
             );
+        }
+
+        let mut waveform = WaveformPanel::new(
+            Arc::clone(&scope_tap),
+            options.waveform_style,
+            audio.sample_rate(),
+        );
+        if options.waveform {
+            if let Err(error) = waveform.show() {
+                session_error_line(&format!("waveform unavailable: {error}"));
+            }
         }
 
         let mut octave = 0_i8;
@@ -582,6 +782,7 @@ mod live {
                 if let Some(error) = audio.take_error() {
                     return Err(format!("audio stream error: {error}"));
                 }
+                waveform.tick()?;
 
                 if !terminal.release_events_supported() {
                     let now = Instant::now();
@@ -634,7 +835,10 @@ mod live {
                                     if let Ok(handle) =
                                         connect_midi_input(&midi_selector, MIDI_QUEUE_CAPACITY)
                                     {
-                                        eprintln!("MIDI input connected: {}", handle.port_name());
+                                        session_error_line(&format!(
+                                            "MIDI input connected: {}",
+                                            handle.port_name()
+                                        ));
                                         midi = Some(handle);
                                     }
                                 }
@@ -675,6 +879,12 @@ mod live {
                         continue;
                     }
                     Event::Key(key_event) => key_event,
+                    Event::Resize(..) => {
+                        if let Err(error) = waveform.resize() {
+                            session_error_line(&error);
+                        }
+                        continue;
+                    }
                     _ => continue,
                 };
 
@@ -686,10 +896,10 @@ mod live {
 
                     match key_event.code {
                         KeyCode::Esc => {
-                            println!();
+                            write_terminal("\r\n")?;
                         }
                         KeyCode::Enter => {
-                            println!();
+                            write_terminal("\r\n")?;
                             if let (Some(editors), Some((project_bpm, project_steps))) =
                                 (pattern_editors.as_mut(), project_clock)
                             {
@@ -718,8 +928,10 @@ mod live {
                                     )
                                 };
                                 match result {
-                                    Ok(message) => println!("edit: {message}"),
-                                    Err(error) => eprintln!("edit error: {error}"),
+                                    Ok(message) => session_line(&format!("edit: {message}")),
+                                    Err(error) => {
+                                        session_error_line(&format!("edit error: {error}"))
+                                    }
                                 }
                             }
                         }
@@ -751,6 +963,24 @@ mod live {
 
                 if key_event.code == KeyCode::Esc && key_event.kind != KeyEventKind::Release {
                     break 'session;
+                }
+                if key_event.kind == KeyEventKind::Press {
+                    let shifted_tab = key_event.code == KeyCode::BackTab
+                        || (key_event.code == KeyCode::Tab
+                            && key_event.modifiers.contains(KeyModifiers::SHIFT));
+                    let result = if shifted_tab {
+                        Some(waveform.cycle_style())
+                    } else if key_event.code == KeyCode::Tab {
+                        Some(waveform.toggle())
+                    } else {
+                        None
+                    };
+                    if let Some(result) = result {
+                        if let Err(error) = result {
+                            session_error_line(&format!("waveform unavailable: {error}"));
+                        }
+                        continue;
+                    }
                 }
                 if key_event.code == KeyCode::Backspace
                     && key_event.kind == KeyEventKind::Press
@@ -834,6 +1064,7 @@ mod live {
         })();
 
         request_panic(&command_sender, &sequencer_sender);
+        drop(waveform);
         drop(terminal);
         drop(audio);
 
