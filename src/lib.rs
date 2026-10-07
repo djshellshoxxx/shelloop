@@ -64,6 +64,12 @@ pub use midi_io::{connect_midi_input, list_midi_input_names, MidiInputHandle};
 pub use midi_io::{
     reconnect_decision, select_midi_port_index, MidiPortSelector, ReconnectDecision,
 };
+pub use midi_learn::{
+    format_target, parse_learn_command, parse_target, ButtonMode, ConflictPolicy, LearnCommand,
+    LearnProgress, LearnState, MappedOutput, MappingCurve, MappingId, MidiControlMessage,
+    MidiLearn, MidiMapping, MidiPortMatch, MidiSource, PickupMode, TargetResolver,
+    DEFAULT_LEARN_TIMEOUT_MS, MAX_MAPPINGS,
+};
 pub use mixer::{protect_master, ChannelStrip, SmoothedParam};
 pub use multitrack::{
     ChainStatus, EngineError, EngineProjectSnapshot, LibraryPattern, MultiTrackEngine,
