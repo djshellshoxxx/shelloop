@@ -24,9 +24,9 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Test
-        run: cargo test --all-targets
+        run: cargo test --workspace --all-targets
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Preserve resolved dependency lockfile
         uses: actions/upload-artifact@v4
         with:
@@ -51,10 +51,12 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: Check all optional backends
-        run: cargo check --all-targets --features realtime-audio,midi,terminal-ui
+        run: cargo check --workspace --all-targets --features realtime-audio,midi,terminal-ui
       - name: Test all optional backends
-        run: cargo test --all-targets --features realtime-audio,midi,terminal-ui
+        run: cargo test --workspace --all-targets --features realtime-audio,midi,terminal-ui
       - name: Clippy all optional backends
-        run: cargo clippy --all-targets --features realtime-audio,midi,terminal-ui -- -D warnings
+        run: cargo clippy --workspace --all-targets --features realtime-audio,midi,terminal-ui -- -D warnings
       - name: Build optimized runtime
         run: cargo build --release --features realtime-audio,midi,terminal-ui
+      - name: Build CLAP plugin
+        run: cargo build --release -p shelloop-clap

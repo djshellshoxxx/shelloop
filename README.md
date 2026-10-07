@@ -2,7 +2,7 @@
 
 SHELLOOP is a terminal-only real-time music instrument: a live step sequencer plus a playable synthesizer designed for Windows and Linux.
 
-Development is active on `continuation/rebuild-baseline` in draft PR #1. The deterministic musical core, hardware-facing playable synth, live pattern-playback path and real-time-safe WAV recording foundation are implemented on this branch. The beta tag is still intentionally withheld pending physical audio/MIDI validation and final release verification.
+All twelve v1 specifications (`docs/specs/01`–`12`) are implemented: multitrack engine, live pattern editing, synth/filter/ADSR, WAV samples, scenes and chains, MIDI learn, effects, a full-screen terminal UI, per-step parameter locks, resampling, a retrospective performance black box and invariant-locked pattern variation. SHELLOOP also ships as a **CLAP instrument plugin** (`clap-plugin/`). Release builds are published on the GitHub Releases page as a Windows `.exe`, a Linux binary and CLAP plugins for both. Physical audio-hardware latency and MIDI-controller validation is tracked separately in `docs/HARDWARE-ACCEPTANCE.md`.
 
 ## Implemented
 
@@ -27,8 +27,17 @@ Development is active on `continuation/rebuild-baseline` in draft PR #1. The det
 - Bounded recording queues and master-output protection
 - Optional live ASCII waveform (oscilloscope or scrolling peak history), toggled with Tab
 - WAV sample tracks (spec 04): one-shot, gate and loop playback, reverse, pitch, fades, bounded voices and memory budget
+- Scenes and chains (spec 05): per-track pattern libraries, bar-quantized scene launch on one shared frame, looping bar-counted chains
+- MIDI learn (spec 06): learn any mixer/synth/effect parameter or transport/scene action, pickup/scale/jump, toggle/momentary/trigger buttons, persisted per project
+- Effects (spec 07): saturation, tempo-syncable delay and reverb as 4 inserts per track, 2 send buses and 4 master inserts, all preallocated
+- Full-screen workstation (spec 08): `--tui` with transport, tracks, pattern grid, inspector, XY pad, command line, MIDI-learn and help modes
+- Per-step parameter locks (spec 09): trigless locks, base/effective separation, restore at the next step, stop/panic restore
+- Internal resampling (spec 10): sample-accurate master or track capture to a new sample track or replacing a track's sample
+- Performance black box (spec 11): `--black-box-seconds` keeps the last 1–120 s; F8 saves a WAV plus JSON event sidecar
+- Invariant-locked variation (spec 12): seeded, reproducible pattern variations that keep locked anchors, rhythm, contour, count or range
+- CLAP instrument plugin: polyphonic synth with 15 automatable parameters, host-synced sequencer and saved state
 - Windows/Linux all-feature compile, test, strict Clippy and optimized-release CI gates
-- `v0.01-beta` packaging workflow for Windows x86-64 and Linux x86-64 with SHA-256 checksums
+- Tag-triggered release workflow publishing the Windows `.exe`, Linux build and CLAP plugins with SHA-256 checksums
 
 ## Command line
 
@@ -197,15 +206,16 @@ On Windows, this uses the Win32 `Beep` compatibility API. Modern Windows normall
 
 ## Windows: complete setup and testing guide
 
-Shelloop targets 64-bit Windows. There are two ways to run it: use the prebuilt `v0.01-beta` package once that release is published, or build the current development branch from source now.
+Shelloop targets 64-bit Windows. There are two ways to run it: download the prebuilt release, or build from source.
 
-### Option A: use the prebuilt Windows beta
+### Option A: use the prebuilt Windows release
 
-Once `v0.01-beta` is published, open the repository's **Releases** section and download:
+Open the repository's **Releases** section and download either the single executable or the full bundle (VERSION is the release tag, for example `v1.0.0-rc.1`):
 
 ```text
-shelloop-v0.01-beta-windows-x86_64.zip
-shelloop-v0.01-beta-windows-x86_64.zip.sha256
+shelloop-VERSION-windows-x86_64.exe          standalone executable
+shelloop-VERSION-windows-x86_64.zip          executable + example projects + shelloop.clap
+shelloop-clap-VERSION-windows-x86_64.zip     CLAP plugin only
 ```
 
 Extract the ZIP to a normal writable folder, for example:
@@ -218,9 +228,11 @@ The extracted directory will contain at least:
 
 ```text
 shelloop.exe
+shelloop.clap
 README.md
 LICENSE
 patterns\
+projects\
 ```
 
 Open PowerShell in that directory. In File Explorer you can click the address bar, type `powershell`, and press Enter.
@@ -249,7 +261,11 @@ If no MIDI keyboard is connected, start with MIDI disabled:
 .\shelloop.exe --no-midi
 ```
 
-The `v0.01-beta` release is not published yet. Until the release gate is complete, use the source-build instructions below.
+To open the full-screen workstation with the bundled example:
+
+```powershell
+.\shelloop.exe --project projects\example-performance.json --tui
+```
 
 ### Option B: build the current version from source
 
@@ -578,27 +594,25 @@ Shelloop is an `.exe`, not a PowerShell script, so PowerShell execution-policy c
 
 **Windows SmartScreen warns about the beta executable**
 
-The first beta may not yet have an established code-signing reputation. Verify that the file came from this repository's Releases page and compare its SHA-256 hash with the published `.sha256` file before running it.
+The release may not yet have an established code-signing reputation. Verify that the file came from this repository's Releases page and compare its SHA-256 hash with the published `.sha256` file before running it.
 
 To calculate the downloaded ZIP hash yourself:
 
 ```powershell
-Get-FileHash .\shelloop-v0.01-beta-windows-x86_64.zip -Algorithm SHA256
+Get-FileHash .\shelloop-VERSION-windows-x86_64.zip -Algorithm SHA256
 ```
 
 Compare that value with:
 
 ```text
-shelloop-v0.01-beta-windows-x86_64.zip.sha256
+shelloop-VERSION-windows-x86_64.zip.sha256
 ```
 
-### Current Windows beta limitations
+### Current Windows limitations
 
-The project is still pre-beta. Automated Windows CI proves that the all-feature code compiles, tests, passes strict Clippy and produces an optimized executable, but CI cannot prove real speaker output, real MIDI-controller behavior, end-to-end latency, xrun/dropout behavior or sound quality on physical hardware.
+Automated Windows CI proves that the all-feature code compiles, tests, passes strict Clippy and produces an optimized executable, but CI cannot prove real speaker output, real MIDI-controller behavior, end-to-end latency, xrun/dropout behavior or sound quality on physical hardware.
 
-Live recording is now wired through `--record <FILE>`. The current beta records the protected mono master mix; multichannel/stem recording is not implemented yet.
-
-The final `v0.01-beta` release will only be tagged after the remaining real-hardware QA checks and release-package verification are complete.
+`--record <FILE>` records the protected mono master mix. Resampling and the black box capture stereo.
 
 ## Pattern JSON
 
@@ -669,36 +683,60 @@ MIDI input is also bounded. Malformed messages and queue overflows are counted i
 
 The WAV recording layer uses a background writer thread and a separate preallocated real-time bridge. Full buffers are passed to the writer with nonblocking bounded-channel operations, then cleared and recycled back into the pool instead of allocating a new audio block for every callback buffer.
 
-## Beta release pipeline
+## v1 workstation guide
 
-The package version is `0.1.0-beta.1`. The eventual `v0.01-beta` tag triggers Windows x86-64 and Linux x86-64 optimized builds with all runtime features, packages the binary with this README, MIT license and example patterns, emits SHA-256 checksum files, and publishes a GitHub prerelease.
+Load a project and open the full-screen interface:
 
-The release workflow can also be run manually for package verification without publishing a tag. Normal pull requests use the cross-platform CI workflow for formatting, tests, strict Clippy, all-feature checks and optimized runtime builds; the release-packaging workflow is intentionally kept off ordinary PR commits so development feedback is not duplicated.
+```text
+shelloop --project projects/example-performance.json --tui
+shelloop --project projects/example-performance.json --tui --black-box-seconds 60
+```
 
-The tag is intentionally not created yet. Remaining release gates are physical Windows/Linux playback and MIDI-controller validation, latency/xrun/sound-quality checks, device-unavailable and unplug/reconnect validation on real hosts, live-recording validation on real hardware, and verification of the tag-triggered packaging workflow against the exact final release commit.
+`example-performance.json` has a locked bass with saturation and delay inserts, three sample tracks, a delay send, a reverb send, master saturation, three scenes (Intro, Groove, Drop) and a looping chain called Main.
 
-## v1 direction
+Full-screen keys (press `?` inside the UI for the complete list):
 
-The detailed v1 implementation sequence is defined in `docs/specs/V1-ROADMAP.md`. The current planned order is:
+| Mode | Keys |
+|---|---|
+| Everywhere | `Ctrl+Q` quit, `?`/F1 help, `:` command line, F2–F7 launch scenes 1–6, F8 save black box, F9/F10 mute/solo the selected track |
+| Perform | `Z`–`M` and `Q`–`U` notes, `[` `]` octave, Space play/pause, Backspace restart, `<` `>` previous/next scene, Up/Down choose track, Tab to the grid |
+| Pattern edit | Left/Right move the cursor, Space/Enter toggle a step, `n`/`N` note, `v`/`V` velocity, `g`/`G` gate, `p`/`P` probability, `r`/`R` ratchets, `t`/`T` microtiming, Tab to the inspector |
+| Inspector | Up/Down choose a parameter, Left/Right adjust (Shift = coarse), `l` MIDI-learn the parameter |
 
-1. Multi-track engine
-2. Live pattern editor
-3. Synth/filter/ADSR expansion
-4. WAV sample playback
-5. Scenes and pattern chaining
-6. MIDI learn
-7. Effects engine
-8. Full-screen terminal UI
-9. Per-step parameter locks
-10. Internal resampling
+The line interface (without `--tui`) accepts the same commands after `:`. Type `help` for the full list. The most useful ones:
 
-Each feature has a separate implementation-ready spec under `docs/specs/` covering module boundaries, data contracts, real-time constraints, persistence, failure behavior, tests and completion criteria.
+```text
+scene launch drop            # on the next bar (add now|beat|step to change)
+chain start main | chain stop | chain pause | chain resume
+step 5 toggle                # one-based steps; also selects step 5 for locks
+lock filter.cutoff 4800      # parameter lock on the selected step
+lock fx.0.drive 18           # lock an insert effect parameter by name
+lock sample.pitch -12        # sample tracks: pitch, gain or reverse
+unlock filter.cutoff | locks
+fx list | fx track 0 mix 0.4 | fx send_b 0 decay 0.8 | fx master 0 bypass on
+gain 0.8 | pan -0.2 | send a 0.3 | mute | solo | master 0.9
+learn filter.cutoff          # move a knob, then: learn confirm
+learn scene.next | learn transport.play | mappings | unlearn 3
+variation lock rhythm on | variation preview --seed 821 --amount 0.3 | variation accept
+resample arm master bars 4   # starts on the next bar
+resample destination new-track | resample normalize on
+blackbox save | blackbox status
+save                         # writes the project, including mappings and locks
+```
 
-Windows and Linux remain the primary targets; macOS can be evaluated separately.
+Resampled audio is written to `<project folder>/captures/Resample-NNNN.wav` (change it with `--capture-directory`). Black-box takes go to `./shelloop-takes` (change it with `--black-box-directory`).
+
+## CLAP plugin
+
+`clap-plugin/` builds SHELLOOP's synthesizer and step sequencer as a CLAP instrument. Release downloads include `shelloop.clap`; copy it to `~/.clap/` on Linux or `C:\Program Files\Common Files\CLAP\` on Windows and rescan plugins in your DAW. See `clap-plugin/README.md` for its parameters and build instructions.
+
+## Release pipeline
+
+Pushing a `v*` tag (or running the Release workflow manually with a tag) tests the workspace on Windows and Linux, builds the standalone application and the CLAP plugin, verifies the packaged archives, and publishes a GitHub release with SHA-256 checksum files. Pre-release tags (containing `-`) are marked as pre-releases.
 
 ## Status
 
-Automated CI validates deterministic logic, runtime feature builds and optimized binaries. Physical playback, MIDI hardware, latency and sound-quality validation cannot be claimed from CI and remain required before the beta tag is published.
+Automated CI validates deterministic logic, runtime feature builds and optimized binaries on Windows and Linux. Physical playback, MIDI hardware, latency and sound-quality validation cannot be claimed from CI; it is tracked in `docs/HARDWARE-ACCEPTANCE.md`.
 
 ### Independent synth patches
 

@@ -1,0 +1,662 @@
+{
+  "schema_version": 3,
+  "revision": 1,
+  "seed": 909,
+  "bpm": 128.0,
+  "steps_per_beat": 4,
+  "tracks": [
+    {
+      "id": 1,
+      "name": "Bass",
+      "kind": "synth",
+      "gain": 0.75,
+      "pan": 0.0,
+      "muted": false,
+      "soloed": false,
+      "pattern": {
+        "name": "15 Step Bass",
+        "seed": 101,
+        "swing": 0.04,
+        "channel": 0,
+        "steps": [
+          {
+            "note": 36,
+            "velocity": 0.9,
+            "gate": 0.65,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          null,
+          {
+            "note": 36,
+            "velocity": 0.65,
+            "gate": 0.45,
+            "probability": 0.8,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 43,
+            "velocity": 0.8,
+            "gate": 0.55,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          null,
+          {
+            "note": 39,
+            "velocity": 0.82,
+            "gate": 0.55,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": -80
+          },
+          null,
+          {
+            "note": 36,
+            "velocity": 0.72,
+            "gate": 0.4,
+            "probability": 0.75,
+            "ratchets": 2,
+            "microtiming_frames": 0
+          },
+          null,
+          null,
+          {
+            "note": 43,
+            "velocity": 0.75,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 80
+          },
+          null
+        ],
+        "locks": [
+          {
+            "step": 0,
+            "locks": [
+              {
+                "target": {
+                  "track": "gain"
+                },
+                "value": 1.0
+              },
+              {
+                "target": {
+                  "synth": "filter_cutoff"
+                },
+                "value": 4800.0
+              }
+            ]
+          },
+          {
+            "step": 4,
+            "locks": [
+              {
+                "target": {
+                  "track": "pan"
+                },
+                "value": -0.4
+              }
+            ]
+          }
+        ]
+      },
+      "synth_patch": {
+        "oscillator": "saw",
+        "octave": 0,
+        "semitone": 0,
+        "fine_cents": 0.0,
+        "pulse_width": 0.35,
+        "amp_env": {
+          "attack_secs": 0.005,
+          "decay_secs": 0.15,
+          "sustain": 0.5,
+          "release_secs": 0.12
+        },
+        "filter": {
+          "mode": "low_pass",
+          "cutoff_hz": 700.0,
+          "resonance": 0.3,
+          "key_tracking": 0.2
+        },
+        "filter_env": {
+          "attack_secs": 0.005,
+          "decay_secs": 0.2,
+          "sustain": 0.0,
+          "release_secs": 0.1
+        },
+        "filter_env_amount": 3.0,
+        "output_gain": 0.8
+      },
+      "inserts": [
+        {
+          "kind": "saturation",
+          "params": {
+            "drive": 9.0,
+            "mix": 0.6
+          }
+        },
+        {
+          "kind": "delay",
+          "params": {
+            "sync": 2,
+            "feedback": 0.3,
+            "mix": 0.2
+          }
+        }
+      ],
+      "send_b": 0.25,
+      "pattern_library": [
+        {
+          "id": 1,
+          "pattern": {
+            "name": "Bass Drop",
+            "seed": 101,
+            "swing": 0.04,
+            "channel": 0,
+            "steps": [
+              {
+                "note": 36,
+                "velocity": 0.9,
+                "gate": 0.65,
+                "probability": 1.0,
+                "ratchets": 2,
+                "microtiming_frames": 0
+              },
+              null,
+              null,
+              {
+                "note": 36,
+                "velocity": 0.65,
+                "gate": 0.45,
+                "probability": 0.8,
+                "ratchets": 2,
+                "microtiming_frames": 0
+              },
+              null,
+              {
+                "note": 43,
+                "velocity": 0.8,
+                "gate": 0.55,
+                "probability": 1.0,
+                "ratchets": 1,
+                "microtiming_frames": 0
+              },
+              null,
+              null,
+              {
+                "note": 39,
+                "velocity": 0.82,
+                "gate": 0.55,
+                "probability": 1.0,
+                "ratchets": 1,
+                "microtiming_frames": -80
+              },
+              null,
+              {
+                "note": 36,
+                "velocity": 0.72,
+                "gate": 0.4,
+                "probability": 0.75,
+                "ratchets": 2,
+                "microtiming_frames": 0
+              },
+              null,
+              null,
+              {
+                "note": 43,
+                "velocity": 0.75,
+                "gate": 0.5,
+                "probability": 1.0,
+                "ratchets": 1,
+                "microtiming_frames": 80
+              },
+              null
+            ],
+            "locks": [
+              {
+                "step": 0,
+                "locks": [
+                  {
+                    "target": {
+                      "track": "gain"
+                    },
+                    "value": 1.0
+                  },
+                  {
+                    "target": {
+                      "synth": "filter_cutoff"
+                    },
+                    "value": 4800.0
+                  }
+                ]
+              },
+              {
+                "step": 4,
+                "locks": [
+                  {
+                    "target": {
+                      "track": "pan"
+                    },
+                    "value": -0.4
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Kick",
+      "kind": "sample",
+      "gain": 0.9,
+      "pan": 0.0,
+      "muted": false,
+      "soloed": false,
+      "pattern": {
+        "name": "Four On Floor",
+        "seed": 11,
+        "swing": 0.0,
+        "channel": 9,
+        "steps": [
+          {
+            "note": 36,
+            "velocity": 1.0,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          null,
+          null,
+          {
+            "note": 36,
+            "velocity": 1.0,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          null,
+          null,
+          {
+            "note": 36,
+            "velocity": 1.0,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          null,
+          null,
+          {
+            "note": 36,
+            "velocity": 1.0,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          null,
+          null
+        ]
+      },
+      "sample": {
+        "path": "samples/kick.wav",
+        "mode": "one_shot"
+      },
+      "send_b": 0.15
+    },
+    {
+      "id": 3,
+      "name": "Snare",
+      "kind": "sample",
+      "gain": 0.7,
+      "pan": 0.1,
+      "muted": false,
+      "soloed": false,
+      "pattern": {
+        "name": "Backbeat",
+        "seed": 12,
+        "swing": 0.0,
+        "channel": 9,
+        "steps": [
+          null,
+          null,
+          null,
+          null,
+          {
+            "note": 38,
+            "velocity": 0.9,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          {
+            "note": 38,
+            "velocity": 0.95,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 38,
+            "velocity": 0.35,
+            "gate": 0.5,
+            "probability": 0.5,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null
+        ]
+      },
+      "sample": {
+        "path": "samples/snare.wav",
+        "mode": "one_shot"
+      },
+      "send_b": 0.15
+    },
+    {
+      "id": 4,
+      "name": "Hat",
+      "kind": "sample",
+      "gain": 0.55,
+      "pan": -0.3,
+      "muted": false,
+      "soloed": false,
+      "pattern": {
+        "name": "Shuffled Hats",
+        "seed": 13,
+        "swing": 0.12,
+        "channel": 9,
+        "steps": [
+          {
+            "note": 42,
+            "velocity": 0.8,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.45,
+            "gate": 0.5,
+            "probability": 0.8,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.8,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.45,
+            "gate": 0.5,
+            "probability": 0.8,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.8,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.45,
+            "gate": 0.5,
+            "probability": 0.8,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.8,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.45,
+            "gate": 0.5,
+            "probability": 0.8,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.8,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.45,
+            "gate": 0.5,
+            "probability": 0.8,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.8,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.45,
+            "gate": 0.5,
+            "probability": 0.8,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.8,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.45,
+            "gate": 0.5,
+            "probability": 0.8,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.8,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 2,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 42,
+            "velocity": 0.45,
+            "gate": 0.5,
+            "probability": 0.8,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          }
+        ]
+      },
+      "sample": {
+        "path": "samples/hat.wav",
+        "mode": "gate",
+        "release_secs": 0.02,
+        "root_note": 42
+      },
+      "send_b": 0.15
+    }
+  ],
+  "effects": {
+    "send_buses": [
+      {
+        "effects": [
+          {
+            "kind": "delay",
+            "params": {
+              "sync": 3,
+              "feedback": 0.45,
+              "mix": 1.0
+            }
+          }
+        ],
+        "return_gain": 0.6
+      },
+      {
+        "effects": [
+          {
+            "kind": "reverb",
+            "params": {
+              "size": 0.7,
+              "decay": 0.6,
+              "mix": 1.0
+            }
+          }
+        ],
+        "return_gain": 0.5
+      }
+    ],
+    "master": [
+      {
+        "kind": "saturation",
+        "params": {
+          "mode": 2,
+          "drive": 2.0,
+          "mix": 0.3
+        }
+      }
+    ]
+  },
+  "scenes": [
+    {
+      "id": 1,
+      "name": "Intro",
+      "track_states": [
+        {
+          "track_id": 1,
+          "pattern_id": 0,
+          "muted": true
+        },
+        {
+          "track_id": 2,
+          "pattern_id": 0,
+          "muted": false
+        },
+        {
+          "track_id": 3,
+          "pattern_id": 0,
+          "muted": false
+        },
+        {
+          "track_id": 4,
+          "pattern_id": 0,
+          "muted": false
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Groove",
+      "track_states": [
+        {
+          "track_id": 1,
+          "pattern_id": 0,
+          "muted": false
+        },
+        {
+          "track_id": 2,
+          "pattern_id": 0,
+          "muted": false
+        },
+        {
+          "track_id": 3,
+          "pattern_id": 0,
+          "muted": false
+        },
+        {
+          "track_id": 4,
+          "pattern_id": 0,
+          "muted": false
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Drop",
+      "track_states": [
+        {
+          "track_id": 1,
+          "pattern_id": 1,
+          "muted": false,
+          "gain": 0.85
+        }
+      ]
+    }
+  ],
+  "chains": [
+    {
+      "id": 1,
+      "name": "Main",
+      "steps": [
+        {
+          "scene_id": 1,
+          "repeats": 2
+        },
+        {
+          "scene_id": 2,
+          "repeats": 4
+        },
+        {
+          "scene_id": 3,
+          "repeats": 4
+        }
+      ],
+      "loop_chain": true
+    }
+  ]
+}

@@ -264,3 +264,39 @@ fn follow_actions_are_reserved() {
     project.chains[0].steps[0].follow = Some(shelloop::FollowAction::Next);
     assert!(project.validate().is_err());
 }
+
+#[test]
+fn bundled_example_projects_load_and_render() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("projects");
+    let mut count = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let project = MultiTrackProject::load(&path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let bank = project
+            .load_sample_assets(&dir, shelloop::DEFAULT_SAMPLE_MEMORY_BUDGET)
+            .unwrap();
+        let mut engine = MultiTrackEngine::from_project(
+            RATE,
+            4,
+            &project,
+            Some(shelloop::SampleContext {
+                assets: &bank,
+                base_dir: &dir,
+            }),
+        )
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        if let Some(chain) = project.chains.first() {
+            engine.start_chain(chain.id, 0).unwrap();
+        }
+        for _ in 0..RATE {
+            let (left, right) = engine.next_stereo_frame();
+            assert!(left.is_finite() && right.is_finite());
+        }
+        count += 1;
+    }
+    assert!(count >= 4);
+}

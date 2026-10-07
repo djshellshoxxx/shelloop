@@ -32,6 +32,8 @@ def verify(archive):
             "projects/example-multitrack.json",
             "projects/example-synth-patches.json",
             "projects/example-samples.json",
+            "projects/example-performance.json",
+            "shelloop.clap",
             "projects/samples/kick.wav",
             "projects/samples/snare.wav",
             "projects/samples/hat.wav",
@@ -40,12 +42,15 @@ def verify(archive):
             if not (package / name).is_file():
                 raise ValueError(f"missing packaged resource: {name}")
         for name in resources:
-            if name.endswith(".json"):
+            if name.endswith(".json") and name != "shelloop.clap":
                 json.loads((package / name).read_text())
         result = subprocess.run([str(binary), "--help"], cwd=package,
                                 capture_output=True, text=True, timeout=15, check=True)
-        if "--pattern" not in result.stdout:
-            raise ValueError("packaged executable lacks pattern CLI")
+        for flag in ("--pattern", "--project", "--tui", "--black-box-seconds"):
+            if flag not in result.stdout:
+                raise ValueError(f"packaged executable lacks {flag}")
+        if (package / "shelloop.clap").stat().st_size < 10_000:
+            raise ValueError("packaged CLAP plugin is unexpectedly small")
     print(f"Verified checksum, resources and executable: {archive.name}")
 
 
