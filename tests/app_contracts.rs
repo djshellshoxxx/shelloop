@@ -130,3 +130,20 @@ fn startup_options_support_multitrack_project_and_reject_pattern_conflict() {
     ])
     .is_err());
 }
+
+#[test]
+fn waveform_is_off_by_default_and_can_start_visible_in_either_style() {
+    let defaults = parse_startup_options(Vec::<String>::new()).unwrap();
+    assert!(!defaults.waveform);
+    assert_eq!(defaults.waveform_style, shelloop::WaveformStyle::Scope);
+
+    let options = parse_startup_options(["--waveform", "--waveform-style", "history"]).unwrap();
+    assert!(options.waveform);
+    assert_eq!(options.waveform_style, shelloop::WaveformStyle::History);
+}
+
+#[test]
+fn waveform_style_requires_a_known_value() {
+    assert!(parse_startup_options(["--waveform-style"]).is_err());
+    assert!(parse_startup_options(["--waveform-style", "bars"]).is_err());
+}

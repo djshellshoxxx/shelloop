@@ -1,4 +1,4 @@
-use crate::MidiPortSelector;
+use crate::{MidiPortSelector, WaveformStyle};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartupOptions {
@@ -9,6 +9,8 @@ pub struct StartupOptions {
     pub project_path: Option<String>,
     pub record_path: Option<String>,
     pub mouse_xy: bool,
+    pub waveform: bool,
+    pub waveform_style: WaveformStyle,
     pub bpm: u16,
     pub steps_per_beat: u8,
     pub list_devices: bool,
@@ -30,6 +32,8 @@ impl Default for StartupOptions {
             project_path: None,
             record_path: None,
             mouse_xy: false,
+            waveform: false,
+            waveform_style: WaveformStyle::Scope,
             bpm: 120,
             steps_per_beat: 4,
             list_devices: false,
@@ -198,6 +202,15 @@ where
             }
             "--list-devices" => options.list_devices = true,
             "--mouse-xy" => options.mouse_xy = true,
+            "--waveform" => options.waveform = true,
+            "--waveform-style" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--waveform-style requires scope or history".to_string())?;
+                options.waveform_style = WaveformStyle::parse(value)
+                    .ok_or_else(|| "--waveform-style must be scope or history".to_string())?;
+            }
             "--no-midi" => options.no_midi = true,
             "--help" | "-h" => options.show_help = true,
             "--version" | "-V" => options.show_version = true,
