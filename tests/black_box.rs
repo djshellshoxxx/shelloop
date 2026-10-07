@@ -403,8 +403,8 @@ fn arbitrary_push_chunk_sizes_give_correct_frame_totals() {
         if index % 2 == 0 {
             producer.push_interleaved(frame, &interleaved);
         } else {
-            for (offset, pair) in interleaved.chunks_exact(2).enumerate() {
-                producer.push_frame(frame + offset as u64, pair[0], pair[1]);
+            for (offset, [left, right]) in interleaved.as_chunks::<2>().0.iter().enumerate() {
+                producer.push_frame(frame + offset as u64, *left, *right);
             }
         }
         frame += *chunk as u64;

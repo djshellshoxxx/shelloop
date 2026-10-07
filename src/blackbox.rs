@@ -481,8 +481,8 @@ impl BlackBoxProducer {
     /// Push interleaved stereo samples whose first frame is `first_frame`.
     /// A trailing odd sample is ignored.
     pub fn push_interleaved(&mut self, first_frame: u64, samples: &[f32]) {
-        for (offset, pair) in samples.chunks_exact(2).enumerate() {
-            self.push_frame(first_frame.wrapping_add(offset as u64), pair[0], pair[1]);
+        for (offset, [left, right]) in samples.as_chunks::<2>().0.iter().enumerate() {
+            self.push_frame(first_frame.wrapping_add(offset as u64), *left, *right);
         }
     }
 
@@ -587,11 +587,9 @@ impl BlackBoxHandle {
         if let Some(failed) = self.shared.status().failed.clone() {
             return Err(format!("black box unavailable: {failed}"));
         }
-        let reserved = self.shared.pending_saves.fetch_update(
-            Ordering::AcqRel,
-            Ordering::Acquire,
-            |pending| (pending < MAX_PENDING_BLACK_BOX_SAVES).then_some(pending + 1),
-        );
+        let reserved = update_counter(&self.shared.pending_saves, |pending| {
+            (pending < MAX_PENDING_BLACK_BOX_SAVES).then_some(pending + 1)
+        });
         if reserved.is_err() {
             return Err(format!(
                 "black box save queue is full ({MAX_PENDING_BLACK_BOX_SAVES} pending)"
@@ -902,11 +900,7 @@ impl Outbox {
                 Err(TrySendError::Disconnected(_)) => break,
             }
         }
-        let _ = self.shared.pending_saves.fetch_update(
-            Ordering::AcqRel,
-            Ordering::Acquire,
-            |pending| pending.checked_sub(1),
-        );
+        let _ = update_counter(&self.shared.pending_saves, |pending| pending.checked_sub(1));
     }
 }
 
@@ -1598,6 +1592,22 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
     let year = yoe + era * 400 + i64::from(month <= 2);
     (year, month, day)
+}
+
+/// Compare-and-swap update that works on every supported toolchain
+/// (`fetch_update` is deprecated in newer releases).
+fn update_counter(
+    counter: &std::sync::atomic::AtomicUsize,
+    mut update: impl FnMut(usize) -> Option<usize>,
+) -> Result<usize, usize> {
+    let mut current = counter.load(Ordering::Acquire);
+    loop {
+        let next = update(current).ok_or(current)?;
+        match counter.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(previous) => return Ok(previous),
+            Err(actual) => current = actual,
+        }
+    }
 }
 
 #[cfg(test)]
