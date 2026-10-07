@@ -19,6 +19,7 @@ pub mod quantize;
 pub mod recording;
 pub mod runtime;
 pub mod scheduler;
+pub mod scope;
 pub mod sequencer;
 pub mod synth;
 pub mod transport;
@@ -72,6 +73,7 @@ pub use runtime::engine_command_from_midi;
 #[cfg(all(feature = "realtime-audio", feature = "terminal-ui"))]
 pub use runtime::run_realtime_session;
 pub use scheduler::{ScheduledEvent, Scheduler, StepEvent};
+pub use scope::{PanelLayout, PeakHistory, ScopeTap, WaveformStyle, SCOPE_CAPACITY};
 pub use sequencer::LiveSequencer;
 pub use synth::{
     parse_synth_parameter_command, CompiledSynthPatch, Oscillator, SynthParamId, SynthParamValue,
