@@ -140,9 +140,10 @@ pub fn decode_wav_reader<R: Read>(reader: R, max_bytes: usize) -> Result<Decoded
             .map(|&sample| StereoFrame::new(sample, sample))
             .collect()
     } else {
-        interleaved
-            .chunks_exact(2)
-            .map(|pair| StereoFrame::new(pair[0], pair[1]))
+        let (pairs, _) = interleaved.as_chunks::<2>();
+        pairs
+            .iter()
+            .map(|&[left, right]| StereoFrame::new(left, right))
             .collect()
     };
     Ok(DecodedWav {
