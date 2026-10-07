@@ -30,7 +30,9 @@ impl ParamCurve {
             Self::Linear => min + (max - min) * unit,
             Self::Logarithmic if min > 0.0 && max > 0.0 => min * (max / min).powf(unit),
             Self::Logarithmic => min + (max - min) * unit,
-            Self::Discrete => (min + (max - min) * unit).round().clamp(min.min(max), max.max(min)),
+            Self::Discrete => (min + (max - min) * unit)
+                .round()
+                .clamp(min.min(max), max.max(min)),
         }
     }
 
@@ -218,7 +220,14 @@ pub fn synth_param_descriptor(param: SynthParamId) -> ParamDescriptor {
         P::FilterDecay => ("filter_decay", 0.0, 10.0, 0.0, ParamCurve::Linear, true),
         P::FilterSustain => ("filter_sustain", 0.0, 1.0, 0.0, ParamCurve::Linear, true),
         P::FilterRelease => ("filter_release", 0.0, 10.0, 0.0, ParamCurve::Linear, true),
-        P::FilterEnvAmount => ("filter_env_amount", -8.0, 8.0, 0.0, ParamCurve::Linear, true),
+        P::FilterEnvAmount => (
+            "filter_env_amount",
+            -8.0,
+            8.0,
+            0.0,
+            ParamCurve::Linear,
+            true,
+        ),
         P::OutputGain => ("output_gain", 0.0, 2.0, 1.0, ParamCurve::Linear, true),
     };
     ParamDescriptor {

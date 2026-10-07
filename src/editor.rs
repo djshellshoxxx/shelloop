@@ -1,3 +1,4 @@
+use crate::variation::InvariantProfile;
 use crate::{CompiledPattern, Pattern, PatternStep, QuantizeBoundary, QuantizedChange};
 use std::collections::VecDeque;
 
@@ -139,6 +140,20 @@ impl PatternEditor {
     pub fn clear_pattern(&mut self) -> Result<u64, String> {
         let mut candidate = self.pattern.clone();
         candidate.steps.fill(None);
+        self.commit(candidate)
+    }
+
+    /// Replace the whole pattern (e.g. an accepted variation) as one
+    /// undoable transaction. The pattern is validated first; on error the
+    /// editor is unchanged.
+    pub fn replace_pattern(&mut self, pattern: Pattern) -> Result<u64, String> {
+        self.commit(pattern)
+    }
+
+    /// Replace the pattern's invariant profile as one undoable transaction.
+    pub fn set_invariants(&mut self, profile: Option<InvariantProfile>) -> Result<u64, String> {
+        let mut candidate = self.pattern.clone();
+        candidate.invariants = profile;
         self.commit(candidate)
     }
 

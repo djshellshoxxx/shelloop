@@ -1,4 +1,7 @@
-use crate::{CompiledPattern, EngineCommand, Pattern, PatternEvent, PatternScheduler};
+use crate::{
+    CompiledPattern, EngineCommand, LockBoundary, ParameterLock, Pattern, PatternEvent,
+    PatternScheduler,
+};
 
 const EVENT_BUFFER_CAPACITY: usize = 4096;
 const PENDING_NOTE_OFF_CAPACITY: usize = 8192;
@@ -22,6 +25,8 @@ pub struct LiveSequencer {
     event_buffer: Vec<PatternEvent>,
     event_index: usize,
     pending_note_offs: Vec<PendingNoteOff>,
+    boundary_buffer: Vec<LockBoundary>,
+    boundary_index: usize,
 }
 
 impl LiveSequencer {
@@ -45,6 +50,8 @@ impl LiveSequencer {
             event_buffer: Vec::with_capacity(EVENT_BUFFER_CAPACITY),
             event_index: 0,
             pending_note_offs: Vec::with_capacity(PENDING_NOTE_OFF_CAPACITY),
+            boundary_buffer: Vec::with_capacity(EVENT_BUFFER_CAPACITY),
+            boundary_index: 0,
         })
     }
 
@@ -80,15 +87,55 @@ impl LiveSequencer {
     }
 
     pub fn fill_commands(&mut self, output: &mut Vec<EngineCommand>) {
+        self.fill_commands_with_locks(output, &mut None);
+    }
+
+    /// Like [`fill_commands`](Self::fill_commands), also reporting the last
+    /// parameter-lock step boundary that falls on this frame. Callers apply
+    /// lock changes before handling the returned note commands, so locks
+    /// always precede note-on at the same frame.
+    pub fn fill_commands_with_locks(
+        &mut self,
+        output: &mut Vec<EngineCommand>,
+        boundary: &mut Option<LockBoundary>,
+    ) {
         output.clear();
+        *boundary = None;
         if !self.playing {
             return;
         }
 
         self.ensure_cache();
+        while let Some(next) = self.boundary_buffer.get(self.boundary_index) {
+            if next.absolute_frame != self.position_frame {
+                break;
+            }
+            *boundary = Some(*next);
+            self.boundary_index += 1;
+        }
         self.emit_note_offs(output);
         self.emit_note_ons(output);
         self.position_frame = self.position_frame.saturating_add(1);
+    }
+
+    pub fn pattern(&self) -> &CompiledPattern {
+        &self.pattern
+    }
+
+    /// Compiled locks for a zero-based step of the active pattern.
+    pub fn step_locks(&self, step: usize) -> &[ParameterLock] {
+        self.pattern.step_locks(step)
+    }
+
+    /// Move the playhead without emitting anything (used when a track joins
+    /// a running engine).
+    pub fn seek(&mut self, frame: u64) {
+        self.position_frame = frame;
+        self.invalidate_cache();
+    }
+
+    pub fn frames_per_step(&self) -> f64 {
+        self.scheduler.frames_per_step()
     }
 
     fn invalidate_cache(&mut self) {
@@ -96,6 +143,8 @@ impl LiveSequencer {
         self.cache_end = 0;
         self.event_buffer.clear();
         self.event_index = 0;
+        self.boundary_buffer.clear();
+        self.boundary_index = 0;
         self.pending_note_offs.clear();
     }
 
@@ -116,6 +165,15 @@ impl LiveSequencer {
         self.event_index = self
             .event_buffer
             .partition_point(|event| event.absolute_frame < self.position_frame);
+        self.scheduler.schedule_lock_boundaries_into(
+            &self.pattern,
+            self.cache_start,
+            CACHE_FRAMES,
+            &mut self.boundary_buffer,
+        );
+        self.boundary_index = self
+            .boundary_buffer
+            .partition_point(|boundary| boundary.absolute_frame < self.position_frame);
     }
 
     fn emit_note_offs(&mut self, output: &mut Vec<EngineCommand>) {

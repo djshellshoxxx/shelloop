@@ -192,6 +192,14 @@ impl CompiledSynthPatch {
             parameters: patch_parameters(patch),
         })
     }
+
+    pub fn patch(&self) -> SynthPatch {
+        self.patch
+    }
+
+    pub fn sample_rate(&self) -> f32 {
+        self.sample_rate
+    }
 }
 
 pub fn parse_synth_parameter_command(

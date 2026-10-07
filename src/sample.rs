@@ -592,6 +592,7 @@ pub struct SampleVoice {
     note: u8,
     key_held: bool,
     started_order: u64,
+    reverse: bool,
 }
 
 impl Default for SampleVoice {
@@ -608,6 +609,7 @@ impl Default for SampleVoice {
             note: 0,
             key_held: false,
             started_order: 0,
+            reverse: false,
         }
     }
 }
@@ -625,19 +627,30 @@ impl SampleVoice {
     fn start(
         &mut self,
         playback: &CompiledSamplePlayback,
-        channel: u8,
-        note: u8,
-        velocity: f32,
-        order: u64,
+        trigger: VoiceTrigger,
+        overrides: SampleLockOverrides,
     ) {
+        let VoiceTrigger {
+            channel,
+            note,
+            velocity,
+            order,
+        } = trigger;
         self.phase = VoicePhase::Playing;
-        self.increment = playback.increment_for_note(note);
-        self.position = if playback.reverse {
+        self.reverse = overrides.reverse.unwrap_or(playback.reverse);
+        self.increment = if overrides.pitch_semitones == 0.0 {
+            playback.increment_for_note(note)
+        } else {
+            (playback.increment_for_note(note)
+                * 2.0_f64.powf(f64::from(overrides.pitch_semitones) / 12.0))
+            .clamp(MIN_PLAYBACK_INCREMENT, MAX_PLAYBACK_INCREMENT)
+        };
+        self.position = if self.reverse {
             (playback.end_frame - 1) as f64
         } else {
             playback.start_frame as f64
         };
-        self.amplitude = velocity.clamp(0.0, 1.0) * playback.gain;
+        self.amplitude = velocity.clamp(0.0, 1.0) * playback.gain * overrides.gain;
         self.channel = channel;
         self.note = note;
         self.key_held = true;
@@ -695,7 +708,7 @@ impl SampleVoice {
         }
         let index = self.position as usize;
         let fraction = (self.position - index as f64) as f32;
-        let next = if playback.reverse {
+        let next = if self.reverse {
             // Reading backwards, the next frame in time is the one below, but
             // interpolation is always between `index` and `index + 1`.
             (index + 1).min(playback.end_frame - 1)
@@ -743,7 +756,7 @@ impl SampleVoice {
         if self.phase == VoicePhase::Idle {
             return;
         }
-        if playback.reverse {
+        if self.reverse {
             self.position -= self.increment;
             if looping {
                 let loop_start = playback.loop_start as f64;
@@ -783,6 +796,36 @@ pub struct RealtimeSampler {
     playback: CompiledSamplePlayback,
     voices: Vec<SampleVoice>,
     next_order: u64,
+    overrides: SampleLockOverrides,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VoiceTrigger {
+    channel: u8,
+    note: u8,
+    velocity: f32,
+    order: u64,
+}
+
+/// Temporary per-step parameter-lock overrides applied to new voices.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SampleLockOverrides {
+    /// Semitones added to the configured pitch.
+    pub pitch_semitones: f32,
+    /// Multiplier on the configured gain.
+    pub gain: f32,
+    /// Forces playback direction when set.
+    pub reverse: Option<bool>,
+}
+
+impl Default for SampleLockOverrides {
+    fn default() -> Self {
+        Self {
+            pitch_semitones: 0.0,
+            gain: 1.0,
+            reverse: None,
+        }
+    }
 }
 
 impl RealtimeSampler {
@@ -792,7 +835,35 @@ impl RealtimeSampler {
             playback,
             voices,
             next_order: 1,
+            overrides: SampleLockOverrides::default(),
         }
+    }
+
+    /// Set lock overrides for subsequently triggered voices. Sounding voices
+    /// keep the values they started with. Non-finite values are ignored.
+    pub fn set_lock_overrides(&mut self, overrides: SampleLockOverrides) {
+        if overrides.pitch_semitones.is_finite() && overrides.gain.is_finite() {
+            self.overrides = SampleLockOverrides {
+                pitch_semitones: overrides.pitch_semitones.clamp(-48.0, 48.0),
+                gain: overrides.gain.clamp(0.0, 2.0),
+                reverse: overrides.reverse,
+            };
+        }
+    }
+
+    pub fn lock_overrides(&self) -> SampleLockOverrides {
+        self.overrides
+    }
+
+    /// Swap in new playback data (resampling destination). Sounding voices
+    /// are stopped because their positions refer to the old buffer. Returns
+    /// the previous playback so the caller can release it off the audio
+    /// thread.
+    pub fn replace_playback(&mut self, playback: CompiledSamplePlayback) -> CompiledSamplePlayback {
+        for voice in &mut self.voices {
+            voice.stop();
+        }
+        std::mem::replace(&mut self.playback, playback)
     }
 
     pub fn playback(&self) -> &CompiledSamplePlayback {
@@ -820,7 +891,16 @@ impl RealtimeSampler {
                 let slot = self.choose_slot();
                 let order = self.next_order;
                 self.next_order = self.next_order.wrapping_add(1).max(1);
-                self.voices[slot].start(&self.playback, channel, note, velocity, order);
+                self.voices[slot].start(
+                    &self.playback,
+                    VoiceTrigger {
+                        channel,
+                        note,
+                        velocity,
+                        order,
+                    },
+                    self.overrides,
+                );
             }
             EngineCommand::NoteOff { channel, note } => {
                 // Release one voice per note-off, oldest first, matching the synth.

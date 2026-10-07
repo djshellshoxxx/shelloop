@@ -11,6 +11,7 @@ pub mod filter;
 pub mod keyboard;
 pub mod midi;
 pub mod midi_io;
+pub mod midi_learn;
 pub mod mixer;
 pub mod multitrack;
 pub mod params;
@@ -22,6 +23,7 @@ pub mod quantize;
 pub mod recording;
 pub mod runtime;
 pub mod sample;
+pub mod scenes;
 pub mod scheduler;
 pub mod scope;
 pub mod sequencer;
@@ -46,6 +48,12 @@ pub use editor::{
 pub use editor_command::{
     parse_pattern_edit_command, EditOutcome, PatternEditCommand, ProjectPatternEditors, StepEdit,
 };
+pub use effects::{
+    check_effect_memory, effect_params, find_effect_param, validate_track_inserts, Effect,
+    EffectConfig, EffectKind, EffectRack, EffectsConfig, SendBusConfig,
+    DEFAULT_EFFECT_MEMORY_BUDGET, MAX_DELAY_SECONDS, MAX_MASTER_INSERTS, MAX_SEND_BUSES,
+    MAX_SEND_EFFECTS, MAX_TRACK_INSERTS,
+};
 pub use engine::{midi_note_hz, EngineCommand, RealtimeSynth};
 pub use envelope::{AdsrEnvelope, AdsrParams, EnvelopeStage};
 pub use filter::{clamp_cutoff, max_cutoff, FilterMode, FilterParams, StateVariableFilter};
@@ -58,8 +66,14 @@ pub use midi_io::{
 };
 pub use mixer::{protect_master, ChannelStrip, SmoothedParam};
 pub use multitrack::{
-    EngineProjectSnapshot, MultiTrackEngine, MultiTrackProject, SampleContext, TrackCommand,
-    TrackDefinition, TrackId, TrackKind, MAX_REALTIME_TRACKS, MULTITRACK_PROJECT_SCHEMA_VERSION,
+    ChainStatus, EngineError, EngineProjectSnapshot, LibraryPattern, MultiTrackEngine,
+    MultiTrackProject, PreparedTrack, SampleContext, TrackCommand, TrackDefinition, TrackId,
+    TrackKind, MAX_REALTIME_TRACKS, MAX_TRACK_PATTERNS, MULTITRACK_PROJECT_SCHEMA_VERSION,
+    PRIMARY_PATTERN_ID,
+};
+pub use params::{
+    ActionId, EffectLocation, EffectParamId, EffectSlotId, GlobalParamId, ParamCurve,
+    ParamDescriptor, ParameterTarget, SampleParamId, TrackParamId,
 };
 pub use pattern::{
     parse_pattern_json, CompiledPattern, LockBoundary, LockTarget, ParameterLock, Pattern,
@@ -80,8 +94,12 @@ pub use runtime::engine_command_from_midi;
 pub use runtime::run_realtime_session;
 pub use sample::{
     decode_wav_file, decode_wav_reader, CompiledSamplePlayback, DecodedWav, RealtimeSampler,
-    SampleAsset, SampleAssetBank, SampleAssetId, SampleMode, SampleSettings, StereoFrame,
-    DEFAULT_SAMPLE_MEMORY_BUDGET,
+    SampleAsset, SampleAssetBank, SampleAssetId, SampleLockOverrides, SampleMode, SampleSettings,
+    StereoFrame, DEFAULT_SAMPLE_MEMORY_BUDGET,
+};
+pub use scenes::{
+    resolve_chain, resolve_scene, ChainId, ChainStep, FollowAction, PatternId, Scene, SceneChain,
+    SceneId, SceneTrackState,
 };
 pub use scheduler::{ScheduledEvent, Scheduler, StepEvent};
 pub use scope::{PanelLayout, PeakHistory, ScopeTap, WaveformStyle, SCOPE_CAPACITY};
@@ -91,9 +109,12 @@ pub use synth::{
     SynthPatch, SynthVoice,
 };
 pub use transport::{Transport, TransportState};
-pub use voice::{VoiceAllocator, VoiceId, VoiceState};
-pub use params::{
-    ActionId, EffectLocation, EffectParamId, EffectSlotId, GlobalParamId, ParamCurve,
-    ParamDescriptor, ParameterTarget, SampleParamId, TrackParamId,
+pub use variation::{
+    apply_lock_command, derive_seed, diff_patterns, evaluate_invariants, format_locks,
+    format_proposal, generate_variation, parse_variation_command, pattern_hash, FieldChange,
+    InvariantResult, VariationCommand, VariationFailure, VariationProposal, VariationRequest,
+    VariationSession, INVARIANT_SCHEMA_VERSION, MAX_VARIATION_ATTEMPTS,
+    VARIATION_ALGORITHM_VERSION,
 };
 pub use variation::{InvariantKind, InvariantProfile, InvariantRule};
+pub use voice::{VoiceAllocator, VoiceId, VoiceState};

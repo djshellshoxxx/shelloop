@@ -29,6 +29,10 @@ fn synth_track(id: u16, name: &str, note: u8, steps: usize) -> TrackDefinition {
         pattern: pattern(name, u64::from(id), note, steps),
         synth_patch: None,
         sample: None,
+        pattern_library: Vec::new(),
+        inserts: Vec::new(),
+        send_a: 0.0,
+        send_b: 0.0,
     }
 }
 
@@ -214,6 +218,11 @@ fn multitrack_project_round_trip_preserves_tracks_and_schema() {
             synth_track(1, "drums", 36, 16),
             synth_track(2, "bass", 48, 15),
         ],
+        master_gain: 1.0,
+        effects: Default::default(),
+        scenes: Vec::new(),
+        chains: Vec::new(),
+        midi_mappings: Vec::new(),
     };
 
     project.save_atomic(&path).unwrap();

@@ -184,7 +184,9 @@ impl Pattern {
         for entry in &self.locks {
             let index = usize::from(entry.step);
             if index >= self.steps.len() {
-                return Err(format!("locks reference step {index} beyond pattern length"));
+                return Err(format!(
+                    "locks reference step {index} beyond pattern length"
+                ));
             }
             if !seen_steps.insert(entry.step) {
                 return Err(format!("step {index} has more than one lock list"));
@@ -543,7 +545,8 @@ impl PatternScheduler {
         let frames_per_step = self.frames_per_step();
         let loop_frames = frames_per_step * steps.len() as f64;
         let block_end = block_start_frame.saturating_add(u64::from(block_frames));
-        let first_loop = ((block_start_frame as f64 / loop_frames).floor() as i64 - 1).max(0) as u64;
+        let first_loop =
+            ((block_start_frame as f64 / loop_frames).floor() as i64 - 1).max(0) as u64;
         let last_loop = ((block_end as f64 / loop_frames).floor() as i64 + 1).max(0) as u64;
         'loops: for loop_index in first_loop..=last_loop {
             for (step_index, step) in steps.iter().enumerate() {

@@ -560,6 +560,10 @@ fn sample_track(id: u16, path: &str) -> TrackDefinition {
         pattern: kick_pattern(),
         synth_patch: None,
         sample: Some(SampleSettings::new(path, SampleMode::OneShot)),
+        pattern_library: Vec::new(),
+        inserts: Vec::new(),
+        send_a: 0.0,
+        send_b: 0.0,
     }
 }
 
@@ -579,6 +583,11 @@ fn project(tracks: Vec<TrackDefinition>) -> MultiTrackProject {
         bpm: 120.0,
         steps_per_beat: 4,
         tracks,
+        master_gain: 1.0,
+        effects: Default::default(),
+        scenes: Vec::new(),
+        chains: Vec::new(),
+        midi_mappings: Vec::new(),
     }
 }
 
