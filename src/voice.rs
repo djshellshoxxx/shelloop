@@ -82,15 +82,21 @@ impl VoiceAllocator {
         self.voice(id).is_some_and(|voice| voice.active)
     }
 
-    pub fn note_on(&mut self, channel: u8, note: u8, velocity: f32) -> Result<VoiceId, String> {
+    /// Runs on the audio thread, so errors are static strings (no allocation).
+    pub fn note_on(
+        &mut self,
+        channel: u8,
+        note: u8,
+        velocity: f32,
+    ) -> Result<VoiceId, &'static str> {
         if channel > 15 {
-            return Err("MIDI channel must be in the zero-based range 0..=15".into());
+            return Err("MIDI channel must be in the zero-based range 0..=15");
         }
         if note > 127 {
-            return Err("MIDI note must be 0..=127".into());
+            return Err("MIDI note must be 0..=127");
         }
         if !velocity.is_finite() || !(0.0..=1.0).contains(&velocity) {
-            return Err("velocity must be finite and between 0.0 and 1.0".into());
+            return Err("velocity must be finite and between 0.0 and 1.0");
         }
 
         let slot = self.choose_slot();

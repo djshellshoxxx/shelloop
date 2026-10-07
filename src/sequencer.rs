@@ -118,6 +118,18 @@ impl LiveSequencer {
         self.position_frame = self.position_frame.saturating_add(1);
     }
 
+    /// Hand every scheduled note-off to `release` now and forget them, so a
+    /// pattern swap releases sounding notes (with their envelopes) instead
+    /// of cutting them.
+    pub fn release_pending(&mut self, mut release: impl FnMut(EngineCommand)) {
+        for pending in self.pending_note_offs.drain(..) {
+            release(EngineCommand::NoteOff {
+                channel: pending.channel,
+                note: pending.note,
+            });
+        }
+    }
+
     pub fn pattern(&self) -> &CompiledPattern {
         &self.pattern
     }

@@ -63,9 +63,10 @@ pub enum AudioMessage {
         slot: EffectSlotId,
         bypassed: bool,
     },
+    /// Resolved against the engine's own playhead on the audio thread.
     LaunchScene {
         scene: SceneId,
-        frame: u64,
+        boundary: QuantizeBoundary,
     },
     StartChain {
         chain: ChainId,
@@ -137,8 +138,8 @@ pub fn apply_audio_message(
         } => {
             let _ = engine.set_effect_bypass(location, slot, bypassed);
         }
-        AudioMessage::LaunchScene { scene, frame } => {
-            let _ = engine.launch_scene(scene, frame);
+        AudioMessage::LaunchScene { scene, boundary } => {
+            let _ = engine.launch_scene_at(scene, boundary);
         }
         AudioMessage::StartChain { chain, frame } => {
             let _ = engine.start_chain(chain, frame);
@@ -395,10 +396,14 @@ pub struct SessionController {
     mixer: Vec<(TrackId, MixerMirror)>,
     master_gain: f32,
     learn: MidiLearn,
-    variations: Vec<(TrackId, VariationSession)>,
+    /// One proposal per (track, pattern): a preview never applies to a
+    /// different pattern than the one it was generated from.
+    variations: Vec<((TrackId, PatternId), VariationSession)>,
     selected_step: usize,
     /// Last launched or observed scene, for next/prev.
     last_scene: Option<SceneId>,
+    /// Scene the engine last reported active; its changes are mirrored.
+    observed_scene: Option<SceneId>,
     sender: Sender<AudioMessage>,
     dropped_messages: u64,
     dirty: bool,
@@ -460,11 +465,7 @@ impl SessionController {
             let exists = |target: ParameterTarget| target_exists(&project, target);
             learn.disable_orphans(exists)
         };
-        let variations = project
-            .tracks
-            .iter()
-            .map(|track| (track.id, VariationSession::new()))
-            .collect();
+        let variations = Vec::new();
         let master_gain = project.master_gain;
         let mut controller = Self {
             project,
@@ -478,6 +479,7 @@ impl SessionController {
             variations,
             selected_step: 0,
             last_scene: None,
+            observed_scene: None,
             sender,
             dropped_messages: 0,
             dirty: false,
@@ -521,10 +523,56 @@ impl SessionController {
     }
 
     /// Follow the engine's active scene (chains change it on their own).
+    ///
+    /// When the engine activates a scene (manually or from a chain), the
+    /// scene's mute/gain overrides are copied into the control mirror and
+    /// project, and editing follows each track to the scene's pattern, so
+    /// toggles, pickup and edits act on what is actually playing.
     pub fn observe_active_scene(&mut self, scene: Option<SceneId>) {
-        if scene.is_some() {
-            self.last_scene = scene;
+        let Some(id) = scene else {
+            return;
+        };
+        self.last_scene = Some(id);
+        if self.observed_scene == Some(id) {
+            return;
         }
+        self.observed_scene = Some(id);
+        let Some(states) = self
+            .project
+            .scenes
+            .iter()
+            .find(|candidate| candidate.id == id)
+            .map(|scene| scene.track_states.clone())
+        else {
+            return;
+        };
+        for state in states {
+            if let Ok(mirror) = self.mixer_mut(state.track_id) {
+                if let Some(muted) = state.muted {
+                    mirror.muted = muted;
+                }
+                if let Some(gain) = state.gain {
+                    mirror.gain = gain;
+                }
+            }
+            if let Some(definition) = self
+                .project
+                .tracks
+                .iter_mut()
+                .find(|definition| definition.id == state.track_id)
+            {
+                if let Some(muted) = state.muted {
+                    definition.muted = muted;
+                }
+                if let Some(gain) = state.gain {
+                    definition.gain = gain;
+                }
+            }
+            let _ = self
+                .editors
+                .select_pattern_for(state.track_id, state.pattern_id);
+        }
+        self.set_selected_step(self.selected_step);
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -686,13 +734,15 @@ impl SessionController {
 
     fn pattern_edit(&mut self, line: &str, current_frame: u64) -> Result<String, String> {
         let command = parse_pattern_edit_command(line)?;
+        let boundary = self.editors.default_quantize_boundary(&command);
+        let outcome = self.editors.apply(command)?;
+        // Only a successful edit moves the selection, and every edit keeps
+        // it inside the (possibly shorter) pattern.
         if let crate::PatternEditCommand::Step { index, .. } = command {
             self.selected_step = index;
         }
-        let boundary = self.editors.default_quantize_boundary(&command);
-        let outcome = self.editors.apply(command)?;
+        self.set_selected_step(self.selected_step);
         if !outcome.changed {
-            self.set_selected_step(self.selected_step);
             return Ok(format!("selected track {}", outcome.track.0));
         }
         self.queue_selected(current_frame, boundary)
@@ -849,6 +899,19 @@ impl SessionController {
     /// Set any addressable parameter's base value (used by commands, MIDI
     /// learn and the inspector).
     pub fn set_parameter(&mut self, target: ParameterTarget, value: f32) -> Result<String, String> {
+        let result = self.set_parameter_base(target, value)?;
+        // A change from elsewhere invalidates hardware pickup state.
+        self.learn.invalidate_pickup(target);
+        Ok(result)
+    }
+
+    /// Apply a value without re-arming pickup (used for values that came
+    /// from a MIDI mapping, which tracks its own pickup state).
+    fn set_parameter_base(
+        &mut self,
+        target: ParameterTarget,
+        value: f32,
+    ) -> Result<String, String> {
         let descriptor = self
             .descriptor(target)
             .ok_or_else(|| format!("{} does not exist", format_target(target)))?;
@@ -943,7 +1006,6 @@ impl SessionController {
             }
             ParameterTarget::Action(action) => return self.action(action, 0),
         }
-        self.learn.invalidate_pickup(target);
         self.dirty = true;
         Ok(format!("{} = {value}", format_target(target)))
     }
@@ -1204,15 +1266,17 @@ impl SessionController {
             .find(|scene| scene.id == id)
             .ok_or_else(|| format!("unknown scene {}", id.0))?;
         let name = scene.name.clone();
-        let frame = self.boundary_frame(
-            current_frame,
-            boundary.unwrap_or(QuantizeBoundary::Bar {
-                beats_per_bar: BEATS_PER_BAR,
-            }),
-        )?;
-        self.send(AudioMessage::LaunchScene { scene: id, frame })?;
+        let boundary = boundary.unwrap_or(QuantizeBoundary::Bar {
+            beats_per_bar: BEATS_PER_BAR,
+        });
+        // Validate the boundary here; the audio thread resolves the frame.
+        let frame = self.boundary_frame(current_frame, boundary)?;
+        self.send(AudioMessage::LaunchScene {
+            scene: id,
+            boundary,
+        })?;
         self.last_scene = Some(id);
-        Ok(format!("scene {name} queued for frame {frame}"))
+        Ok(format!("scene {name} queued (about frame {frame})"))
     }
 
     fn chain_command(&mut self, line: &str, current_frame: u64) -> Result<String, String> {
@@ -1507,7 +1571,9 @@ impl SessionController {
         };
         for output in outputs {
             let result = match output {
-                MappedOutput::SetParameter { target, value } => self.set_parameter(target, value),
+                MappedOutput::SetParameter { target, value } => {
+                    self.set_parameter_base(target, value)
+                }
                 MappedOutput::Action(action) => self.action(action, current_frame),
             };
             match result {
@@ -1605,13 +1671,14 @@ impl SessionController {
     }
 
     fn variation_mut(&mut self, track: TrackId) -> Result<&mut VariationSession, String> {
-        if !self.variations.iter().any(|(id, _)| *id == track) {
-            self.variations.push((track, VariationSession::new()));
+        let key = (track, self.editors.selected_pattern_of(track));
+        if !self.variations.iter().any(|(id, _)| *id == key) {
+            self.variations.push((key, VariationSession::new()));
         }
         Ok(&mut self
             .variations
             .iter_mut()
-            .find(|(id, _)| *id == track)
+            .find(|(id, _)| *id == key)
             .expect("inserted above")
             .1)
     }
@@ -1626,9 +1693,36 @@ impl SessionController {
                 self.sync_pattern_to_project(track, pattern);
             }
         }
-        self.project.revision = self.project.revision.saturating_add(1);
-        self.project.schema_version = crate::MULTITRACK_PROJECT_SCHEMA_VERSION;
-        self.project.save_atomic(&path)?;
+        let old_dir = self.project_dir();
+        let new_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let mut project = self.project.clone();
+        project.revision = project.revision.saturating_add(1);
+        project.schema_version = crate::MULTITRACK_PROJECT_SCHEMA_VERSION;
+        if !same_directory(&old_dir, &new_dir) {
+            // Relative sample paths are relative to the project file; keep
+            // them pointing at the same files from the new location.
+            for sample in project
+                .tracks
+                .iter_mut()
+                .filter_map(|track| track.sample.as_mut())
+            {
+                let source = Path::new(&sample.path);
+                if source.is_relative() {
+                    let absolute = old_dir.join(source);
+                    let absolute = absolute.canonicalize().unwrap_or(absolute);
+                    sample.path = match new_dir
+                        .canonicalize()
+                        .ok()
+                        .and_then(|dir| absolute.strip_prefix(dir).ok().map(Path::to_path_buf))
+                    {
+                        Some(relative) => relative.to_string_lossy().replace('\\', "/"),
+                        None => absolute.to_string_lossy().into_owned(),
+                    };
+                }
+            }
+        }
+        project.save_atomic(&path)?;
+        self.project = project;
         self.project_path = Some(path.clone());
         self.dirty = false;
         Ok(format!("project saved to {}", path.display()))
@@ -1807,6 +1901,18 @@ fn effect_config_mut(
             .get_mut(slot),
         EffectLocation::Master => project.effects.master.get_mut(slot),
     }
+}
+
+fn same_directory(a: &Path, b: &Path) -> bool {
+    let normalize = |path: &Path| {
+        let path = if path.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            path
+        };
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    };
+    normalize(a) == normalize(b)
 }
 
 /// Whether a target resolves in the project (orphan detection never

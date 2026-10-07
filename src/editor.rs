@@ -96,6 +96,8 @@ impl PatternEditor {
         }
         let mut candidate = self.pattern.clone();
         candidate.steps.resize(len, None);
+        // Locks and anchors on removed steps go with them.
+        remap_step_metadata(&mut candidate, |step| (step < len).then_some(step));
         self.commit(candidate)
     }
 
@@ -108,14 +110,18 @@ impl PatternEditor {
     pub fn rotate_left(&mut self, amount: usize) -> Result<u64, String> {
         let mut candidate = self.pattern.clone();
         let len = candidate.steps.len();
-        candidate.steps.rotate_left(amount % len);
+        let shift = amount % len;
+        candidate.steps.rotate_left(shift);
+        remap_step_metadata(&mut candidate, |step| Some((step + len - shift) % len));
         self.commit(candidate)
     }
 
     pub fn rotate_right(&mut self, amount: usize) -> Result<u64, String> {
         let mut candidate = self.pattern.clone();
         let len = candidate.steps.len();
-        candidate.steps.rotate_right(amount % len);
+        let shift = amount % len;
+        candidate.steps.rotate_right(shift);
+        remap_step_metadata(&mut candidate, |step| Some((step + shift) % len));
         self.commit(candidate)
     }
 
@@ -230,5 +236,39 @@ impl PatternEditor {
             self.redo.pop_front();
         }
         self.redo.push_back(pattern);
+    }
+}
+
+/// Move per-step locks and anchor invariants with their steps. `map` takes
+/// a zero-based step and returns its new index, or `None` to drop it.
+fn remap_step_metadata(pattern: &mut Pattern, map: impl Fn(usize) -> Option<usize>) {
+    let locks = std::mem::take(&mut pattern.locks);
+    for mut entry in locks {
+        if let Some(step) = map(usize::from(entry.step)) {
+            entry.step = step as u16;
+            pattern.locks.push(entry);
+        }
+    }
+    pattern.locks.sort_by_key(|entry| entry.step);
+    if let Some(profile) = pattern.invariants.as_mut() {
+        for rule in &mut profile.rules {
+            if let crate::InvariantKind::AnchorSteps { steps } = &mut rule.kind {
+                let mut remapped: Vec<u16> = steps
+                    .iter()
+                    .filter_map(|step| map(usize::from(*step).saturating_sub(1)))
+                    .map(|step| step as u16 + 1)
+                    .collect();
+                remapped.sort_unstable();
+                remapped.dedup();
+                *steps = remapped;
+            }
+        }
+        // An anchor rule left with no steps would no longer validate.
+        profile.rules.retain(|rule| {
+            !matches!(&rule.kind, crate::InvariantKind::AnchorSteps { steps } if steps.is_empty())
+        });
+        if profile.rules.is_empty() {
+            pattern.invariants = None;
+        }
     }
 }

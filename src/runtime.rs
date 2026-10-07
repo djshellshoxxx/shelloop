@@ -556,9 +556,18 @@ mod live {
             match parts.get(1).copied() {
                 None | Some("status") => Ok(describe_black_box(&black_box.status())),
                 Some("save") => {
-                    let target = match parts.get(2) {
-                        Some(path) => SaveTarget::Path(PathBuf::from(path)),
-                        None => SaveTarget::QuickSave,
+                    // The path is the rest of the line, so it may contain spaces.
+                    let path = line
+                        .trim_start()
+                        .strip_prefix("blackbox")
+                        .map(str::trim_start)
+                        .and_then(|rest| rest.strip_prefix("save"))
+                        .map(str::trim)
+                        .unwrap_or_default();
+                    let target = if path.is_empty() {
+                        SaveTarget::QuickSave
+                    } else {
+                        SaveTarget::Path(PathBuf::from(path))
                     };
                     let id = black_box
                         .request_save(target, self.output_frame.load(Ordering::Relaxed))?;
@@ -1364,8 +1373,10 @@ mod live {
         };
 
         request_panic(&command_sender, &sequencer_sender);
-        drop(audio);
+        // Shut capture services down while the callback still runs, so an
+        // armed resample is cancelled cleanly instead of timing out.
         services.shutdown();
+        drop(audio);
 
         let recording_result = match recording_finalizer {
             Some(finalizer) => finalizer.finish().map(|summary| {
@@ -1719,6 +1730,15 @@ mod live {
         result
     }
 
+    /// Pops the kitty keyboard protocol flags on drop.
+    struct KeyboardEnhancementGuard;
+
+    impl Drop for KeyboardEnhancementGuard {
+        fn drop(&mut self) {
+            let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+        }
+    }
+
     /// Full-screen workstation loop (spec 08).
     fn run_tui_session(
         options: &StartupOptions,
@@ -1730,15 +1750,22 @@ mod live {
     ) -> Result<(), String> {
         let guard = TuiTerminalGuard::enter(true)?;
         let keyboard_enhancement = supports_keyboard_enhancement().unwrap_or(false);
-        if keyboard_enhancement {
-            let _ = execute!(
-                io::stdout(),
-                PushKeyboardEnhancementFlags(
-                    KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                        | KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        // Dropped before `guard` (reverse declaration order), so the terminal
+        // leaves the kitty keyboard protocol on every exit path, including
+        // early returns and panics.
+        let _keyboard = keyboard_enhancement
+            .then(|| {
+                execute!(
+                    io::stdout(),
+                    PushKeyboardEnhancementFlags(
+                        KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                            | KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    )
                 )
-            );
-        }
+                .ok()
+                .map(|()| KeyboardEnhancementGuard)
+            })
+            .flatten();
         let releases = cfg!(windows) || keyboard_enhancement;
         let backend = ratatui::backend::CrosstermBackend::new(io::stdout());
         let mut terminal = ratatui::Terminal::new(backend)
@@ -1938,10 +1965,8 @@ mod live {
                 }
             }
         })();
-        if keyboard_enhancement {
-            let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
-        }
         drop(terminal);
+        drop(_keyboard);
         drop(guard);
         result
     }

@@ -147,6 +147,9 @@ impl Pattern {
 
         for (index, step) in self.steps.iter().enumerate() {
             let Some(step) = step else { continue };
+            if step.note > 127 {
+                return Err(format!("step {index} note must be a MIDI note 0..=127"));
+            }
             if !step.velocity.is_finite() || !(0.0..=1.0).contains(&step.velocity) {
                 return Err(format!(
                     "step {index} velocity must be finite and 0.0..=1.0"
@@ -463,8 +466,9 @@ impl PatternScheduler {
         let frames_per_step = self.frames_per_step();
         let loop_frames = frames_per_step * pattern.steps.len() as f64;
         let block_end = block_start_frame.saturating_add(block_frames as u64);
-        let estimated_first = (block_start_frame as f64 / loop_frames).floor() as i64 - 1;
-        let estimated_last = (block_end as f64 / loop_frames).floor() as i64 + 1;
+        let margin = loop_margin(pattern.steps, loop_frames);
+        let estimated_first = (block_start_frame as f64 / loop_frames).floor() as i64 - margin;
+        let estimated_last = (block_end as f64 / loop_frames).floor() as i64 + margin;
         let first_loop = estimated_first.max(0) as u64;
         let last_loop = estimated_last.max(0) as u64;
 
@@ -516,7 +520,9 @@ impl PatternScheduler {
             }
         }
 
-        events.sort_by_key(|event| {
+        // Unstable sort: no scratch allocation on the audio thread; the key
+        // is total, so the order is still deterministic.
+        events.sort_unstable_by_key(|event| {
             (
                 event.absolute_frame,
                 event.step_index,
@@ -545,9 +551,10 @@ impl PatternScheduler {
         let frames_per_step = self.frames_per_step();
         let loop_frames = frames_per_step * steps.len() as f64;
         let block_end = block_start_frame.saturating_add(u64::from(block_frames));
+        let margin = loop_margin(steps, loop_frames);
         let first_loop =
-            ((block_start_frame as f64 / loop_frames).floor() as i64 - 1).max(0) as u64;
-        let last_loop = ((block_end as f64 / loop_frames).floor() as i64 + 1).max(0) as u64;
+            ((block_start_frame as f64 / loop_frames).floor() as i64 - margin).max(0) as u64;
+        let last_loop = ((block_end as f64 / loop_frames).floor() as i64 + margin).max(0) as u64;
         'loops: for loop_index in first_loop..=last_loop {
             for (step_index, step) in steps.iter().enumerate() {
                 let global_step = loop_index
@@ -584,7 +591,7 @@ impl PatternScheduler {
                 });
             }
         }
-        boundaries.sort_by_key(|boundary| (boundary.absolute_frame, boundary.step_index));
+        boundaries.sort_unstable_by_key(|boundary| (boundary.absolute_frame, boundary.step_index));
     }
 
     fn step_triggers(
@@ -616,6 +623,18 @@ struct PatternScheduleView<'a> {
     swing: f32,
     channel: u8,
     steps: &'a [Option<PatternStep>],
+}
+
+/// Loops to scan either side of a block: microtiming may move a step by
+/// more than a whole (short) loop.
+fn loop_margin(steps: &[Option<PatternStep>], loop_frames: f64) -> i64 {
+    let max_micro = steps
+        .iter()
+        .flatten()
+        .map(|step| step.microtiming_frames.unsigned_abs())
+        .max()
+        .unwrap_or(0);
+    (f64::from(max_micro) / loop_frames).ceil() as i64 + 1
 }
 
 fn splitmix64(mut value: u64) -> u64 {

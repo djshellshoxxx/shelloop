@@ -152,7 +152,11 @@ impl ProjectPatternEditors {
 
     /// Direct edits to another pattern of the selected track.
     pub fn select_pattern(&mut self, pattern: PatternId) -> Result<(), String> {
-        let track = self.selected_track;
+        self.select_pattern_for(self.selected_track, pattern)
+    }
+
+    /// Direct edits for `track` to one of its patterns.
+    pub fn select_pattern_for(&mut self, track: TrackId, pattern: PatternId) -> Result<(), String> {
         if self.editor_for(track, pattern).is_none() {
             return Err(format!("track {} has no pattern {}", track.0, pattern.0));
         }
@@ -362,7 +366,7 @@ fn parse_step_command(parts: &[&str]) -> Result<PatternEditCommand, String> {
             }
             StepEdit::Note(note)
         }
-        "velocity" => {
+        "velocity" | "vel" => {
             require_len(parts, 4, "step velocity requires a value")?;
             StepEdit::Velocity(parse_unit(parts[3], "velocity")?)
         }
@@ -370,11 +374,11 @@ fn parse_step_command(parts: &[&str]) -> Result<PatternEditCommand, String> {
             require_len(parts, 4, "step gate requires a value")?;
             StepEdit::Gate(parse_unit(parts[3], "gate")?)
         }
-        "probability" => {
+        "probability" | "prob" => {
             require_len(parts, 4, "step probability requires a value")?;
             StepEdit::Probability(parse_unit(parts[3], "probability")?)
         }
-        "ratchets" => {
+        "ratchets" | "ratchet" => {
             require_len(parts, 4, "step ratchets requires a count")?;
             let ratchets = parse_u8(parts[3], "ratchets")?;
             if !(1..=MAX_RATCHETS).contains(&ratchets) {

@@ -152,6 +152,7 @@ struct ActiveCapture {
     start_frame: u64,
     stop_frame: Option<u64>,
     frames: u64,
+    last_frame: Option<u64>,
     producer: Box<RealtimeRecordingProducer>,
 }
 
@@ -187,6 +188,7 @@ impl CaptureTap {
                         start_frame,
                         stop_frame,
                         frames: 0,
+                        last_frame: None,
                         producer,
                     });
                 }
@@ -220,7 +222,11 @@ impl CaptureTap {
         let Some(active) = self.active.as_mut() else {
             return;
         };
-        if active.stop_frame.is_some_and(|stop| frame >= stop) {
+        // A backward jump (transport restart) ends the capture: the frames
+        // after it belong to a different timeline.
+        let restarted = active.last_frame.is_some_and(|last| frame <= last);
+        active.last_frame = Some(frame);
+        if restarted || active.stop_frame.is_some_and(|stop| frame >= stop) {
             let active = self.active.take().expect("checked above");
             self.finish(active, false);
             return;
@@ -545,6 +551,14 @@ impl Resampler {
         while self.busy() && std::time::Instant::now() < deadline {
             let _ = self.poll(self.frame_hint);
             std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // The callback is gone (or never answered): finish the writer and
+        // remove the partial file so no `.wav.part` is left behind.
+        if let Some(mut pending) = self.pending.take() {
+            if let Some(finalizer) = pending.finalizer.take() {
+                let _ = finalizer.finish();
+            }
+            let _ = std::fs::remove_file(&pending.temp_path);
         }
     }
 }

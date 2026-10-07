@@ -661,10 +661,36 @@ impl RealtimeTrack {
     /// Switch to library pattern `index` at the current frame. Old locks
     /// never leak across a pattern replacement.
     fn activate_library_pattern(&mut self, index: usize) {
-        self.instrument.handle(EngineCommand::Panic);
+        // A revision queued for the pattern being left must not be lost:
+        // commit it to the library now (it is no longer audible).
+        if let Some(pending) = self.pending_pattern {
+            if pending.library_index != index {
+                self.pending_pattern = None;
+                self.library[pending.library_index] = pending.change.value.pattern;
+                self.library_revisions[pending.library_index] = pending.change.value.revision;
+            }
+        }
+        // Release the old pattern's notes through their envelopes rather
+        // than hard-stopping them, which would click.
+        let instrument = &mut self.instrument;
+        self.sequencer
+            .release_pending(|command| instrument.handle(command));
         self.sequencer.replace_compiled_pattern(self.library[index]);
         self.active_index = index;
         self.set_locks(&[]);
+    }
+
+    /// Apply a queued revision immediately (used when the timeline it was
+    /// quantized against is discarded, e.g. on restart).
+    fn commit_pending_now(&mut self) {
+        if let Some(pending) = self.pending_pattern.take() {
+            let index = pending.library_index;
+            self.library[index] = pending.change.value.pattern;
+            self.library_revisions[index] = pending.change.value.revision;
+            if index == self.active_index {
+                self.sequencer.replace_compiled_pattern(self.library[index]);
+            }
+        }
     }
 
     /// Replace the lock set. Restoration happens before new locks are
@@ -977,6 +1003,7 @@ struct SendBus {
 pub struct MultiTrackEngine {
     sample_rate: u32,
     bpm: f64,
+    steps_per_beat: u32,
     tracks: Vec<RealtimeTrack>,
     command_buffer: Vec<EngineCommand>,
     send_buses: Vec<SendBus>,
@@ -1048,6 +1075,7 @@ impl MultiTrackEngine {
         Ok(Self {
             sample_rate,
             bpm,
+            steps_per_beat,
             tracks,
             command_buffer: Vec::with_capacity(LiveSequencer::MAX_COMMANDS_PER_FRAME),
             send_buses: Vec::new(),
@@ -1368,6 +1396,26 @@ impl MultiTrackEngine {
         Ok(())
     }
 
+    /// Launch a scene on the next `boundary` resolved against the engine's
+    /// own playhead, so a stale control-side frame can never land a scene
+    /// off the grid or skip the downbeat.
+    pub fn launch_scene_at(
+        &mut self,
+        id: SceneId,
+        boundary: crate::QuantizeBoundary,
+    ) -> Result<u64, EngineError> {
+        let frame = crate::next_boundary_frame(
+            self.position_frame(),
+            self.sample_rate,
+            self.bpm,
+            self.steps_per_beat,
+            boundary,
+        )
+        .map_err(|_| EngineError::InvalidValue("invalid scene launch boundary"))?;
+        self.launch_scene(id, frame)?;
+        Ok(frame)
+    }
+
     /// Start a chain on the first bar boundary at or after `from_frame`.
     pub fn start_chain(&mut self, id: ChainId, from_frame: u64) -> Result<u64, EngineError> {
         let index = self
@@ -1375,6 +1423,8 @@ impl MultiTrackEngine {
             .iter()
             .position(|chain| chain.id == id)
             .ok_or(EngineError::ChainNotFound(id.0))?;
+        // Never start in the past: a stale request starts on the next bar.
+        let from_frame = from_frame.max(self.position_frame());
         let start_bar = bar_at_or_after(from_frame, self.frames_per_bar);
         let start_frame = bar_frame(start_bar, self.frames_per_bar);
         let (scene, bars) = self.chains[index].steps[0];
@@ -1809,6 +1859,7 @@ impl MultiTrackEngine {
         for track in &mut self.tracks {
             track.instrument.handle(EngineCommand::Panic);
             track.set_locks(&[]);
+            track.commit_pending_now();
             track.sequencer.restart();
         }
         self.pending_scene = None;
