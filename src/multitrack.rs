@@ -941,6 +941,22 @@ struct ChainRun {
     paused: bool,
 }
 
+/// Per-track state for telemetry and status displays.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrackStatus {
+    pub id: TrackId,
+    pub peak: f32,
+    pub muted: bool,
+    pub soloed: bool,
+    pub audible: bool,
+    pub gain: f32,
+    pub pan: f32,
+    pub active_pattern: PatternId,
+    pub active_revision: u64,
+    pub queued_revision: Option<u64>,
+    pub lock_count: usize,
+}
+
 /// Observable chain state for status displays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChainStatus {
@@ -1506,6 +1522,27 @@ impl MultiTrackEngine {
     /// Decaying peak meters, in track order.
     pub fn track_peaks(&self) -> impl Iterator<Item = (TrackId, f32)> + '_ {
         self.tracks.iter().map(|track| (track.id, track.peak))
+    }
+
+    /// Allocation-free status of the track at `index` (engine order).
+    pub fn track_status(&self, index: usize) -> Option<TrackStatus> {
+        let any_soloed = self.tracks.iter().any(|track| track.soloed);
+        self.tracks.get(index).map(|track| TrackStatus {
+            id: track.id,
+            peak: track.peak,
+            muted: track.muted,
+            soloed: track.soloed,
+            audible: track.is_audible(any_soloed),
+            gain: track.base_gain,
+            pan: track.base_pan,
+            active_pattern: track.library_ids[track.active_index],
+            active_revision: track.library_revisions[track.active_index],
+            queued_revision: track
+                .pending_pattern
+                .filter(|pending| pending.library_index == track.active_index)
+                .map(|pending| pending.change.value.revision),
+            lock_count: track.lock_len,
+        })
     }
 
     pub fn master_peak(&self) -> f32 {

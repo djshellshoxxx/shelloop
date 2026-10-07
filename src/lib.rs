@@ -2,6 +2,7 @@ pub mod app;
 pub mod audio;
 pub mod blackbox;
 pub mod command;
+pub mod controller;
 pub mod editor;
 pub mod editor_command;
 pub mod effects;
@@ -83,7 +84,7 @@ pub use midi_learn::{
 pub use mixer::{protect_master, ChannelStrip, SmoothedParam};
 pub use multitrack::{
     ChainStatus, EngineError, EngineProjectSnapshot, LibraryPattern, MultiTrackEngine,
-    MultiTrackProject, PreparedTrack, SampleContext, TrackCommand, TrackDefinition, TrackId,
+    MultiTrackProject, PreparedTrack, SampleContext, TrackStatus, TrackCommand, TrackDefinition, TrackId,
     TrackKind, MAX_REALTIME_TRACKS, MAX_TRACK_PATTERNS, MULTITRACK_PROJECT_SCHEMA_VERSION,
     PRIMARY_PATTERN_ID,
 };
@@ -141,3 +142,7 @@ pub use variation::{
 };
 pub use variation::{InvariantKind, InvariantProfile, InvariantRule};
 pub use voice::{VoiceAllocator, VoiceId, VoiceState};
+pub use controller::{
+    apply_audio_message, AudioMessage, EngineTelemetry, Garbage, MidiDisposition,
+    SessionController, TelemetrySnapshot, TrackTelemetrySnapshot,
+};

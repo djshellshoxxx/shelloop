@@ -1,6 +1,8 @@
+use crate::scenes::PatternId;
 use crate::{
     compile_pattern_revision, CompiledPatternRevision, Pattern, PatternEditor, PatternStep,
     QuantizeBoundary, QuantizedChange, TrackId, MAX_PATTERN_STEPS, MAX_REALTIME_TRACKS,
+    MAX_TRACK_PATTERNS, PRIMARY_PATTERN_ID,
 };
 
 const MAX_MICROTIMING_FRAMES: i32 = 192_000;
@@ -40,13 +42,19 @@ pub struct EditOutcome {
 #[derive(Debug, Clone)]
 struct TrackPatternEditor {
     id: TrackId,
+    pattern: PatternId,
     editor: PatternEditor,
 }
 
+/// Editors for every pattern of every track. Edits go to the selected
+/// track's selected pattern (the primary pattern unless `pattern <id>`
+/// chose another).
 #[derive(Debug, Clone)]
 pub struct ProjectPatternEditors {
     tracks: Vec<TrackPatternEditor>,
     selected_track: TrackId,
+    selected_patterns: Vec<(TrackId, PatternId)>,
+    history_capacity: usize,
 }
 
 impl ProjectPatternEditors {
@@ -69,6 +77,7 @@ impl ProjectPatternEditors {
             }
             editors.push(TrackPatternEditor {
                 id,
+                pattern: PRIMARY_PATTERN_ID,
                 editor: PatternEditor::new(pattern, history_capacity)?,
             });
         }
@@ -81,18 +90,112 @@ impl ProjectPatternEditors {
         Ok(Self {
             tracks: editors,
             selected_track,
+            selected_patterns: Vec::new(),
+            history_capacity,
         })
+    }
+
+    /// Add an editor for a track's library pattern.
+    pub fn add_pattern(
+        &mut self,
+        track: TrackId,
+        pattern_id: PatternId,
+        pattern: Pattern,
+    ) -> Result<(), String> {
+        if self.editor_for(track, pattern_id).is_some() {
+            return Err(format!(
+                "track {} already has an editor for pattern {}",
+                track.0, pattern_id.0
+            ));
+        }
+        let owned = self.tracks.iter().filter(|entry| entry.id == track).count();
+        if owned >= MAX_TRACK_PATTERNS {
+            return Err(format!(
+                "tracks may own at most {MAX_TRACK_PATTERNS} patterns"
+            ));
+        }
+        if owned == 0
+            && self
+                .tracks
+                .iter()
+                .filter(|entry| entry.pattern == PRIMARY_PATTERN_ID)
+                .count()
+                >= MAX_REALTIME_TRACKS
+        {
+            return Err(format!(
+                "pattern editor supports at most {MAX_REALTIME_TRACKS} tracks"
+            ));
+        }
+        self.tracks.push(TrackPatternEditor {
+            id: track,
+            pattern: pattern_id,
+            editor: PatternEditor::new(pattern, self.history_capacity)?,
+        });
+        Ok(())
     }
 
     pub fn selected_track(&self) -> TrackId {
         self.selected_track
     }
 
-    pub fn editor(&self, track: TrackId) -> Option<&PatternEditor> {
+    /// Pattern of `track` that edits go to.
+    pub fn selected_pattern_of(&self, track: TrackId) -> PatternId {
+        self.selected_patterns
+            .iter()
+            .find(|(candidate, _)| *candidate == track)
+            .map_or(PRIMARY_PATTERN_ID, |(_, pattern)| *pattern)
+    }
+
+    pub fn selected_pattern(&self) -> PatternId {
+        self.selected_pattern_of(self.selected_track)
+    }
+
+    /// Direct edits to another pattern of the selected track.
+    pub fn select_pattern(&mut self, pattern: PatternId) -> Result<(), String> {
+        let track = self.selected_track;
+        if self.editor_for(track, pattern).is_none() {
+            return Err(format!("track {} has no pattern {}", track.0, pattern.0));
+        }
+        self.selected_patterns
+            .retain(|(candidate, _)| *candidate != track);
+        self.selected_patterns.push((track, pattern));
+        Ok(())
+    }
+
+    /// Pattern IDs owned by a track, in creation order.
+    pub fn pattern_ids(&self, track: TrackId) -> Vec<PatternId> {
         self.tracks
             .iter()
-            .find(|entry| entry.id == track)
+            .filter(|entry| entry.id == track)
+            .map(|entry| entry.pattern)
+            .collect()
+    }
+
+    pub fn track_ids(&self) -> Vec<TrackId> {
+        let mut ids = Vec::new();
+        for entry in &self.tracks {
+            if !ids.contains(&entry.id) {
+                ids.push(entry.id);
+            }
+        }
+        ids
+    }
+
+    /// Editor of the track's selected pattern.
+    pub fn editor(&self, track: TrackId) -> Option<&PatternEditor> {
+        self.editor_for(track, self.selected_pattern_of(track))
+    }
+
+    pub fn editor_for(&self, track: TrackId, pattern: PatternId) -> Option<&PatternEditor> {
+        self.tracks
+            .iter()
+            .find(|entry| entry.id == track && entry.pattern == pattern)
             .map(|entry| &entry.editor)
+    }
+
+    /// Mutable editor of the selected track's selected pattern.
+    pub fn selected_editor_mut(&mut self) -> Result<&mut PatternEditor, String> {
+        self.editor_mut(self.selected_track)
     }
 
     pub fn apply(&mut self, command: PatternEditCommand) -> Result<EditOutcome, String> {
@@ -168,9 +271,10 @@ impl ProjectPatternEditors {
     }
 
     fn editor_mut(&mut self, track: TrackId) -> Result<&mut PatternEditor, String> {
+        let pattern = self.selected_pattern_of(track);
         self.tracks
             .iter_mut()
-            .find(|entry| entry.id == track)
+            .find(|entry| entry.id == track && entry.pattern == pattern)
             .map(|entry| &mut entry.editor)
             .ok_or_else(|| format!("track id {} does not have a pattern editor", track.0))
     }
