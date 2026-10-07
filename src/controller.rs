@@ -1315,10 +1315,11 @@ impl SessionController {
             let editor = self.editors.editor(track).ok_or("no pattern editor")?;
             let locks = editor.pattern().step_locks(step);
             if locks.is_empty() {
-                return Ok(format!("step {step} has no locks"));
+                return Ok(format!("step {} has no locks", step + 1));
             }
             return Ok(format!(
-                "step {step} locks: {}",
+                "step {} locks: {}",
+                step + 1,
                 locks
                     .iter()
                     .map(|lock| format!("{}={}", describe_lock(lock.target), lock.value))
