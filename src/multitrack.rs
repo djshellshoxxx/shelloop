@@ -1,6 +1,7 @@
 use crate::{
-    ChannelStrip, CompiledPatternRevision, CompiledSynthPatch, EngineCommand, LiveSequencer,
-    Oscillator, Pattern, QuantizedChange, RealtimeSynth, SmoothedParam, SynthPatch,
+    ChannelStrip, CompiledPatternRevision, CompiledSamplePlayback, CompiledSynthPatch,
+    EngineCommand, LiveSequencer, Oscillator, Pattern, QuantizedChange, RealtimeSampler,
+    RealtimeSynth, SampleAssetBank, SampleSettings, SmoothedParam, SynthPatch,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -82,6 +83,22 @@ impl MultiTrackProject {
         result
     }
 
+    /// Settings of every sample track, in track order.
+    pub fn sample_settings(&self) -> impl Iterator<Item = &SampleSettings> {
+        self.tracks.iter().filter_map(|track| track.sample.as_ref())
+    }
+
+    /// Decode every sample the project references, resolving relative paths
+    /// against `base_dir` (normally the project file's folder). Fails before
+    /// activation with a report of every missing or invalid file.
+    pub fn load_sample_assets(
+        &self,
+        base_dir: &Path,
+        budget_bytes: usize,
+    ) -> Result<SampleAssetBank, String> {
+        SampleAssetBank::load_all(self.sample_settings(), base_dir, budget_bytes)
+    }
+
     pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
         let bytes =
             fs::read(path.as_ref()).map_err(|error| format!("read multitrack project: {error}"))?;
@@ -150,6 +167,8 @@ pub struct TrackDefinition {
     pub pattern: Pattern,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synth_patch: Option<SynthPatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<SampleSettings>,
 }
 
 impl TrackDefinition {
@@ -171,7 +190,43 @@ impl TrackDefinition {
             // Engine construction validates again at the actual device rate.
             patch.validate(48_000.0)?;
         }
+        match (&self.sample, self.kind) {
+            (Some(sample), TrackKind::Sample) => sample.validate()?,
+            (None, TrackKind::Sample) => {
+                return Err(format!(
+                    "sample track {} needs a \"sample\" object with at least path and mode",
+                    self.id.0
+                ))
+            }
+            (Some(_), _) => {
+                return Err("sample settings are only supported on sample tracks".into())
+            }
+            (None, _) => {}
+        }
         self.pattern.validate()
+    }
+}
+
+/// Decoded samples plus the folder their relative paths were resolved from,
+/// handed to the engine so sample tracks can find their audio.
+#[derive(Debug, Clone, Copy)]
+pub struct SampleContext<'a> {
+    pub assets: &'a SampleAssetBank,
+    pub base_dir: &'a Path,
+}
+
+#[derive(Debug, Clone)]
+enum TrackInstrument {
+    Synth(RealtimeSynth),
+    Sample(RealtimeSampler),
+}
+
+impl TrackInstrument {
+    fn handle(&mut self, command: EngineCommand) {
+        match self {
+            Self::Synth(synth) => synth.handle(command),
+            Self::Sample(sampler) => sampler.handle(command),
+        }
     }
 }
 
@@ -179,7 +234,7 @@ impl TrackDefinition {
 struct RealtimeTrack {
     id: TrackId,
     sequencer: LiveSequencer,
-    synth: RealtimeSynth,
+    instrument: TrackInstrument,
     gain: SmoothedParam,
     pan: SmoothedParam,
     muted: bool,
@@ -197,14 +252,46 @@ impl RealtimeTrack {
         project_seed: u64,
         polyphony: usize,
         definition: TrackDefinition,
+        samples: Option<SampleContext<'_>>,
     ) -> Result<Self, String> {
         definition.validate()?;
-        if definition.kind != TrackKind::Synth {
-            return Err(format!(
-                "track {:?} uses {:?}, which is not implemented by the real-time engine yet",
-                definition.id, definition.kind
-            ));
-        }
+        let instrument = match (definition.kind, definition.sample.as_ref()) {
+            (TrackKind::Synth, _) => {
+                let patch = definition
+                    .synth_patch
+                    .unwrap_or_else(|| SynthPatch::legacy(Oscillator::Saw));
+                TrackInstrument::Synth(RealtimeSynth::new_with_patch(
+                    sample_rate as f32,
+                    patch,
+                    polyphony,
+                )?)
+            }
+            (TrackKind::Sample, Some(settings)) => {
+                let base_dir = samples.map_or(Path::new("."), |samples| samples.base_dir);
+                let path = settings.resolve_path(base_dir);
+                let asset = samples
+                    .and_then(|samples| {
+                        let bank = samples.assets;
+                        bank.id_for_path(&path).and_then(|id| bank.get(id))
+                    })
+                    .ok_or_else(|| {
+                        format!(
+                            "sample track {} references {} which has not been loaded",
+                            definition.id.0,
+                            path.display()
+                        )
+                    })?;
+                let playback = CompiledSamplePlayback::new(asset, settings, sample_rate)
+                    .map_err(|error| format!("sample track {}: {error}", definition.id.0))?;
+                TrackInstrument::Sample(RealtimeSampler::new(playback))
+            }
+            (kind, _) => {
+                return Err(format!(
+                    "track {:?} uses {:?}, which is not implemented by the real-time engine yet",
+                    definition.id, kind
+                ))
+            }
+        };
 
         let sequencer = LiveSequencer::new(
             sample_rate,
@@ -213,16 +300,12 @@ impl RealtimeTrack {
             project_seed,
             definition.pattern,
         )?;
-        let patch = definition
-            .synth_patch
-            .unwrap_or_else(|| SynthPatch::legacy(Oscillator::Saw));
-        let synth = RealtimeSynth::new_with_patch(sample_rate as f32, patch, polyphony)?;
         let smoothing_frames = (sample_rate / 200).max(1);
 
         Ok(Self {
             id: definition.id,
             sequencer,
-            synth,
+            instrument,
             gain: SmoothedParam::new(definition.gain),
             pan: SmoothedParam::new(definition.pan),
             muted: definition.muted,
@@ -244,7 +327,7 @@ impl RealtimeTrack {
     ) -> (f32, f32) {
         if let Some(change) = self.pending_pattern {
             if change.apply_at_frame <= self.sequencer.position_frame() {
-                self.synth.handle(EngineCommand::Panic);
+                self.instrument.handle(EngineCommand::Panic);
                 self.sequencer
                     .replace_compiled_pattern(change.value.pattern);
                 self.active_revision = change.value.revision;
@@ -254,21 +337,33 @@ impl RealtimeTrack {
 
         self.sequencer.fill_commands(commands);
         for command in commands.drain(..) {
-            self.synth.handle(command);
+            self.instrument.handle(command);
         }
 
-        let mono = self.synth.next_sample();
         let gain = self.gain.next_value();
         let pan = self.pan.next_value();
-        if !self.is_audible(any_soloed) {
-            return (0.0, 0.0);
-        }
-        ChannelStrip {
+        let strip = ChannelStrip {
             gain,
             pan,
             muted: false,
+        };
+        // Instruments always render so voices age and finish while muted.
+        match &mut self.instrument {
+            TrackInstrument::Synth(synth) => {
+                let mono = synth.next_sample();
+                if !self.is_audible(any_soloed) {
+                    return (0.0, 0.0);
+                }
+                strip.process_mono(mono)
+            }
+            TrackInstrument::Sample(sampler) => {
+                let (left, right) = sampler.next_stereo_frame();
+                if !self.is_audible(any_soloed) {
+                    return (0.0, 0.0);
+                }
+                strip.process_stereo(left, right)
+            }
         }
-        .process_mono(mono)
     }
 }
 
@@ -287,6 +382,30 @@ impl MultiTrackEngine {
         polyphony_per_track: usize,
         definitions: Vec<TrackDefinition>,
     ) -> Result<Self, String> {
+        Self::with_sample_assets(
+            sample_rate,
+            bpm,
+            steps_per_beat,
+            project_seed,
+            polyphony_per_track,
+            definitions,
+            None,
+        )
+    }
+
+    /// Build an engine that can also play sample tracks. The context's bank
+    /// must already hold every sample the definitions reference (see
+    /// [`MultiTrackProject::load_sample_assets`]), and its `base_dir` must be
+    /// the folder the bank resolved relative paths against.
+    pub fn with_sample_assets(
+        sample_rate: u32,
+        bpm: f64,
+        steps_per_beat: u32,
+        project_seed: u64,
+        polyphony_per_track: usize,
+        definitions: Vec<TrackDefinition>,
+        samples: Option<SampleContext<'_>>,
+    ) -> Result<Self, String> {
         validate_track_definitions(&definitions)?;
 
         let mut tracks = Vec::with_capacity(definitions.len());
@@ -298,6 +417,7 @@ impl MultiTrackEngine {
                 project_seed,
                 polyphony_per_track,
                 definition,
+                samples,
             )?);
         }
 
@@ -328,8 +448,11 @@ impl MultiTrackEngine {
     /// Infallible bounded callback path: false means missing track or rate mismatch.
     pub fn apply_synth_patch(&mut self, id: TrackId, patch: CompiledSynthPatch) -> bool {
         match self.tracks.iter_mut().find(|track| track.id == id) {
-            Some(track) => track.synth.apply_patch(patch),
-            None => false,
+            Some(RealtimeTrack {
+                instrument: TrackInstrument::Synth(synth),
+                ..
+            }) => synth.apply_patch(patch),
+            _ => false,
         }
     }
 
@@ -340,7 +463,9 @@ impl MultiTrackEngine {
             TrackCommand::SetMute { track, muted } => self.set_mute(track, muted),
             TrackCommand::SetSolo { track, soloed } => self.set_solo(track, soloed),
             TrackCommand::Panic { track: Some(track) } => {
-                self.track_mut(track)?.synth.handle(EngineCommand::Panic);
+                self.track_mut(track)?
+                    .instrument
+                    .handle(EngineCommand::Panic);
                 Ok(())
             }
             TrackCommand::Panic { track: None } => {
@@ -450,7 +575,7 @@ impl MultiTrackEngine {
     pub fn set_playing_all(&mut self, playing: bool) {
         for track in &mut self.tracks {
             if track.sequencer.is_playing() && !playing {
-                track.synth.handle(EngineCommand::Panic);
+                track.instrument.handle(EngineCommand::Panic);
             }
             track.sequencer.set_playing(playing);
         }
@@ -464,14 +589,14 @@ impl MultiTrackEngine {
 
     pub fn restart_all(&mut self) {
         for track in &mut self.tracks {
-            track.synth.handle(EngineCommand::Panic);
+            track.instrument.handle(EngineCommand::Panic);
             track.sequencer.restart();
         }
     }
 
     pub fn panic_all(&mut self) {
         for track in &mut self.tracks {
-            track.synth.handle(EngineCommand::Panic);
+            track.instrument.handle(EngineCommand::Panic);
         }
     }
 
