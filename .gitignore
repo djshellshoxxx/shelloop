@@ -1,0 +1,7 @@
+/target/
+/dist/
+__pycache__/
+/.claude/worktrees/
+/captures/
+/shelloop-takes/
+**/captures/

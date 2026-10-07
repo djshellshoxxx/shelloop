@@ -1,0 +1,43 @@
+[package]
+name = "shelloop"
+version = "1.0.0-rc.1"
+edition = "2021"
+description = "Terminal-only real-time step sequencer and playable synthesizer"
+license = "MIT"
+repository = "https://github.com/djshellshoxxx/shelloop"
+
+[lib]
+name = "shelloop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shelloop"
+path = "src/main.rs"
+
+[features]
+default = []
+realtime-audio = ["dep:cpal"]
+midi = ["dep:midir"]
+terminal-ui = ["dep:crossterm", "dep:ratatui"]
+
+[dependencies]
+anyhow = "1.0"
+crossbeam-channel = "0.5"
+hound = "3.5"
+rand = { version = "0.8", features = ["small_rng"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+
+cpal = { version = "0.16", optional = true }
+midir = { version = "0.10", optional = true }
+crossterm = { version = "0.29", optional = true }
+ratatui = { version = "0.29", optional = true }
+
+[dev-dependencies]
+tempfile = "3.13"
+
+[workspace]
+members = [".", "clap-plugin"]
+resolver = "2"

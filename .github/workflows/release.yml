@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create or update (for example v1.0.0-rc.1)"
+        required: true
+      prerelease:
+        description: "Mark as a pre-release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+          - name: windows-x86_64
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux audio development headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Test release source
+        run: cargo test --workspace --all-targets --features realtime-audio,midi,terminal-ui
+      - name: Build standalone application
+        run: cargo build --release --features realtime-audio,midi,terminal-ui
+      - name: Build CLAP plugin
+        run: cargo build --release -p shelloop-clap
+      - name: Package Linux artifacts
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="shelloop-${TAG}-linux-x86_64"
+          clap="shelloop-clap-${TAG}-linux-x86_64"
+          mkdir -p "dist/$app" "dist/$clap"
+          cp target/release/shelloop "dist/$app/"
+          cp target/release/libshelloop_clap.so "dist/$app/shelloop.clap"
+          cp README.md LICENSE COPYRIGHT-TRADEMARK.md "dist/$app/"
+          cp -r patterns projects "dist/$app/"
+          cp target/release/libshelloop_clap.so "dist/$clap/shelloop.clap"
+          cp clap-plugin/README.md LICENSE "dist/$clap/"
+          tar -C dist -czf "dist/$app.tar.gz" "$app"
+          tar -C dist -czf "dist/$clap.tar.gz" "$clap"
+          cd dist
+          for file in "$app.tar.gz" "$clap.tar.gz"; do sha256sum "$file" > "$file.sha256"; done
+          echo "APP_ARCHIVE=dist/$app.tar.gz" >> "$GITHUB_ENV"
+      - name: Package Windows artifacts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:TAG
+          $app = "shelloop-$tag-windows-x86_64"
+          $clap = "shelloop-clap-$tag-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path "dist/$app", "dist/$clap" | Out-Null
+          Copy-Item 'target/release/shelloop.exe' "dist/$app"
+          Copy-Item 'target/release/shelloop_clap.dll' "dist/$app/shelloop.clap"
+          Copy-Item 'README.md', 'LICENSE', 'COPYRIGHT-TRADEMARK.md' "dist/$app"
+          Copy-Item 'patterns', 'projects' "dist/$app" -Recurse
+          Copy-Item 'target/release/shelloop_clap.dll' "dist/$clap/shelloop.clap"
+          Copy-Item 'clap-plugin/README.md', 'LICENSE' "dist/$clap"
+          Copy-Item 'target/release/shelloop.exe' "dist/shelloop-$tag-windows-x86_64.exe"
+          Compress-Archive -Path "dist/$app/*" -DestinationPath "dist/$app.zip" -Force
+          Compress-Archive -Path "dist/$clap/*" -DestinationPath "dist/$clap.zip" -Force
+          foreach ($file in @("$app.zip", "$clap.zip", "shelloop-$tag-windows-x86_64.exe")) {
+            $hash = (Get-FileHash "dist/$file" -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $file" | Set-Content -NoNewline "dist/$file.sha256"
+          }
+          "APP_ARCHIVE=dist/$app.zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Verify packaged application
+        run: python scripts/verify_release.py ${{ env.APP_ARCHIVE }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.exe
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish ${{ env.TAG }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          name: SHELLOOP ${{ env.TAG }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          body: |
+            SHELLOOP terminal step sequencer, synthesizer and performance workstation.
+
+            Downloads:
+            - **Windows standalone**: `shelloop-${{ env.TAG }}-windows-x86_64.exe` (single executable), or the `.zip` bundle with example projects and the CLAP plugin.
+            - **Linux standalone**: `shelloop-${{ env.TAG }}-linux-x86_64.tar.gz` (binary, example projects, CLAP plugin).
+            - **CLAP plugin**: `shelloop-clap-${{ env.TAG }}-<platform>` contains `shelloop.clap` for DAWs that load CLAP instruments.
+
+            Verify each download against its `.sha256` file. Builds come from CI; physical audio-hardware latency validation is reported separately (see docs/HARDWARE-ACCEPTANCE.md).
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.exe
+            dist/*.sha256
