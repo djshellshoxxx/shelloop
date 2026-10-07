@@ -34,6 +34,7 @@ pub mod transport;
 pub mod tui;
 pub mod variation;
 pub mod voice;
+pub mod workstation;
 
 pub use app::{parse_startup_options, StartupOptions};
 pub use audio::{
@@ -53,6 +54,10 @@ pub use blackbox::{
     MAX_BLACK_BOX_SECONDS, MAX_PENDING_BLACK_BOX_SAVES, MIN_BLACK_BOX_SECONDS,
 };
 pub use command::{parse_command, Command};
+pub use controller::{
+    apply_audio_message, AudioMessage, EngineTelemetry, Garbage, MidiDisposition,
+    SessionController, TelemetrySnapshot, TrackTelemetrySnapshot,
+};
 pub use editor::{
     compile_pattern_revision, CompiledPatternRevision, PatternEditor, PatternRevision,
 };
@@ -84,9 +89,9 @@ pub use midi_learn::{
 pub use mixer::{protect_master, ChannelStrip, SmoothedParam};
 pub use multitrack::{
     ChainStatus, EngineError, EngineProjectSnapshot, LibraryPattern, MultiTrackEngine,
-    MultiTrackProject, PreparedTrack, SampleContext, TrackStatus, TrackCommand, TrackDefinition, TrackId,
-    TrackKind, MAX_REALTIME_TRACKS, MAX_TRACK_PATTERNS, MULTITRACK_PROJECT_SCHEMA_VERSION,
-    PRIMARY_PATTERN_ID,
+    MultiTrackProject, PreparedTrack, SampleContext, TrackCommand, TrackDefinition, TrackId,
+    TrackKind, TrackStatus, MAX_REALTIME_TRACKS, MAX_TRACK_PATTERNS,
+    MULTITRACK_PROJECT_SCHEMA_VERSION, PRIMARY_PATTERN_ID,
 };
 pub use params::{
     ActionId, EffectLocation, EffectParamId, EffectSlotId, GlobalParamId, ParamCurve,
@@ -142,7 +147,3 @@ pub use variation::{
 };
 pub use variation::{InvariantKind, InvariantProfile, InvariantRule};
 pub use voice::{VoiceAllocator, VoiceId, VoiceState};
-pub use controller::{
-    apply_audio_message, AudioMessage, EngineTelemetry, Garbage, MidiDisposition,
-    SessionController, TelemetrySnapshot, TrackTelemetrySnapshot,
-};

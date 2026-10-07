@@ -21,6 +21,11 @@ Options:\n\
   --waveform             Show the ASCII waveform at startup (Tab toggles it)\n\
   --waveform-style <S>   Waveform style: scope or history (default: scope)\n\
   --no-midi              Disable MIDI input\n\
+  --tui                  Open the full-screen terminal workstation\n\
+  --ascii                Use ASCII glyphs in the full-screen UI\n\
+  --black-box-seconds <S>      Keep the last 1-120 s for retrospective save (F8)\n\
+  --black-box-directory <DIR>  Quick-save folder (default: ./shelloop-takes)\n\
+  --capture-directory <DIR>    Resample capture folder (default: <project>/captures)\n\
   -V, --version          Print version information\n\
   -h, --help             Print this help text\n";
 

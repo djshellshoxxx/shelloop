@@ -1,7 +1,7 @@
 use crossbeam_channel::{bounded, Receiver};
 use shelloop::{
     apply_audio_message, AudioMessage, EffectConfig, EffectKind, EngineTelemetry, Garbage,
-    LibraryPattern, MidiEvent, MultiTrackEngine, MultiTrackProject, PatternId, Pattern,
+    LibraryPattern, MidiEvent, MultiTrackEngine, MultiTrackProject, Pattern, PatternId,
     PatternStep, Scene, SceneId, SceneTrackState, SessionController, TrackDefinition, TrackId,
     TrackKind,
 };
@@ -131,7 +131,10 @@ fn effect_and_scene_commands() {
     rig.run("scene launch drop now").unwrap();
     rig.render(1);
     assert_eq!(rig.engine.active_scene(), Some(SceneId(1)));
-    assert_eq!(rig.engine.track_active_pattern(TrackId(1)), Some(PatternId(1)));
+    assert_eq!(
+        rig.engine.track_active_pattern(TrackId(1)),
+        Some(PatternId(1))
+    );
     assert!(rig.run("scene launch nowhere").is_err());
 }
 
@@ -156,7 +159,11 @@ fn midi_learn_maps_cc_to_parameter_and_persists() {
         apply_audio_message(&mut rig.engine, message, &rig.garbage);
     }
     let patch = rig.engine.track_base_synth_patch(TrackId(1)).unwrap();
-    assert!(patch.filter.cutoff_hz > 10_000.0, "{}", patch.filter.cutoff_hz);
+    assert!(
+        patch.filter.cutoff_hz > 10_000.0,
+        "{}",
+        patch.filter.cutoff_hz
+    );
     assert!(rig.run("mappings").unwrap().contains("1"));
 }
 

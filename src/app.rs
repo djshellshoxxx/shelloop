@@ -20,6 +20,15 @@ pub struct StartupOptions {
     pub pc_speaker_test: bool,
     pub pc_speaker_frequency_hz: u32,
     pub pc_speaker_duration_ms: u32,
+    /// Full-screen terminal workstation instead of the line interface.
+    pub tui: bool,
+    /// ASCII glyphs in the full-screen UI.
+    pub ascii: bool,
+    /// Retrospective capture window; `None` disables the black box.
+    pub black_box_seconds: Option<u32>,
+    pub black_box_directory: Option<String>,
+    /// Where resampled captures are written (default: `<project>/captures`).
+    pub capture_directory: Option<String>,
 }
 
 impl Default for StartupOptions {
@@ -43,6 +52,11 @@ impl Default for StartupOptions {
             pc_speaker_test: false,
             pc_speaker_frequency_hz: 440,
             pc_speaker_duration_ms: 250,
+            tui: false,
+            ascii: false,
+            black_box_seconds: None,
+            black_box_directory: None,
+            capture_directory: None,
         }
     }
 }
@@ -212,6 +226,34 @@ where
                     .ok_or_else(|| "--waveform-style must be scope or history".to_string())?;
             }
             "--no-midi" => options.no_midi = true,
+            "--tui" => options.tui = true,
+            "--ascii" => options.ascii = true,
+            "--black-box-seconds" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--black-box-seconds requires 1 to 120 seconds".to_string())?;
+                let seconds = value.parse::<u32>().map_err(|_| {
+                    "--black-box-seconds must be an integer from 1 to 120".to_string()
+                })?;
+                if !(1..=120).contains(&seconds) {
+                    return Err("--black-box-seconds must be between 1 and 120".into());
+                }
+                options.black_box_seconds = Some(seconds);
+            }
+            "--black-box-directory" | "--capture-directory" => {
+                let flag = args[index].clone();
+                index += 1;
+                let value = args
+                    .get(index)
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| format!("{flag} requires a directory path"))?;
+                if flag == "--black-box-directory" {
+                    options.black_box_directory = Some(value.clone());
+                } else {
+                    options.capture_directory = Some(value.clone());
+                }
+            }
             "--help" | "-h" => options.show_help = true,
             "--version" | "-V" => options.show_version = true,
             unknown => return Err(format!("unknown option: {unknown}")),
@@ -221,6 +263,12 @@ where
 
     if options.pattern_path.is_some() && options.project_path.is_some() {
         return Err("--pattern cannot be combined with --project".into());
+    }
+    if options.black_box_directory.is_some() && options.black_box_seconds.is_none() {
+        return Err("--black-box-directory requires --black-box-seconds".into());
+    }
+    if options.ascii && !options.tui {
+        return Err("--ascii applies to --tui".into());
     }
     if options.no_midi && explicit_midi {
         return Err("--no-midi cannot be combined with a MIDI port selector".into());

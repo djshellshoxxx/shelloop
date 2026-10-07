@@ -288,9 +288,8 @@ impl EngineTelemetry {
                 paused,
                 ..
             }) => {
-                let packed = (u64::from(chain.0) << 32)
-                    | ((step as u64 & 0xFFFF) << 16)
-                    | u64::from(paused);
+                let packed =
+                    (u64::from(chain.0) << 32) | ((step as u64 & 0xFFFF) << 16) | u64::from(paused);
                 self.chain.store(packed, Ordering::Relaxed);
                 self.chain_next.store(next_change_frame, Ordering::Relaxed);
             }
@@ -314,8 +313,10 @@ impl EngineTelemetry {
                 .store(u32::from(status.active_pattern.0), Ordering::Relaxed);
             slot.active_revision
                 .store(status.active_revision, Ordering::Relaxed);
-            slot.queued_revision
-                .store(status.queued_revision.unwrap_or(NONE_U64), Ordering::Relaxed);
+            slot.queued_revision.store(
+                status.queued_revision.unwrap_or(NONE_U64),
+                Ordering::Relaxed,
+            );
             slot.lock_count
                 .store(status.lock_count as u32, Ordering::Relaxed);
         }
@@ -336,7 +337,7 @@ impl EngineTelemetry {
             active_scene: scene(self.active_scene.load(Ordering::Relaxed)),
             queued_scene: scene(self.queued_scene.load(Ordering::Relaxed))
                 .map(|id| (id, self.queued_frame.load(Ordering::Relaxed))),
-            chain: (chain != NONE_U64).then(|| {
+            chain: (chain != NONE_U64).then_some({
                 (
                     ChainId((chain >> 32) as u16),
                     ((chain >> 16) & 0xFFFF) as usize,
@@ -401,6 +402,8 @@ pub struct SessionController {
     sender: Sender<AudioMessage>,
     dropped_messages: u64,
     dirty: bool,
+    /// Monotonic control clock in milliseconds (learn deadlines).
+    now_ms: u64,
 }
 
 impl SessionController {
@@ -478,6 +481,7 @@ impl SessionController {
             sender,
             dropped_messages: 0,
             dirty: false,
+            now_ms: 0,
         };
         if !orphans.is_empty() {
             controller.dirty = true;
@@ -558,7 +562,11 @@ impl SessionController {
         }
     }
 
-    fn boundary_frame(&self, current_frame: u64, boundary: QuantizeBoundary) -> Result<u64, String> {
+    fn boundary_frame(
+        &self,
+        current_frame: u64,
+        boundary: QuantizeBoundary,
+    ) -> Result<u64, String> {
         crate::next_boundary_frame(
             current_frame,
             self.sample_rate,
@@ -585,7 +593,11 @@ impl SessionController {
     }
 
     /// Queue the selected pattern's current editor state at `boundary`.
-    fn queue_selected(&mut self, current_frame: u64, boundary: QuantizeBoundary) -> Result<String, String> {
+    fn queue_selected(
+        &mut self,
+        current_frame: u64,
+        boundary: QuantizeBoundary,
+    ) -> Result<String, String> {
         let track = self.editors.selected_track();
         let pattern = self.editors.selected_pattern();
         let (_, change) = self.editors.queue_selected_revision(
@@ -649,7 +661,7 @@ impl SessionController {
             "scene" | "scenes" => self.scene_command(line, current_frame),
             "chain" => self.chain_command(line, current_frame),
             "lock" | "unlock" | "locks" => self.lock_command(line, current_frame),
-            "learn" | "unlearn" | "mappings" | "mapping" => self.learn_command(line, current_frame),
+            "learn" | "unlearn" | "mappings" | "mapping" => self.learn_command(line, self.now_ms),
             "variation" => self.variation_command(line, current_frame),
             "play" | "pause" => {
                 self.send(AudioMessage::TogglePlay)?;
@@ -750,7 +762,10 @@ impl SessionController {
             definition.synth_patch = Some(patch);
         }
         self.dirty = true;
-        Ok(format!("queued synth parameter {id:?} for track {}", track.0))
+        Ok(format!(
+            "queued synth parameter {id:?} for track {}",
+            track.0
+        ))
     }
 
     fn synth_command(&mut self, line: &str) -> Result<String, String> {
@@ -957,7 +972,9 @@ impl SessionController {
                 location,
                 slot,
                 param,
-            } => effect_config(&self.project, location, slot).map(|config| config.param_value(param)),
+            } => {
+                effect_config(&self.project, location, slot).map(|config| config.param_value(param))
+            }
             ParameterTarget::Action(_) => Some(0.0),
         }
     }
@@ -1118,11 +1135,15 @@ impl SessionController {
         match (parts[0], parts.get(1).copied()) {
             ("scenes", _) | ("scene", None) | ("scene", Some("list")) => Ok(self.describe_scenes()),
             ("scene", Some("launch")) => {
-                let spec = parts.get(2).ok_or("expected scene launch <name|id> [boundary]")?;
+                let spec = parts
+                    .get(2)
+                    .ok_or("expected scene launch <name|id> [boundary]")?;
                 let id = resolve_scene(&self.project.scenes, spec)?;
                 self.launch_scene(id, boundary(parts.get(3))?, current_frame)
             }
-            ("scene", Some("next")) => self.step_scene(true, boundary(parts.get(2))?, current_frame),
+            ("scene", Some("next")) => {
+                self.step_scene(true, boundary(parts.get(2))?, current_frame)
+            }
             ("scene", Some("prev")) => {
                 self.step_scene(false, boundary(parts.get(2))?, current_frame)
             }
@@ -1224,7 +1245,14 @@ impl SessionController {
                 self.project
                     .chains
                     .iter()
-                    .map(|chain| format!("{}:{} ({} steps)", chain.id.0, chain.name, chain.steps.len()))
+                    .map(|chain| {
+                        format!(
+                            "{}:{} ({} steps)",
+                            chain.id.0,
+                            chain.name,
+                            chain.steps.len()
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(" ")
             }),
@@ -1238,9 +1266,13 @@ impl SessionController {
         let parts: Vec<&str> = spec.split('.').collect();
         if parts.len() == 3 && parts[0] == "fx" {
             if let Ok(slot) = parts[1].parse::<u8>() {
-                let kind = effect_config(&self.project, EffectLocation::Track(track), EffectSlotId(slot))
-                    .ok_or("no insert effect in that slot")?
-                    .kind;
+                let kind = effect_config(
+                    &self.project,
+                    EffectLocation::Track(track),
+                    EffectSlotId(slot),
+                )
+                .ok_or("no insert effect in that slot")?
+                .kind;
                 let param = parts[2]
                     .parse::<u8>()
                     .ok()
@@ -1254,15 +1286,18 @@ impl SessionController {
             }
         }
         match crate::parse_target(spec, track)? {
-            ParameterTarget::Track { track: owner, param } if owner == track => {
-                Ok(LockTarget::Track(param))
-            }
-            ParameterTarget::Synth { track: owner, param } if owner == track => {
-                Ok(LockTarget::Synth(param))
-            }
-            ParameterTarget::Sample { track: owner, param } if owner == track => {
-                Ok(LockTarget::Sample(param))
-            }
+            ParameterTarget::Track {
+                track: owner,
+                param,
+            } if owner == track => Ok(LockTarget::Track(param)),
+            ParameterTarget::Synth {
+                track: owner,
+                param,
+            } if owner == track => Ok(LockTarget::Synth(param)),
+            ParameterTarget::Sample {
+                track: owner,
+                param,
+            } if owner == track => Ok(LockTarget::Sample(param)),
             ParameterTarget::Effect {
                 location: EffectLocation::Track(owner),
                 slot,
@@ -1413,18 +1448,18 @@ impl SessionController {
                     .collect::<Vec<_>>()
                     .join(" | ")
             }),
-            LearnCommand::SetRange { id, min, max } => {
-                learn.set_range(id, min, max).map(|()| "mapping updated".into())
-            }
+            LearnCommand::SetRange { id, min, max } => learn
+                .set_range(id, min, max)
+                .map(|()| "mapping updated".into()),
             LearnCommand::SetInverted { id, inverted } => learn
                 .set_inverted(id, inverted)
                 .map(|()| "mapping updated".into()),
-            LearnCommand::SetPickup { id, mode } => {
-                learn.set_pickup(id, mode).map(|()| "mapping updated".into())
-            }
-            LearnCommand::SetButton { id, mode } => {
-                learn.set_button(id, mode).map(|()| "mapping updated".into())
-            }
+            LearnCommand::SetPickup { id, mode } => learn
+                .set_pickup(id, mode)
+                .map(|()| "mapping updated".into()),
+            LearnCommand::SetButton { id, mode } => learn
+                .set_button(id, mode)
+                .map(|()| "mapping updated".into()),
         })();
         self.learn = learn;
         self.persist_mappings();
@@ -1446,6 +1481,7 @@ impl SessionController {
         now_ms: u64,
         current_frame: u64,
     ) -> MidiDisposition {
+        self.now_ms = self.now_ms.max(now_ms);
         let mut outputs = Vec::new();
         let mut learn = std::mem::replace(
             &mut self.learn,
@@ -1461,8 +1497,7 @@ impl SessionController {
                 messages.push(if conflicts.is_empty() {
                     "control captured; `learn confirm` to map it".into()
                 } else {
-                    "control captured but already mapped; `learn confirm replace|add|cancel`"
-                        .into()
+                    "control captured but already mapped; `learn confirm replace|add|cancel`".into()
                 });
                 true
             }
@@ -1484,6 +1519,7 @@ impl SessionController {
 
     /// Expire a pending learn. Returns a message when it timed out.
     pub fn tick(&mut self, now_ms: u64) -> Option<String> {
+        self.now_ms = self.now_ms.max(now_ms);
         self.learn
             .tick(now_ms)
             .then(|| "MIDI learn timed out; mappings unchanged".to_string())
@@ -1513,10 +1549,14 @@ impl SessionController {
             }
             VariationCommand::Preview { seed, amount } => {
                 let project_seed = self.project.seed;
-                let editor = self.editors.editor(track).ok_or("no pattern editor")?.clone();
+                let editor = self
+                    .editors
+                    .editor(track)
+                    .ok_or("no pattern editor")?
+                    .clone();
                 let session = self.variation_mut(track)?;
-                let seed =
-                    seed.unwrap_or_else(|| session.next_derived_seed(project_seed, editor.revision()));
+                let seed = seed
+                    .unwrap_or_else(|| session.next_derived_seed(project_seed, editor.revision()));
                 match session.preview(&editor, VariationRequest { seed, amount }) {
                     Ok(proposal) => Ok(format_proposal(proposal).join(" | ")),
                     Err(failure) => Err(failure.message),
@@ -1600,15 +1640,14 @@ impl SessionController {
         prepared: PreparedTrack,
     ) -> Result<String, String> {
         if self.project.tracks.len() >= MAX_REALTIME_TRACKS {
-            return Err(format!("projects hold at most {MAX_REALTIME_TRACKS} tracks"));
+            return Err(format!(
+                "projects hold at most {MAX_REALTIME_TRACKS} tracks"
+            ));
         }
         let id = definition.id;
         self.send(AudioMessage::AddTrack(prepared))?;
-        self.editors.add_pattern(
-            id,
-            crate::PRIMARY_PATTERN_ID,
-            definition.pattern.clone(),
-        )?;
+        self.editors
+            .add_pattern(id, crate::PRIMARY_PATTERN_ID, definition.pattern.clone())?;
         self.mixer.push((
             id,
             MixerMirror {

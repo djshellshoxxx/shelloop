@@ -32,25 +32,41 @@ pub fn engine_command_from_midi(event: MidiEvent) -> Option<EngineCommand> {
 mod live {
     #[cfg(feature = "midi")]
     use super::engine_command_from_midi;
+    use crate::blackbox::{
+        new_black_box_session_id, spawn_black_box, BlackBoxConfig, BlackBoxHandle, BlackBoxStatus,
+        ControlEventKind, EventSource, SaveTarget, SessionMetadata, DEFAULT_BLACK_BOX_DIRECTORY,
+        DEFAULT_BLACK_BOX_MEMORY_BUDGET,
+    };
+    use crate::controller::{self, apply_audio_message, AudioMessage, EngineTelemetry, Garbage};
+    use crate::resample::{
+        capture_channel, parse_resample_command, CaptureClock, DestinationSpec, FinishedCapture,
+        ResampleCommand, ResampleDestination, ResampleRequest, ResampleSource, ResampleSourceSpec,
+        ResampleState, ResampleStop, Resampler,
+    };
     use crate::scope::{
         draw_panel_sequence, header_line, open_panel_sequence, peak_dbfs, raw_mode_line,
         release_panel_sequence, render_scope, reserve_panel_sequence, scope_window, trigger_start,
     };
+    use crate::tui::{
+        render as tui_render, route_input, ui_input_from_crossterm, TuiLayout, TuiSnapshot,
+        TuiTerminalGuard, UiAction, UiInput, UiKey,
+    };
+    use crate::workstation::{build_snapshot, handle_action, RuntimeStatus, UiEffect, UiState};
     #[cfg(feature = "midi")]
     use crate::{
         connect_midi_input, list_midi_input_names, select_midi_port_index, MidiPortSelector,
     };
     use crate::{
         list_output_device_names, map_performance_key, open_stereo_output_stream,
-        parse_pattern_edit_command, parse_pattern_json, parse_synth_parameter_command,
-        pc_speaker_backend, protect_master, shift_octave, spawn_realtime_recording,
-        CompiledPatternRevision, CompiledSynthPatch, EngineCommand, LiveSequencer,
-        MultiTrackEngine, MultiTrackProject, Oscillator, PanelLayout, PeakHistory, PerformanceKey,
-        PerformanceMix, ProjectPatternEditors, QuantizedChange, RealtimeSynth, SampleContext,
-        ScopeTap, StartupOptions, SynthPatch, TrackId, TrackKind, WavRecordingConfig,
+        parse_pattern_json, pc_speaker_backend, protect_master, shift_octave,
+        spawn_realtime_recording, CompiledSamplePlayback, EngineCommand, LiveSequencer,
+        MultiTrackEngine, MultiTrackProject, Oscillator, PanelLayout, Pattern, PatternStep,
+        PeakHistory, PerformanceKey, PerformanceMix, PreparedTrack, QuantizeBoundary,
+        RealtimeSynth, SampleAssetBank, SampleContext, SampleMode, SampleSettings, ScopeTap,
+        SessionController, StartupOptions, TrackDefinition, TrackId, TrackKind, WavRecordingConfig,
         WaveformStyle, XyPoint, DEFAULT_SAMPLE_MEMORY_BUDGET,
     };
-    use crossbeam_channel::{bounded, Sender};
+    use crossbeam_channel::{bounded, Receiver, Sender};
     use crossterm::event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
         KeyboardEnhancementFlags, MouseButton, MouseEventKind, PopKeyboardEnhancementFlags,
@@ -61,6 +77,7 @@ mod live {
     use std::collections::HashMap;
     use std::fs;
     use std::io::{self, Write};
+    use std::path::{Path, PathBuf};
     use std::sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -71,11 +88,9 @@ mod live {
     const COMMAND_QUEUE_CAPACITY: usize = 256;
     const SEQUENCER_CONTROL_QUEUE_CAPACITY: usize = 32;
     const PERFORMANCE_QUEUE_CAPACITY: usize = 32;
-    const PATTERN_CHANGE_QUEUE_CAPACITY: usize = 16;
-    const PATTERN_CHANGES_PER_SAMPLE_LIMIT: usize = 2;
-    const SYNTH_PATCH_QUEUE_CAPACITY: usize = 16;
-    const SYNTH_PATCHES_PER_SAMPLE_LIMIT: usize = 2;
-    const EDIT_HISTORY_CAPACITY: usize = 128;
+    const GARBAGE_QUEUE_CAPACITY: usize = 16;
+    const TELEMETRY_INTERVAL_FRAMES: u64 = 256;
+    const TUI_REDRAW_INTERVAL: Duration = Duration::from_millis(40);
     #[cfg(feature = "midi")]
     const MIDI_QUEUE_CAPACITY: usize = 256;
     const COMMANDS_PER_SAMPLE_LIMIT: usize = 64;
@@ -372,58 +387,548 @@ mod live {
             .map_err(|error| format!("failed to render edit command prompt: {error}"))
     }
 
-    fn queue_live_edit(
-        line: &str,
-        editors: &mut ProjectPatternEditors,
-        current_frame: u64,
+    type StatusMessages = Vec<(String, bool)>;
+
+    /// Control-side services shared by the line and full-screen interfaces:
+    /// the session controller plus the resampler and black box, which own
+    /// files and threads the controller must not touch.
+    struct Services {
+        controller: Option<SessionController>,
+        resampler: Option<Resampler>,
+        resample_normalize: bool,
+        resample_destination: DestinationSpec,
+        black_box: Option<BlackBoxHandle>,
+        garbage: Receiver<Garbage>,
+        telemetry: Arc<EngineTelemetry>,
+        output_frame: Arc<AtomicU64>,
         sample_rate: u32,
-        bpm: f64,
-        steps_per_beat: u32,
-        sender: &Sender<(TrackId, QuantizedChange<CompiledPatternRevision>)>,
-    ) -> Result<String, String> {
-        let command = parse_pattern_edit_command(line)?;
-        let boundary = editors.default_quantize_boundary(&command);
-        let outcome = editors.apply(command)?;
-        if !outcome.changed {
-            return Ok(format!("selected track {}", outcome.track.0));
-        }
-
-        let (track, change) = editors.queue_selected_revision(
-            current_frame,
-            sample_rate,
-            bpm,
-            steps_per_beat,
-            boundary,
-        )?;
-        sender
-            .try_send((track, change))
-            .map_err(|error| format!("pattern change queue unavailable: {error}"))?;
-
-        Ok(format!(
-            "queued track {} revision {} for frame {}",
-            track.0, change.value.revision, change.apply_at_frame
-        ))
+        polyphony: usize,
+        started: Instant,
     }
 
-    fn queue_live_synth_edit(
-        line: &str,
-        track: TrackId,
-        current: &mut SynthPatch,
-        sample_rate: u32,
-        sender: &Sender<(TrackId, CompiledSynthPatch)>,
-    ) -> Result<String, String> {
-        let (id, value) = parse_synth_parameter_command(line)?;
-        let patch = current.with_parameter(id, value, sample_rate as f32)?;
-        let compiled = CompiledSynthPatch::new(sample_rate as f32, patch)?;
-        sender
-            .try_send((track, compiled))
-            .map_err(|error| format!("synth patch queue unavailable: {error}"))?;
-        // Failed delivery leaves the control snapshot unchanged.
-        *current = patch;
-        Ok(format!(
-            "queued synth parameter {id:?} for track {}",
-            track.0
-        ))
+    impl Services {
+        fn now_ms(&self) -> u64 {
+            self.started.elapsed().as_millis() as u64
+        }
+
+        fn transport_frame(&self) -> u64 {
+            self.telemetry.position_frame()
+        }
+
+        fn record(&self, source: EventSource, kind: ControlEventKind) {
+            if let Some(black_box) = self.black_box.as_ref() {
+                black_box.record_event(self.output_frame.load(Ordering::Relaxed), source, kind);
+            }
+        }
+
+        fn execute_line(&mut self, line: &str) -> Result<String, String> {
+            let line = line.trim();
+            let head = line.split_whitespace().next().unwrap_or_default();
+            let kind = if matches!(head, "resample" | "blackbox") {
+                ControlEventKind::CaptureCommand {
+                    command: line.chars().take(200).collect(),
+                }
+            } else {
+                ControlEventKind::EditorCommand {
+                    command: line.chars().take(200).collect(),
+                }
+            };
+            self.record(EventSource::Cli, kind);
+            match head {
+                "resample" => self.resample_command(line),
+                "blackbox" => self.black_box_command(line),
+                _ => {
+                    let frame = self.transport_frame();
+                    let now = self.now_ms();
+                    let controller = self.controller.as_mut().ok_or(
+                        "editing commands need a project (--project); live keys still work",
+                    )?;
+                    controller.tick(now);
+                    controller.execute(line, frame)
+                }
+            }
+        }
+
+        fn clock(&self) -> Result<CaptureClock, String> {
+            let controller = self
+                .controller
+                .as_ref()
+                .ok_or("resampling needs a project (--project)")?;
+            Ok(CaptureClock {
+                sample_rate: self.sample_rate,
+                bpm: controller.project().bpm,
+                steps_per_beat: u32::from(controller.project().steps_per_beat),
+                beats_per_bar: 4,
+            })
+        }
+
+        fn resample_command(&mut self, line: &str) -> Result<String, String> {
+            let command = parse_resample_command(line)?;
+            let clock = self.clock()?;
+            let frame = self.transport_frame();
+            let selected = self
+                .controller
+                .as_ref()
+                .map(SessionController::selected_track);
+            let destination = match self.resample_destination {
+                DestinationSpec::AssetOnly => ResampleDestination::AssetOnly,
+                DestinationSpec::NewTrack => ResampleDestination::NewSampleTrack,
+                DestinationSpec::Replace(track) => ResampleDestination::ReplaceTrackAsset {
+                    track: track.or(selected).ok_or("no track selected")?,
+                },
+            };
+            let normalize = self.resample_normalize;
+            let resampler = self
+                .resampler
+                .as_mut()
+                .ok_or("resampling needs a project (--project)")?;
+            let arm = |resampler: &mut Resampler,
+                       source: ResampleSource,
+                       start: QuantizeBoundary,
+                       stop: ResampleStop| {
+                resampler
+                    .arm(
+                        ResampleRequest {
+                            source,
+                            start_boundary: start,
+                            stop,
+                            normalize,
+                            destination,
+                        },
+                        frame,
+                        clock,
+                    )
+                    .map(|(start, stop)| match stop {
+                        Some(stop) => format!("resample armed: frames {start}..{stop}"),
+                        None => {
+                            format!("resample armed from frame {start}; `resample stop` to finish")
+                        }
+                    })
+            };
+            match command {
+                ResampleCommand::Arm { source, stop } => {
+                    let source = match source {
+                        ResampleSourceSpec::Master => ResampleSource::Master,
+                        ResampleSourceSpec::Track(track) => {
+                            ResampleSource::Track(track.or(selected).ok_or("no track selected")?)
+                        }
+                    };
+                    arm(
+                        resampler,
+                        source,
+                        QuantizeBoundary::Bar { beats_per_bar: 4 },
+                        stop,
+                    )
+                }
+                ResampleCommand::Start => arm(
+                    resampler,
+                    ResampleSource::Master,
+                    QuantizeBoundary::Immediate,
+                    ResampleStop::Manual {
+                        boundary: QuantizeBoundary::Immediate,
+                    },
+                ),
+                ResampleCommand::Stop(boundary) => resampler
+                    .stop(frame, clock, boundary)
+                    .map(|frame| format!("resample stops at frame {frame}")),
+                ResampleCommand::Cancel => resampler.cancel().map(|()| "resample cancelled".into()),
+                ResampleCommand::Normalize(enabled) => {
+                    self.resample_normalize = enabled;
+                    Ok(format!(
+                        "resample normalize {}",
+                        if enabled { "on" } else { "off" }
+                    ))
+                }
+                ResampleCommand::Destination(spec) => {
+                    self.resample_destination = spec;
+                    Ok(format!("resample destination {spec:?}"))
+                }
+                ResampleCommand::Status => Ok(describe_resample(resampler.state())),
+            }
+        }
+
+        fn black_box_command(&mut self, line: &str) -> Result<String, String> {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            let black_box = self
+                .black_box
+                .as_ref()
+                .ok_or("black box is off; start with --black-box-seconds <1-120> to enable it")?;
+            match parts.get(1).copied() {
+                None | Some("status") => Ok(describe_black_box(&black_box.status())),
+                Some("save") => {
+                    let target = match parts.get(2) {
+                        Some(path) => SaveTarget::Path(PathBuf::from(path)),
+                        None => SaveTarget::QuickSave,
+                    };
+                    let id = black_box
+                        .request_save(target, self.output_frame.load(Ordering::Relaxed))?;
+                    Ok(format!("black box save #{id} requested"))
+                }
+                Some("clear") => black_box
+                    .clear()
+                    .map(|()| "black box history cleared".into()),
+                Some(other) => Err(format!("unknown blackbox command {other}")),
+            }
+        }
+
+        fn black_box_save(&mut self) -> Result<String, String> {
+            self.black_box_command("blackbox save")
+        }
+
+        /// Background bookkeeping, once per UI loop iteration.
+        fn poll(&mut self) -> StatusMessages {
+            let mut messages = Vec::new();
+            while self.garbage.try_recv().is_ok() {}
+            let now = self.now_ms();
+            let frame = self.transport_frame();
+            let snapshot_scene = self.telemetry.snapshot().active_scene;
+            if let Some(controller) = self.controller.as_mut() {
+                if let Some(message) = controller.tick(now) {
+                    messages.push((message, false));
+                }
+                controller.observe_active_scene(snapshot_scene);
+            }
+            if let Some(finished) = self.resampler.as_mut().and_then(|r| r.poll(frame)) {
+                match self.register_capture(finished) {
+                    Ok(message) => messages.push((message, false)),
+                    Err(error) => messages.push((error, true)),
+                }
+            }
+            if let Some(ResampleState::Failed { message }) =
+                self.resampler.as_ref().map(Resampler::state)
+            {
+                messages.push((format!("resample failed: {message}"), true));
+                if let Some(resampler) = self.resampler.as_mut() {
+                    resampler.acknowledge();
+                }
+            }
+            if let Some(black_box) = self.black_box.as_ref() {
+                while let Some(outcome) = black_box.try_outcome() {
+                    messages.push(match outcome.result {
+                        Ok(take) => (
+                            format!(
+                                "black box saved {} ({}){}",
+                                take.wav_path.display(),
+                                if take.complete {
+                                    "complete"
+                                } else {
+                                    "INCOMPLETE: gaps recorded"
+                                },
+                                ""
+                            ),
+                            !take.complete,
+                        ),
+                        Err(error) => (format!("black box save failed: {error}"), true),
+                    });
+                }
+            }
+            messages
+        }
+
+        /// Make a finished capture playable according to its destination.
+        /// Failures leave the WAV on disk as an asset-only result.
+        fn register_capture(&mut self, finished: FinishedCapture) -> Result<String, String> {
+            let mut notes = String::new();
+            if finished.degraded {
+                notes.push_str(" (DEGRADED: dropped blocks)");
+            }
+            if finished.silent {
+                notes.push_str(" (silent)");
+            }
+            let path = finished.path.clone();
+            let shown = path.display().to_string();
+            let destination = finished.request.destination;
+            let result = match destination {
+                ResampleDestination::AssetOnly => Ok(format!("resample ready: {shown}{notes}")),
+                ResampleDestination::NewSampleTrack => self.add_capture_track(finished),
+                ResampleDestination::ReplaceTrackAsset { track } => {
+                    self.replace_capture(track, finished)
+                }
+            };
+            if let Some(resampler) = self.resampler.as_mut() {
+                resampler.acknowledge();
+            }
+            result
+                .map(|message| format!("{message}{notes}"))
+                .map_err(|error| format!("resample kept as asset {shown}: {error}"))
+        }
+
+        fn add_capture_track(&mut self, finished: FinishedCapture) -> Result<String, String> {
+            let controller = self.controller.as_mut().ok_or("no project")?;
+            let id = controller.next_track_id();
+            let project = controller.project();
+            let (bpm, steps, seed) = (project.bpm, u32::from(project.steps_per_beat), project.seed);
+            let mut steps_vec = vec![None; 16];
+            steps_vec[0] = Some(PatternStep {
+                note: 60,
+                velocity: 1.0,
+                gate: 1.0,
+                probability: 1.0,
+                ratchets: 1,
+                microtiming_frames: 0,
+            });
+            let pattern = Pattern::new(format!("resample {}", id.0), seed, 0.0, 0, steps_vec)?;
+            let mut definition =
+                TrackDefinition::new(id, format!("Resample {}", id.0), TrackKind::Sample, pattern);
+            let absolute = finished.path.clone();
+            definition.sample = Some(SampleSettings::new(
+                absolute.to_string_lossy(),
+                SampleMode::OneShot,
+            ));
+            let mut bank = SampleAssetBank::new(usize::MAX);
+            bank.insert_decoded(absolute.clone(), finished.decoded)?;
+            let base = controller.project_dir();
+            let prepared = PreparedTrack::new(
+                self.sample_rate,
+                bpm,
+                steps,
+                seed,
+                self.polyphony,
+                definition.clone(),
+                Some(SampleContext {
+                    assets: &bank,
+                    base_dir: &base,
+                }),
+            )?;
+            if let Some(sample) = definition.sample.as_mut() {
+                sample.path = project_relative(&base, &absolute);
+            }
+            controller.add_sample_track(definition, prepared)
+        }
+
+        fn replace_capture(
+            &mut self,
+            track: TrackId,
+            finished: FinishedCapture,
+        ) -> Result<String, String> {
+            let controller = self.controller.as_mut().ok_or("no project")?;
+            let mut settings = controller
+                .project()
+                .tracks
+                .iter()
+                .find(|definition| definition.id == track)
+                .and_then(|definition| definition.sample.clone())
+                .ok_or_else(|| format!("track {} is not a sample track", track.0))?;
+            let absolute = finished.path.clone();
+            settings.path = absolute.to_string_lossy().into_owned();
+            let mut bank = SampleAssetBank::new(usize::MAX);
+            let asset = bank.insert_decoded(absolute.clone(), finished.decoded)?;
+            let asset = bank.get(asset).ok_or("asset registration failed")?;
+            let playback = CompiledSamplePlayback::new(asset, &settings, self.sample_rate)?;
+            let base = controller.project_dir();
+            controller.replace_track_sample(track, project_relative(&base, &absolute), playback)
+        }
+
+        fn status_text(&self) -> (Option<String>, Option<String>) {
+            let resample = self
+                .resampler
+                .as_ref()
+                .map(|resampler| describe_resample(resampler.state()))
+                .filter(|text| text != "resample idle");
+            let black_box = self.black_box.as_ref().map(|black_box| {
+                let status = black_box.status();
+                format!(
+                    "BB {:.0}s{}",
+                    status.effective_seconds,
+                    if status.pending_saves > 0 {
+                        " saving"
+                    } else {
+                        ""
+                    }
+                )
+            });
+            (resample, black_box)
+        }
+
+        fn shutdown(self) {
+            if let Some(resampler) = self.resampler {
+                resampler.shutdown();
+            }
+            if let Some(black_box) = self.black_box {
+                let _ = black_box.shutdown(Duration::from_secs(5));
+            }
+            if let Some(controller) = self.controller {
+                if controller.is_dirty() {
+                    eprintln!(
+                        "note: the project has unsaved changes (use `save` before quitting to keep them)"
+                    );
+                }
+            }
+        }
+    }
+
+    fn project_relative(base: &Path, path: &Path) -> String {
+        path.strip_prefix(base)
+            .ok()
+            .filter(|relative| !base.as_os_str().is_empty() && !relative.as_os_str().is_empty())
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
+
+    fn describe_resample(state: &ResampleState) -> String {
+        match state {
+            ResampleState::Idle => "resample idle".into(),
+            ResampleState::Armed { start_frame, .. } => {
+                format!("resample armed (starts at frame {start_frame})")
+            }
+            ResampleState::Recording { .. } => "resample RECORDING".into(),
+            ResampleState::Finalizing { .. } => "resample finalizing".into(),
+            ResampleState::Ready { path } => format!("resample ready: {}", path.display()),
+            ResampleState::Failed { message } => format!("resample failed: {message}"),
+        }
+    }
+
+    fn describe_black_box(status: &BlackBoxStatus) -> String {
+        format!(
+            "black box: {} {:.1}s window, frames {}..{}, dropped audio frames {}, dropped events {}, pending saves {}{}",
+            if status.armed { "armed" } else { "off" },
+            status.effective_seconds,
+            status.oldest_frame.map_or("-".into(), |frame| frame.to_string()),
+            status.newest_frame.map_or("-".into(), |frame| frame.to_string()),
+            status.dropped_audio_frames,
+            status.dropped_events,
+            status.pending_saves,
+            status
+                .failed
+                .as_deref()
+                .map_or(String::new(), |failure| format!(", FAILED: {failure}"))
+        )
+    }
+
+    /// MIDI input with hot-plug reconnection, shared by both interfaces.
+    #[cfg(feature = "midi")]
+    struct MidiManager {
+        selector: MidiPortSelector,
+        handle: Option<crate::MidiInputHandle>,
+        enabled: bool,
+        last_scan: Instant,
+    }
+
+    #[cfg(feature = "midi")]
+    impl MidiManager {
+        fn new(options: &StartupOptions) -> Self {
+            let selector = options.midi_port.clone().unwrap_or(MidiPortSelector::First);
+            let handle = if options.no_midi {
+                None
+            } else {
+                match connect_midi_input(&selector, MIDI_QUEUE_CAPACITY) {
+                    Ok(handle) => Some(handle),
+                    Err(error) => {
+                        eprintln!(
+                            "MIDI input unavailable: {error}; keyboard control remains active"
+                        );
+                        None
+                    }
+                }
+            };
+            Self {
+                selector,
+                handle,
+                enabled: !options.no_midi,
+                last_scan: Instant::now(),
+            }
+        }
+
+        fn port_name(&self) -> Option<String> {
+            self.handle
+                .as_ref()
+                .map(|handle| handle.port_name().to_string())
+        }
+
+        /// Drain MIDI, route it through mappings and the performance synth,
+        /// and rescan ports once a second.
+        fn poll(
+            &mut self,
+            services: &mut Services,
+            command_sender: &Sender<EngineCommand>,
+        ) -> Result<StatusMessages, String> {
+            let mut messages = Vec::new();
+            if let Some(handle) = self.handle.as_ref() {
+                let port = handle.port_name().to_string();
+                while let Some(event) = handle.try_recv() {
+                    if let Some(kind) = midi_event_kind(event) {
+                        services.record(EventSource::Midi, kind);
+                    }
+                    let consumed = match services.controller.as_mut() {
+                        Some(controller) => {
+                            let frame = services.telemetry.position_frame();
+                            let disposition = controller.handle_midi(
+                                &port,
+                                event,
+                                services.started.elapsed().as_millis() as u64,
+                                frame,
+                            );
+                            messages.extend(disposition.messages.into_iter().map(|m| (m, false)));
+                            disposition.consumed
+                        }
+                        None => false,
+                    };
+                    if !consumed {
+                        if let Some(command) = engine_command_from_midi(event) {
+                            send_command(command_sender, command)?;
+                        }
+                    }
+                }
+            }
+
+            if self.enabled && self.last_scan.elapsed() >= Duration::from_secs(1) {
+                self.last_scan = Instant::now();
+                if let Ok(names) = list_midi_input_names() {
+                    let desired = select_midi_port_index(&names, &self.selector)
+                        .ok()
+                        .and_then(|index| names.get(index).cloned());
+                    let current = self.port_name();
+                    if current != desired {
+                        if current.is_some() {
+                            self.handle = None;
+                            let _ = send_command(command_sender, EngineCommand::Panic);
+                            messages.push(("MIDI input disconnected".into(), true));
+                        }
+                        if desired.is_some() {
+                            if let Ok(handle) =
+                                connect_midi_input(&self.selector, MIDI_QUEUE_CAPACITY)
+                            {
+                                messages.push((
+                                    format!("MIDI input connected: {}", handle.port_name()),
+                                    false,
+                                ));
+                                self.handle = Some(handle);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(messages)
+        }
+    }
+
+    #[cfg(feature = "midi")]
+    fn midi_event_kind(event: crate::MidiEvent) -> Option<ControlEventKind> {
+        match event {
+            crate::MidiEvent::NoteOn {
+                channel,
+                note,
+                velocity,
+            } => Some(ControlEventKind::NoteOn {
+                channel,
+                note,
+                velocity: f32::from(velocity) / 127.0,
+            }),
+            crate::MidiEvent::NoteOff { channel, note, .. } => {
+                Some(ControlEventKind::NoteOff { channel, note })
+            }
+            crate::MidiEvent::ControlChange {
+                channel,
+                controller,
+                value,
+            } => Some(ControlEventKind::ControlChange {
+                channel,
+                controller,
+                value,
+            }),
+            crate::MidiEvent::PitchBend { .. } => None,
+        }
     }
 
     fn print_devices() -> Result<(), String> {
@@ -470,6 +975,9 @@ mod live {
                     .into(),
             );
         }
+        if options.tui && options.project_path.is_none() {
+            return Err("the full-screen UI (--tui) needs a project; pass --project <FILE>".into());
+        }
 
         let pattern = match options.pattern_path.as_deref() {
             Some(path) => {
@@ -491,8 +999,8 @@ mod live {
         let project_dir = options
             .project_path
             .as_deref()
-            .and_then(|path| std::path::Path::new(path).parent())
-            .map(std::path::Path::to_path_buf)
+            .and_then(|path| Path::new(path).parent())
+            .map(Path::to_path_buf)
             .unwrap_or_default();
         // Decode every sample before audio starts; a missing or invalid file
         // stops startup with a report of all of them.
@@ -505,61 +1013,47 @@ mod live {
             .as_ref()
             .filter(|bank| !bank.is_empty())
             .map(|bank| (bank.len(), bank.used_bytes()));
-        let project_track_count = project.as_ref().map(|project| project.tracks.len());
-        let project_clock = project
-            .as_ref()
-            .map(|project| (project.bpm, u32::from(project.steps_per_beat)));
-        let mut pattern_editors = project
-            .as_ref()
-            .map(|project| {
-                ProjectPatternEditors::new(
-                    project
-                        .tracks
-                        .iter()
-                        .map(|track| (track.id, track.pattern.clone())),
-                    EDIT_HISTORY_CAPACITY,
-                )
-            })
-            .transpose()?;
-        let mut synth_patches: HashMap<TrackId, SynthPatch> = project
-            .as_ref()
-            .map(|project| {
-                project
-                    .tracks
-                    .iter()
-                    .filter(|track| track.kind == TrackKind::Synth)
-                    .map(|track| {
-                        (
-                            track.id,
-                            track
-                                .synth_patch
-                                .unwrap_or_else(|| SynthPatch::legacy(Oscillator::Saw)),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
         let has_sequencer = pattern.is_some() || project.is_some();
 
         let (command_sender, command_receiver) = bounded(COMMAND_QUEUE_CAPACITY);
         let (sequencer_sender, sequencer_receiver) = bounded(SEQUENCER_CONTROL_QUEUE_CAPACITY);
         let (performance_sender, performance_receiver) = bounded(PERFORMANCE_QUEUE_CAPACITY);
-        let (pattern_change_sender, pattern_change_receiver) =
-            bounded::<(TrackId, QuantizedChange<CompiledPatternRevision>)>(
-                PATTERN_CHANGE_QUEUE_CAPACITY,
-            );
-        let (synth_patch_sender, synth_patch_receiver) =
-            bounded::<(TrackId, CompiledSynthPatch)>(SYNTH_PATCH_QUEUE_CAPACITY);
+        let (audio_sender, audio_receiver) =
+            bounded::<AudioMessage>(controller::AUDIO_MESSAGE_QUEUE_CAPACITY);
+        let (garbage_sender, garbage_receiver) = bounded::<Garbage>(GARBAGE_QUEUE_CAPACITY);
+        let (capture_sender, mut capture_tap, capture_returns) = capture_channel();
+        let telemetry = Arc::new(EngineTelemetry::default());
+        let audio_telemetry = Arc::clone(&telemetry);
         let scope_tap = Arc::new(ScopeTap::new());
         let audio_scope_tap = Arc::clone(&scope_tap);
-        let transport_frame = Arc::new(AtomicU64::new(0));
-        let audio_transport_frame = Arc::clone(&transport_frame);
+        let output_frame = Arc::new(AtomicU64::new(0));
+        let audio_output_frame = Arc::clone(&output_frame);
         let polyphony = options.polyphony;
         let bpm = options.bpm;
         let steps_per_beat = options.steps_per_beat;
         let record_path = options.record_path.clone();
-        let (recording_finalizer_sender, recording_finalizer_receiver) =
-            std::sync::mpsc::sync_channel(1);
+        let black_box_seconds = options.black_box_seconds;
+        let black_box_directory = PathBuf::from(
+            options
+                .black_box_directory
+                .clone()
+                .unwrap_or_else(|| DEFAULT_BLACK_BOX_DIRECTORY.into()),
+        );
+        let black_box_metadata = {
+            let mut metadata = SessionMetadata::new(new_black_box_session_id());
+            if let Some(project) = project.as_ref() {
+                metadata.bpm = Some(project.bpm);
+                metadata.steps_per_beat = Some(u32::from(project.steps_per_beat));
+                metadata.seed = Some(project.seed);
+            } else {
+                metadata.bpm = Some(f64::from(bpm));
+                metadata.steps_per_beat = Some(u32::from(steps_per_beat));
+            }
+            metadata
+        };
+        let engine_project = project.clone();
+        let engine_project_dir = project_dir.clone();
+        let (startup_sender, startup_receiver) = std::sync::mpsc::sync_channel(1);
         let audio =
             open_stereo_output_stream(options.audio_device.as_deref(), move |sample_rate| {
                 let mut recorder = match record_path.as_deref() {
@@ -568,31 +1062,46 @@ mod live {
                             WavRecordingConfig::new(sample_rate, 1, RECORDING_QUEUE_CAPACITY)?;
                         let (producer, finalizer) =
                             spawn_realtime_recording(path, config, RECORDING_BLOCK_FRAMES)?;
-                        recording_finalizer_sender
-                            .send(Some(finalizer))
-                            .map_err(|_| "failed to publish recording finalizer".to_string())?;
-                        Some(producer)
+                        Some((producer, finalizer))
                     }
-                    None => {
-                        recording_finalizer_sender
-                            .send(None)
-                            .map_err(|_| "failed to publish recording state".to_string())?;
-                        None
-                    }
+                    None => None,
                 };
+                let (recording_producer, recording_finalizer) = match recorder.take() {
+                    Some((producer, finalizer)) => (Some(producer), Some(finalizer)),
+                    None => (None, None),
+                };
+                let mut recorder = recording_producer;
+                // The memory budget is checked here, before audio starts.
+                let black_box = match black_box_seconds {
+                    Some(seconds) => {
+                        let config = BlackBoxConfig::new(
+                            seconds,
+                            sample_rate,
+                            black_box_directory.clone(),
+                            DEFAULT_BLACK_BOX_MEMORY_BUDGET,
+                        )?;
+                        Some(spawn_black_box(config, black_box_metadata.clone())?)
+                    }
+                    None => None,
+                };
+                let (mut black_box_producer, black_box_handle) = match black_box {
+                    Some((producer, handle)) => (Some(producer), Some(handle)),
+                    None => (None, None),
+                };
+                startup_sender
+                    .send((recording_finalizer, black_box_handle))
+                    .map_err(|_| "failed to publish session state".to_string())?;
+
                 let mut performance_synth =
                     RealtimeSynth::new(sample_rate as f32, Oscillator::Saw, polyphony)?;
-                let mut multitrack = match project {
-                    Some(project) => Some(MultiTrackEngine::with_sample_assets(
+                let mut multitrack = match engine_project.as_ref() {
+                    Some(project) => Some(MultiTrackEngine::from_project(
                         sample_rate,
-                        project.bpm,
-                        u32::from(project.steps_per_beat),
-                        project.seed,
                         polyphony,
-                        project.tracks,
+                        project,
                         sample_assets.as_ref().map(|assets| SampleContext {
                             assets,
-                            base_dir: &project_dir,
+                            base_dir: &engine_project_dir,
                         }),
                     )?),
                     None => None,
@@ -616,6 +1125,7 @@ mod live {
                 let mut sequencer_commands =
                     Vec::with_capacity(LiveSequencer::MAX_COMMANDS_PER_FRAME);
                 let mut performance_mix = PerformanceMix::UNITY;
+                let mut frame_counter = 0_u64;
 
                 Ok(move || {
                     while let Ok(next_mix) = performance_receiver.try_recv() {
@@ -628,21 +1138,12 @@ mod live {
                         performance_synth.handle(command);
                     }
 
-                    for _ in 0..SYNTH_PATCHES_PER_SAMPLE_LIMIT {
-                        let Ok((track, patch)) = synth_patch_receiver.try_recv() else {
-                            break;
-                        };
-                        if let Some(engine) = multitrack.as_mut() {
-                            engine.apply_synth_patch(track, patch);
-                        }
-                    }
-
-                    for _ in 0..PATTERN_CHANGES_PER_SAMPLE_LIMIT {
-                        let Ok((track, change)) = pattern_change_receiver.try_recv() else {
-                            break;
-                        };
-                        if let Some(engine) = multitrack.as_mut() {
-                            let _ = engine.queue_pattern_revision(track, change);
+                    if let Some(engine) = multitrack.as_mut() {
+                        for _ in 0..controller::AUDIO_MESSAGES_PER_FRAME {
+                            let Ok(message) = audio_receiver.try_recv() else {
+                                break;
+                            };
+                            apply_audio_message(engine, message, &garbage_sender);
                         }
                     }
 
@@ -675,11 +1176,14 @@ mod live {
                         }
                     }
 
+                    capture_tap.poll_control();
+                    let mut transport_frame = None;
                     let (sequencer_left, sequencer_right) =
                         if let Some(engine) = multitrack.as_mut() {
-                            let frame = engine.next_stereo_frame();
-                            audio_transport_frame.store(engine.position_frame(), Ordering::Relaxed);
-                            frame
+                            if engine.is_playing() {
+                                transport_frame = Some(engine.position_frame());
+                            }
+                            engine.next_stereo_frame()
                         } else if let Some((sequencer, synth)) = sequenced.as_mut() {
                             sequencer.fill_commands(&mut sequencer_commands);
                             for command in sequencer_commands.drain(..) {
@@ -698,31 +1202,73 @@ mod live {
                     let right = protect_master(
                         live_sample + sequencer_right * performance_mix.sequencer_gain,
                     );
+                    if let (Some(frame), Some(engine)) = (transport_frame, multitrack.as_ref()) {
+                        // Resampling follows the transport: paused time is not captured.
+                        let track = match capture_tap.source() {
+                            Some(ResampleSource::Track(id)) => engine.track_output(id),
+                            _ => None,
+                        };
+                        capture_tap.process_frame(frame, (left, right), track);
+                    }
                     if let Some(recorder) = recorder.as_mut() {
                         let _ = recorder.push_sample(protect_master((left + right) * 0.5));
+                    }
+                    if let Some(producer) = black_box_producer.as_mut() {
+                        producer.push_frame(frame_counter, left, right);
+                    }
+                    frame_counter = frame_counter.wrapping_add(1);
+                    if frame_counter.is_multiple_of(TELEMETRY_INTERVAL_FRAMES) {
+                        audio_output_frame.store(frame_counter, Ordering::Relaxed);
+                        if let Some(engine) = multitrack.as_ref() {
+                            audio_telemetry.publish(engine);
+                        }
                     }
                     audio_scope_tap.push((left + right) * 0.5);
                     (left, right)
                 })
             })?;
-        let recording_finalizer = recording_finalizer_receiver
+        let (recording_finalizer, black_box_handle) = startup_receiver
             .recv()
-            .map_err(|_| "audio renderer did not publish recording state".to_string())?;
+            .map_err(|_| "audio renderer did not publish session state".to_string())?;
+
+        let controller = match project {
+            Some(project) => Some(SessionController::new(
+                project,
+                options.project_path.as_ref().map(PathBuf::from),
+                audio.sample_rate(),
+                audio_sender,
+            )?),
+            None => None,
+        };
+        let capture_directory = options
+            .capture_directory
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| project_dir.join("captures"));
+        let resampler = controller.as_ref().map(|_| {
+            Resampler::new(
+                capture_directory,
+                audio.sample_rate(),
+                capture_sender,
+                capture_returns,
+            )
+        });
+        let mut services = Services {
+            controller,
+            resampler,
+            resample_normalize: false,
+            resample_destination: DestinationSpec::AssetOnly,
+            black_box: black_box_handle,
+            garbage: garbage_receiver,
+            telemetry,
+            output_frame,
+            sample_rate: audio.sample_rate(),
+            polyphony,
+            started: Instant::now(),
+        };
 
         #[cfg(feature = "midi")]
-        let midi_selector = options.midi_port.clone().unwrap_or(MidiPortSelector::First);
-        #[cfg(feature = "midi")]
-        let mut midi = if options.no_midi {
-            None
-        } else {
-            match connect_midi_input(&midi_selector, MIDI_QUEUE_CAPACITY) {
-                Ok(handle) => Some(handle),
-                Err(error) => {
-                    eprintln!("MIDI input unavailable: {error}; keyboard control remains active");
-                    None
-                }
-            }
-        };
+        let mut midi = MidiManager::new(&options);
 
         println!(
             "shelloop running: audio=\"{}\" {} Hz / {} ch, polyphony={} voices",
@@ -732,11 +1278,20 @@ mod live {
             options.polyphony
         );
         #[cfg(feature = "midi")]
-        if let Some(handle) = midi.as_ref() {
-            println!("MIDI input: {}", handle.port_name());
+        if let Some(name) = midi.port_name() {
+            println!("MIDI input: {name}");
         }
         if let Some(path) = options.record_path.as_deref() {
             println!("Recording mono master output to: {path}");
+        }
+        if let Some(black_box) = services.black_box.as_ref() {
+            let config = black_box.config();
+            println!(
+                "Black box: keeping the last {:.1} s (requested {} s); F8 or `:blackbox save` writes to {}",
+                config.effective_seconds(),
+                config.requested_seconds,
+                config.directory.display()
+            );
         }
         if let Some(name) = pattern_name.as_deref() {
             println!(
@@ -745,21 +1300,32 @@ mod live {
             );
             println!("Sequencer: Space play/pause, Backspace restart");
         }
-        if let (Some(path), Some(track_count)) =
-            (options.project_path.as_deref(), project_track_count)
-        {
-            println!("Project: {path} ({track_count} tracks)");
+        if let (Some(path), Some(controller)) = (
+            options.project_path.as_deref(),
+            services.controller.as_ref(),
+        ) {
+            let project = controller.project();
+            println!(
+                "Project: {path} ({} tracks, {} scenes, {} MIDI mappings)",
+                project.tracks.len(),
+                project.scenes.len(),
+                project.midi_mappings.len()
+            );
             if let Some((count, bytes)) = sample_memory {
                 println!(
                     "Samples: {count} file(s) decoded, {:.1} MiB in memory",
                     bytes as f64 / (1024.0 * 1024.0)
                 );
             }
-            println!("Sequencer: Space play/pause all tracks, Backspace restart all tracks");
-            println!("Live editor: press : for track/step/length/swing/rotate/undo/redo commands");
+            if !options.tui {
+                println!("Sequencer: Space play/pause all tracks, Backspace restart all tracks");
+                println!("Commands: press : then type `help` (tracks, steps, locks, scenes, fx, learn, resample, save)");
+            }
         }
-        println!("Keys: Z-M/Q-U notes, [ ] octave, ! panic, ~ or Esc quit");
-        println!("Waveform: Tab show/hide, Shift+Tab scope/history style");
+        if !options.tui {
+            println!("Keys: Z-M/Q-U notes, [ ] octave, ! panic, ~ or Esc quit, F8 black-box save");
+            println!("Waveform: Tab show/hide, Shift+Tab scope/history style");
+        }
         if let Err(error) = io::stdout().flush() {
             request_panic(&command_sender, &sequencer_sender);
             drop(audio);
@@ -769,17 +1335,100 @@ mod live {
             return Err(format!("failed to flush terminal output: {error}"));
         }
 
-        let terminal = match TerminalGuard::enable(options.mouse_xy) {
-            Ok(terminal) => terminal,
-            Err(error) => {
-                request_panic(&command_sender, &sequencer_sender);
-                drop(audio);
-                if let Some(finalizer) = recording_finalizer {
-                    let _ = finalizer.finish();
-                }
-                return Err(error);
-            }
+        let channels = SessionChannels {
+            command_sender: &command_sender,
+            sequencer_sender: &sequencer_sender,
+            performance_sender: &performance_sender,
+            has_sequencer,
         };
+        let session_result = if options.tui {
+            run_tui_session(
+                &options,
+                &audio,
+                &mut services,
+                #[cfg(feature = "midi")]
+                &mut midi,
+                &channels,
+                Arc::clone(&scope_tap),
+            )
+        } else {
+            run_line_session(
+                &options,
+                &audio,
+                &mut services,
+                #[cfg(feature = "midi")]
+                &mut midi,
+                &channels,
+                Arc::clone(&scope_tap),
+            )
+        };
+
+        request_panic(&command_sender, &sequencer_sender);
+        drop(audio);
+        services.shutdown();
+
+        let recording_result = match recording_finalizer {
+            Some(finalizer) => finalizer.finish().map(|summary| {
+                if let Some(path) = options.record_path.as_deref() {
+                    println!(
+                        "Recording saved: {} frames to {} (dropped blocks: {}, rejected blocks: {})",
+                        summary.frames_written,
+                        path,
+                        summary.dropped_blocks,
+                        summary.rejected_blocks
+                    );
+                }
+            }),
+            None => Ok(()),
+        };
+
+        match (session_result, recording_result) {
+            (Err(session_error), Err(recording_error)) => Err(format!(
+                "{session_error}; recording finalization also failed: {recording_error}"
+            )),
+            (Err(session_error), Ok(())) => Err(session_error),
+            (Ok(()), Err(recording_error)) => Err(recording_error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
+    }
+
+    struct SessionChannels<'a> {
+        command_sender: &'a Sender<EngineCommand>,
+        sequencer_sender: &'a Sender<SequencerControl>,
+        performance_sender: &'a Sender<PerformanceMix>,
+        has_sequencer: bool,
+    }
+
+    fn note_event(services: &Services, note: u8, on: bool) {
+        services.record(
+            EventSource::Keyboard,
+            if on {
+                ControlEventKind::NoteOn {
+                    channel: KEYBOARD_CHANNEL,
+                    note,
+                    velocity: KEYBOARD_VELOCITY,
+                }
+            } else {
+                ControlEventKind::NoteOff {
+                    channel: KEYBOARD_CHANNEL,
+                    note,
+                }
+            },
+        );
+    }
+
+    fn run_line_session(
+        options: &StartupOptions,
+        audio: &crate::AudioOutput,
+        services: &mut Services,
+        #[cfg(feature = "midi")] midi: &mut MidiManager,
+        channels: &SessionChannels<'_>,
+        scope_tap: Arc<ScopeTap>,
+    ) -> Result<(), String> {
+        let command_sender = channels.command_sender;
+        let sequencer_sender = channels.sequencer_sender;
+        let has_sequencer = channels.has_sequencer;
+        let terminal = TerminalGuard::enable(options.mouse_xy)?;
         if options.mouse_xy {
             session_error_line(
                 "Mouse XY enabled: X crossfades live ↔ sequencer; Y controls overall level",
@@ -792,29 +1441,32 @@ mod live {
             );
         }
 
-        let mut waveform = WaveformPanel::new(
-            Arc::clone(&scope_tap),
-            options.waveform_style,
-            audio.sample_rate(),
-        );
+        let mut waveform =
+            WaveformPanel::new(scope_tap, options.waveform_style, audio.sample_rate());
         if options.waveform {
             if let Err(error) = waveform.show() {
                 session_error_line(&format!("waveform unavailable: {error}"));
             }
         }
 
+        let commands_available = services.controller.is_some() || services.black_box.is_some();
         let mut octave = 0_i8;
         let mut held_notes = HashMap::<char, HeldNote>::new();
         let mut edit_command_buffer = None::<String>;
-        #[cfg(feature = "midi")]
-        let mut last_midi_scan = Instant::now();
 
-        let session_result = (|| -> Result<(), String> {
+        let result = (|| -> Result<(), String> {
             'session: loop {
                 if let Some(error) = audio.take_error() {
                     return Err(format!("audio stream error: {error}"));
                 }
                 waveform.tick()?;
+                for (message, error) in services.poll() {
+                    if error {
+                        session_error_line(&message);
+                    } else {
+                        session_line(&message);
+                    }
+                }
 
                 if !terminal.release_events_supported() {
                     let now = Instant::now();
@@ -828,8 +1480,9 @@ mod live {
                         .collect();
                     for key in expired {
                         if let Some(held) = held_notes.remove(&key) {
+                            note_event(services, held.note, false);
                             send_command(
-                                &command_sender,
+                                command_sender,
                                 EngineCommand::NoteOff {
                                     channel: KEYBOARD_CHANNEL,
                                     note: held.note,
@@ -840,42 +1493,11 @@ mod live {
                 }
 
                 #[cfg(feature = "midi")]
-                {
-                    if let Some(handle) = midi.as_ref() {
-                        while let Some(event) = handle.try_recv() {
-                            if let Some(command) = engine_command_from_midi(event) {
-                                send_command(&command_sender, command)?;
-                            }
-                        }
-                    }
-
-                    if !options.no_midi && last_midi_scan.elapsed() >= Duration::from_secs(1) {
-                        last_midi_scan = Instant::now();
-                        if let Ok(names) = list_midi_input_names() {
-                            let desired_name = select_midi_port_index(&names, &midi_selector)
-                                .ok()
-                                .and_then(|index| names.get(index).cloned());
-                            let current_name =
-                                midi.as_ref().map(|handle| handle.port_name().to_string());
-
-                            if current_name != desired_name {
-                                if current_name.is_some() {
-                                    midi = None;
-                                    let _ = send_command(&command_sender, EngineCommand::Panic);
-                                }
-                                if desired_name.is_some() {
-                                    if let Ok(handle) =
-                                        connect_midi_input(&midi_selector, MIDI_QUEUE_CAPACITY)
-                                    {
-                                        session_error_line(&format!(
-                                            "MIDI input connected: {}",
-                                            handle.port_name()
-                                        ));
-                                        midi = Some(handle);
-                                    }
-                                }
-                            }
-                        }
+                for (message, error) in midi.poll(services, command_sender)? {
+                    if error {
+                        session_error_line(&message);
+                    } else {
+                        session_line(&message);
                     }
                 }
 
@@ -906,7 +1528,14 @@ mod live {
                                 height,
                             );
                             let mix = PerformanceMix::from_xy(point, has_sequencer);
-                            let _ = performance_sender.try_send(mix);
+                            services.record(
+                                EventSource::Mouse,
+                                ControlEventKind::XyMix {
+                                    live_gain: mix.live_gain,
+                                    sequencer_gain: mix.sequencer_gain,
+                                },
+                            );
+                            let _ = channels.performance_sender.try_send(mix);
                         }
                         continue;
                     }
@@ -932,39 +1561,10 @@ mod live {
                         }
                         KeyCode::Enter => {
                             write_terminal("\r\n")?;
-                            if let (Some(editors), Some((project_bpm, project_steps))) =
-                                (pattern_editors.as_mut(), project_clock)
-                            {
-                                let current_frame = transport_frame.load(Ordering::Relaxed);
-                                let result = if buffer.split_whitespace().next() == Some("synth") {
-                                    let track = editors.selected_track();
-                                    match synth_patches.get_mut(&track) {
-                                        Some(current) => queue_live_synth_edit(
-                                            &buffer,
-                                            track,
-                                            current,
-                                            audio.sample_rate(),
-                                            &synth_patch_sender,
-                                        ),
-                                        None => Err("selected track is not a synth track".into()),
-                                    }
-                                } else {
-                                    queue_live_edit(
-                                        &buffer,
-                                        editors,
-                                        current_frame,
-                                        audio.sample_rate(),
-                                        project_bpm,
-                                        project_steps,
-                                        &pattern_change_sender,
-                                    )
-                                };
-                                match result {
-                                    Ok(message) => session_line(&format!("edit: {message}")),
-                                    Err(error) => {
-                                        session_error_line(&format!("edit error: {error}"))
-                                    }
-                                }
+                            match services.execute_line(&buffer) {
+                                Ok(message) if message.is_empty() => {}
+                                Ok(message) => session_line(&message),
+                                Err(error) => session_error_line(&format!("error: {error}")),
                             }
                         }
                         KeyCode::Backspace => {
@@ -986,10 +1586,18 @@ mod live {
 
                 if key_event.code == KeyCode::Char(':')
                     && key_event.kind == KeyEventKind::Press
-                    && pattern_editors.is_some()
+                    && commands_available
                 {
                     edit_command_buffer = Some(String::new());
                     render_edit_prompt("")?;
+                    continue;
+                }
+
+                if key_event.code == KeyCode::F(8) && key_event.kind == KeyEventKind::Press {
+                    match services.black_box_save() {
+                        Ok(message) => session_line(&message),
+                        Err(error) => session_error_line(&error),
+                    }
                     continue;
                 }
 
@@ -1018,7 +1626,13 @@ mod live {
                     && key_event.kind == KeyEventKind::Press
                     && has_sequencer
                 {
-                    send_sequencer_control(&sequencer_sender, SequencerControl::Restart)?;
+                    services.record(
+                        EventSource::Keyboard,
+                        ControlEventKind::Transport {
+                            action: "restart".into(),
+                        },
+                    );
+                    send_sequencer_control(sequencer_sender, SequencerControl::Restart)?;
                     continue;
                 }
 
@@ -1037,8 +1651,9 @@ mod live {
                                 }
                                 continue;
                             }
+                            note_event(services, note, true);
                             send_command(
-                                &command_sender,
+                                command_sender,
                                 EngineCommand::NoteOn {
                                     channel: KEYBOARD_CHANNEL,
                                     note,
@@ -1058,23 +1673,28 @@ mod live {
                         Some(PerformanceKey::OctaveDown) => octave = shift_octave(octave, -1),
                         Some(PerformanceKey::OctaveUp) => octave = shift_octave(octave, 1),
                         Some(PerformanceKey::Panic) => {
-                            send_command(&command_sender, EngineCommand::Panic)?;
-                            send_sequencer_control(&sequencer_sender, SequencerControl::Panic)?;
+                            services.record(EventSource::Keyboard, ControlEventKind::Panic);
+                            send_command(command_sender, EngineCommand::Panic)?;
+                            send_sequencer_control(sequencer_sender, SequencerControl::Panic)?;
                             held_notes.clear();
                         }
                         Some(PerformanceKey::Quit) => break 'session,
                         Some(PerformanceKey::TogglePlay) if has_sequencer => {
-                            send_sequencer_control(
-                                &sequencer_sender,
-                                SequencerControl::TogglePlay,
-                            )?;
+                            services.record(
+                                EventSource::Keyboard,
+                                ControlEventKind::Transport {
+                                    action: "toggle_play".into(),
+                                },
+                            );
+                            send_sequencer_control(sequencer_sender, SequencerControl::TogglePlay)?;
                         }
                         Some(PerformanceKey::TogglePlay) | None => {}
                     },
                     KeyEventKind::Release => {
                         if let Some(held) = held_notes.remove(&held_key) {
+                            note_event(services, held.note, false);
                             send_command(
-                                &command_sender,
+                                command_sender,
                                 EngineCommand::NoteOff {
                                     channel: KEYBOARD_CHANNEL,
                                     note: held.note,
@@ -1094,95 +1714,236 @@ mod live {
             }
             Ok(())
         })();
-
-        request_panic(&command_sender, &sequencer_sender);
         drop(waveform);
         drop(terminal);
-        drop(audio);
+        result
+    }
 
-        let recording_result = match recording_finalizer {
-            Some(finalizer) => finalizer.finish().map(|summary| {
-                if let Some(path) = options.record_path.as_deref() {
-                    println!(
-                        "Recording saved: {} frames to {} (dropped blocks: {}, rejected blocks: {})",
-                        summary.frames_written,
-                        path,
-                        summary.dropped_blocks,
-                        summary.rejected_blocks
-                    );
-                }
-            }),
-            None => Ok(()),
+    /// Full-screen workstation loop (spec 08).
+    fn run_tui_session(
+        options: &StartupOptions,
+        audio: &crate::AudioOutput,
+        services: &mut Services,
+        #[cfg(feature = "midi")] midi: &mut MidiManager,
+        channels: &SessionChannels<'_>,
+        _scope_tap: Arc<ScopeTap>,
+    ) -> Result<(), String> {
+        let guard = TuiTerminalGuard::enter(true)?;
+        let keyboard_enhancement = supports_keyboard_enhancement().unwrap_or(false);
+        if keyboard_enhancement {
+            let _ = execute!(
+                io::stdout(),
+                PushKeyboardEnhancementFlags(
+                    KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                        | KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                )
+            );
+        }
+        let releases = cfg!(windows) || keyboard_enhancement;
+        let backend = ratatui::backend::CrosstermBackend::new(io::stdout());
+        let mut terminal = ratatui::Terminal::new(backend)
+            .map_err(|error| format!("failed to start the full-screen UI: {error}"))?;
+        let mut ui = UiState::new(options.ascii);
+        ui.push_status("press ? for help, : for commands, Ctrl+Q to quit", false);
+        if !releases {
+            ui.push_status(
+                "terminal does not report key releases; keyboard notes use a timed fallback",
+                true,
+            );
+        }
+        let mut layout = TuiLayout::compute(0, 0);
+        let mut last_snapshot: Option<TuiSnapshot> = None;
+        let mut last_draw = Instant::now() - TUI_REDRAW_INTERVAL;
+        let mut fallback_releases: Vec<(char, Instant)> = Vec::new();
+        let runtime_status = |services: &Services, midi_name: Option<String>| {
+            let (resample, black_box) = services.status_text();
+            RuntimeStatus {
+                audio_device: audio.device_name().to_string(),
+                sample_rate: audio.sample_rate(),
+                midi: midi_name,
+                recording: options
+                    .record_path
+                    .clone()
+                    .map(|path| format!("REC {path}")),
+                black_box,
+                resample,
+            }
         };
 
-        match (session_result, recording_result) {
-            (Err(session_error), Err(recording_error)) => Err(format!(
-                "{session_error}; recording finalization also failed: {recording_error}"
-            )),
-            (Err(session_error), Ok(())) => Err(session_error),
-            (Ok(()), Err(recording_error)) => Err(recording_error),
-            (Ok(()), Ok(())) => Ok(()),
-        }
-    }
-    #[cfg(test)]
-    mod synth_control_tests {
-        use super::*;
+        let result = (|| -> Result<(), String> {
+            loop {
+                if let Some(error) = audio.take_error() {
+                    return Err(format!("audio stream error: {error}"));
+                }
+                for (message, error) in services.poll() {
+                    ui.push_status(message, error);
+                }
+                #[cfg(feature = "midi")]
+                for (message, error) in midi.poll(services, channels.command_sender)? {
+                    ui.push_status(message, error);
+                }
 
-        #[test]
-        fn failed_queue_delivery_preserves_control_patch() {
-            let (sender, receiver) = bounded(1);
-            let mut patch = SynthPatch::legacy(Oscillator::Saw);
-            queue_live_synth_edit(
-                "synth output_gain 0.4",
-                TrackId(1),
-                &mut patch,
-                48_000,
-                &sender,
-            )
-            .unwrap();
-            let accepted = patch;
-            assert!(queue_live_synth_edit(
-                "synth output_gain 0.2",
-                TrackId(1),
-                &mut patch,
-                48_000,
-                &sender
-            )
-            .is_err());
-            assert_eq!(patch, accepted);
-            let (track, compiled) = receiver.try_recv().unwrap();
-            assert_eq!(track, TrackId(1));
-            let mut synth = RealtimeSynth::new(48_000.0, Oscillator::Saw, 4).unwrap();
-            assert!(synth.apply_patch(compiled));
-            assert_eq!(synth.patch(), accepted);
-            drop(receiver);
-            assert!(queue_live_synth_edit(
-                "synth output_gain 0.2",
-                TrackId(1),
-                &mut patch,
-                48_000,
-                &sender
-            )
-            .is_err());
-            assert_eq!(patch, accepted);
-        }
+                if !releases {
+                    let now = Instant::now();
+                    let expired: Vec<char> = fallback_releases
+                        .iter()
+                        .filter(|(_, deadline)| now >= *deadline)
+                        .map(|(key, _)| *key)
+                        .collect();
+                    fallback_releases.retain(|(_, deadline)| now < *deadline);
+                    for key in expired {
+                        let input = UiInput::Key {
+                            key: UiKey::Char(key),
+                            ctrl: false,
+                            alt: false,
+                            shift: false,
+                            release: true,
+                        };
+                        for action in route_input(ui.mode, &input, None, None) {
+                            if let Some(controller) = services.controller.as_mut() {
+                                for effect in handle_action(action, &mut ui, controller, 0) {
+                                    if let UiEffect::NoteOff(note) = effect {
+                                        note_event(services, note, false);
+                                        send_command(
+                                            channels.command_sender,
+                                            EngineCommand::NoteOff {
+                                                channel: KEYBOARD_CHANNEL,
+                                                note,
+                                            },
+                                        )?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
-        #[test]
-        fn invalid_edit_never_enters_the_audio_queue() {
-            let (sender, receiver) = bounded(1);
-            let mut patch = SynthPatch::legacy(Oscillator::Saw);
-            let original = patch;
-            assert!(queue_live_synth_edit(
-                "synth filter_cutoff 20000",
-                TrackId(1),
-                &mut patch,
-                32_000,
-                &sender
-            )
-            .is_err());
-            assert_eq!(patch, original);
-            assert!(receiver.try_recv().is_err());
+                if last_draw.elapsed() >= TUI_REDRAW_INTERVAL {
+                    last_draw = Instant::now();
+                    if let Some(controller) = services.controller.as_ref() {
+                        #[cfg(feature = "midi")]
+                        let midi_name = midi.port_name();
+                        #[cfg(not(feature = "midi"))]
+                        let midi_name = None;
+                        let status = runtime_status(services, midi_name);
+                        let telemetry = services.telemetry.snapshot();
+                        let snapshot = build_snapshot(controller, &telemetry, &mut ui, &status);
+                        terminal
+                            .draw(|frame| {
+                                let area = frame.area();
+                                layout = TuiLayout::compute(area.width, area.height);
+                                tui_render(frame, &snapshot, &layout);
+                            })
+                            .map_err(|error| format!("failed to draw the UI: {error}"))?;
+                        last_snapshot = Some(snapshot);
+                    }
+                }
+
+                if !event::poll(Duration::from_millis(10))
+                    .map_err(|error| format!("terminal event polling failed: {error}"))?
+                {
+                    continue;
+                }
+                let terminal_event = event::read()
+                    .map_err(|error| format!("failed to read terminal event: {error}"))?;
+                let Some(input) = ui_input_from_crossterm(&terminal_event) else {
+                    continue;
+                };
+                if let UiInput::Resize { .. } = input {
+                    let _ = terminal.autoresize();
+                    last_draw = Instant::now() - TUI_REDRAW_INTERVAL;
+                }
+                let actions = route_input(ui.mode, &input, Some(&layout), last_snapshot.as_ref());
+                let frame = services.transport_frame();
+                for action in actions {
+                    let is_note = matches!(action, UiAction::NoteOn { .. });
+                    if let (UiAction::NoteOn { key, .. }, false) = (&action, releases) {
+                        fallback_releases.retain(|(held, _)| held != key);
+                        fallback_releases.push((*key, Instant::now() + FALLBACK_INITIAL_HOLD));
+                    }
+                    let Some(controller) = services.controller.as_mut() else {
+                        break;
+                    };
+                    let effects = handle_action(action, &mut ui, controller, frame);
+                    if is_note && effects.is_empty() && !releases {
+                        // Auto-repeat of a held key extends the fallback hold.
+                        if let Some(entry) = fallback_releases.last_mut() {
+                            entry.1 = Instant::now() + FALLBACK_REPEAT_GRACE;
+                        }
+                    }
+                    for effect in effects {
+                        match effect {
+                            UiEffect::Quit => return Ok(()),
+                            UiEffect::NoteOn(note) => {
+                                note_event(services, note, true);
+                                send_command(
+                                    channels.command_sender,
+                                    EngineCommand::NoteOn {
+                                        channel: KEYBOARD_CHANNEL,
+                                        note,
+                                        velocity: KEYBOARD_VELOCITY,
+                                    },
+                                )?;
+                            }
+                            UiEffect::NoteOff(note) => {
+                                note_event(services, note, false);
+                                send_command(
+                                    channels.command_sender,
+                                    EngineCommand::NoteOff {
+                                        channel: KEYBOARD_CHANNEL,
+                                        note,
+                                    },
+                                )?;
+                            }
+                            UiEffect::Panic => {
+                                services.record(EventSource::Keyboard, ControlEventKind::Panic);
+                                send_command(channels.command_sender, EngineCommand::Panic)?;
+                                send_sequencer_control(
+                                    channels.sequencer_sender,
+                                    SequencerControl::Panic,
+                                )?;
+                                fallback_releases.clear();
+                            }
+                            UiEffect::BlackBoxSave => match services.black_box_save() {
+                                Ok(message) => ui.push_status(message, false),
+                                Err(error) => ui.push_status(error, true),
+                            },
+                            UiEffect::Command(line) => {
+                                if matches!(line.trim(), "quit" | "exit") {
+                                    return Ok(());
+                                }
+                                match services.execute_line(&line) {
+                                    Ok(message) if message.is_empty() => {}
+                                    Ok(message) => ui.push_status(message, false),
+                                    Err(error) => ui.push_status(error, true),
+                                }
+                            }
+                            UiEffect::XyPad { x, y } => {
+                                let point = XyPoint {
+                                    x: x.clamp(0.0, 1.0),
+                                    y: y.clamp(0.0, 1.0),
+                                };
+                                let mix = PerformanceMix::from_xy(point, channels.has_sequencer);
+                                services.record(
+                                    EventSource::Mouse,
+                                    ControlEventKind::XyMix {
+                                        live_gain: mix.live_gain,
+                                        sequencer_gain: mix.sequencer_gain,
+                                    },
+                                );
+                                let _ = channels.performance_sender.try_send(mix);
+                            }
+                        }
+                    }
+                }
+            }
+        })();
+        if keyboard_enhancement {
+            let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
         }
+        drop(terminal);
+        drop(guard);
+        result
     }
 }
 
