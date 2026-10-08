@@ -60,3 +60,22 @@ jobs:
         run: cargo build --release --features realtime-audio,midi,terminal-ui
       - name: Build CLAP plugin
         run: cargo build --release -p shelloop-clap
+
+  vst3-build:
+    name: VST3 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and verify VST3 plugin
+        run: python scripts/build_vst3.py vst3-out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vst3-${{ matrix.os }}
+          path: vst3-out
+          if-no-files-found: error
