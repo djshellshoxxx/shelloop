@@ -5,3 +5,5 @@ __pycache__/
 /captures/
 /shelloop-takes/
 **/captures/
+/vst3/build/
+/vst3-out/

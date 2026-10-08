@@ -45,6 +45,8 @@ jobs:
         run: cargo build --release --features realtime-audio,midi,terminal-ui
       - name: Build CLAP plugin
         run: cargo build --release -p shelloop-clap
+      - name: Build VST3 plugin
+        run: python scripts/build_vst3.py vst3-out
       - name: Package Linux artifacts
         if: runner.os == 'Linux'
         shell: bash
@@ -52,17 +54,21 @@ jobs:
           set -euo pipefail
           app="shelloop-${TAG}-linux-x86_64"
           clap="shelloop-clap-${TAG}-linux-x86_64"
-          mkdir -p "dist/$app" "dist/$clap"
+          vst3="shelloop-vst3-${TAG}-linux-x86_64"
+          mkdir -p "dist/$app" "dist/$clap" "dist/$vst3"
           cp target/release/shelloop "dist/$app/"
           cp target/release/libshelloop_clap.so "dist/$app/shelloop.clap"
           cp README.md LICENSE COPYRIGHT-TRADEMARK.md "dist/$app/"
           cp -r patterns projects "dist/$app/"
           cp target/release/libshelloop_clap.so "dist/$clap/shelloop.clap"
           cp clap-plugin/README.md LICENSE "dist/$clap/"
+          cp -r vst3-out/SHELLOOP.vst3 "dist/$vst3/"
+          cp vst3/README.md LICENSE "dist/$vst3/"
           tar -C dist -czf "dist/$app.tar.gz" "$app"
           tar -C dist -czf "dist/$clap.tar.gz" "$clap"
+          tar -C dist -czf "dist/$vst3.tar.gz" "$vst3"
           cd dist
-          for file in "$app.tar.gz" "$clap.tar.gz"; do sha256sum "$file" > "$file.sha256"; done
+          for file in "$app.tar.gz" "$clap.tar.gz" "$vst3.tar.gz"; do sha256sum "$file" > "$file.sha256"; done
           echo "APP_ARCHIVE=dist/$app.tar.gz" >> "$GITHUB_ENV"
       - name: Package Windows artifacts
         if: runner.os == 'Windows'
@@ -72,17 +78,21 @@ jobs:
           $tag = $env:TAG
           $app = "shelloop-$tag-windows-x86_64"
           $clap = "shelloop-clap-$tag-windows-x86_64"
-          New-Item -ItemType Directory -Force -Path "dist/$app", "dist/$clap" | Out-Null
+          $vst3 = "shelloop-vst3-$tag-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path "dist/$app", "dist/$clap", "dist/$vst3" | Out-Null
           Copy-Item 'target/release/shelloop.exe' "dist/$app"
           Copy-Item 'target/release/shelloop_clap.dll' "dist/$app/shelloop.clap"
           Copy-Item 'README.md', 'LICENSE', 'COPYRIGHT-TRADEMARK.md' "dist/$app"
           Copy-Item 'patterns', 'projects' "dist/$app" -Recurse
           Copy-Item 'target/release/shelloop_clap.dll' "dist/$clap/shelloop.clap"
           Copy-Item 'clap-plugin/README.md', 'LICENSE' "dist/$clap"
+          Copy-Item 'vst3-out/SHELLOOP.vst3' "dist/$vst3"
+          Copy-Item 'vst3/README.md', 'LICENSE' "dist/$vst3"
           Copy-Item 'target/release/shelloop.exe' "dist/shelloop-$tag-windows-x86_64.exe"
           Compress-Archive -Path "dist/$app/*" -DestinationPath "dist/$app.zip" -Force
           Compress-Archive -Path "dist/$clap/*" -DestinationPath "dist/$clap.zip" -Force
-          foreach ($file in @("$app.zip", "$clap.zip", "shelloop-$tag-windows-x86_64.exe")) {
+          Compress-Archive -Path "dist/$vst3/*" -DestinationPath "dist/$vst3.zip" -Force
+          foreach ($file in @("$app.zip", "$clap.zip", "$vst3.zip", "shelloop-$tag-windows-x86_64.exe")) {
             $hash = (Get-FileHash "dist/$file" -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $file" | Set-Content -NoNewline "dist/$file.sha256"
           }
@@ -126,6 +136,7 @@ jobs:
             - **Windows standalone**: `shelloop-${{ env.TAG }}-windows-x86_64.exe` (single executable), or the `.zip` bundle with example projects and the CLAP plugin.
             - **Linux standalone**: `shelloop-${{ env.TAG }}-linux-x86_64.tar.gz` (binary, example projects, CLAP plugin).
             - **CLAP plugin**: `shelloop-clap-${{ env.TAG }}-<platform>` contains `shelloop.clap` for DAWs that load CLAP instruments.
+            - **VST3 plugin**: `shelloop-vst3-${{ env.TAG }}-<platform>` contains `SHELLOOP.vst3` (the same instrument wrapped for VST3 hosts). Copy it to `~/.vst3/` on Linux or `C:\Program Files\Common Files\VST3\` on Windows and rescan.
 
             Verify each download against its `.sha256` file. Builds come from CI; physical audio-hardware latency validation is reported separately (see docs/HARDWARE-ACCEPTANCE.md).
           files: |
