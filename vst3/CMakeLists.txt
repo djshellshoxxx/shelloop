@@ -27,6 +27,18 @@ FetchContent_Declare(clap-wrapper
   GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(clap-wrapper)
 
+# clap-wrapper forces the static MSVC runtime (/MT) for the targets it creates
+# itself, while this module and the Rust plugin use the DLL runtime (/MD), as
+# the CLAP build does. Mixing them fails to link, so put every wrapper-owned
+# library on /MD (a no-op outside MSVC).
+if(MSVC)
+  foreach(wrapper_lib clap-wrapper-shared-detail)
+    if(TARGET ${wrapper_lib})
+      set_target_properties(${wrapper_lib} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+    endif()
+  endforeach()
+endif()
+
 # The Rust static library built by `cargo build --release -p shelloop-clap`.
 get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 set(RUST_TARGET_DIR "${REPO_ROOT}/target/release" CACHE PATH "Cargo release output directory")
