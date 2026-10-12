@@ -726,9 +726,11 @@ save                         # writes the project, including mappings and locks
 
 Resampled audio is written to `<project folder>/captures/Resample-NNNN.wav` (change it with `--capture-directory`). Black-box takes go to `./shelloop-takes` (change it with `--black-box-directory`).
 
-## CLAP plugin
+## CLAP and VST3 plugins
 
 `clap-plugin/` builds SHELLOOP's synthesizer and step sequencer as a CLAP instrument. Release downloads include `shelloop.clap`; copy it to `~/.clap/` on Linux or `C:\Program Files\Common Files\CLAP\` on Windows and rescan plugins in your DAW. See `clap-plugin/README.md` for its parameters and build instructions.
+
+The same instrument is also released as a **VST3** (`SHELLOOP.vst3`, Windows and Linux): copy it to `C:\Program Files\Common Files\VST3\` on Windows or `~/.vst3/` on Linux. See `vst3/README.md`.
 
 ## Release pipeline
 

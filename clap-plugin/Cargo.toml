@@ -7,7 +7,7 @@ license = "MIT"
 publish = false
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 shelloop = { path = ".." }
