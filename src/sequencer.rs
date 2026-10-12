@@ -211,15 +211,17 @@ impl LiveSequencer {
                 break;
             }
 
-            if output.len() < Self::MAX_COMMANDS_PER_FRAME {
+            // Never create an orphan note-off for a note-on that was dropped.
+            // Likewise, do not start a note if its eventual release cannot
+            // be tracked by the bounded pending-note-off queue.
+            if output.len() < Self::MAX_COMMANDS_PER_FRAME
+                && self.pending_note_offs.len() < PENDING_NOTE_OFF_CAPACITY
+            {
                 output.push(EngineCommand::NoteOn {
                     channel: event.channel,
                     note: event.note,
                     velocity: event.velocity,
                 });
-            }
-
-            if self.pending_note_offs.len() < PENDING_NOTE_OFF_CAPACITY {
                 self.pending_note_offs.push(PendingNoteOff {
                     frame: event
                         .absolute_frame
