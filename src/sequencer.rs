@@ -199,8 +199,10 @@ impl LiveSequencer {
                         channel: pending.channel,
                         note: pending.note,
                     });
+                    self.pending_note_offs.swap_remove(index);
                 }
-                self.pending_note_offs.swap_remove(index);
+                // Keep an overdue release until a command slot is available.
+                // Dropping it here could leave a synthesizer voice held forever.
             }
         }
     }
