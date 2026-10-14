@@ -21,6 +21,13 @@ pub fn engine_command_from_midi(event: MidiEvent) -> Option<EngineCommand> {
             enabled: value >= 64,
         }),
         MidiEvent::ControlChange {
+            controller: 1,
+            value,
+            ..
+        } => Some(EngineCommand::ModWheel {
+            value: f32::from(value) / 127.0,
+        }),
+        MidiEvent::ControlChange {
             controller: 120 | 123,
             ..
         } => Some(EngineCommand::Panic),

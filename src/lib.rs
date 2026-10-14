@@ -15,6 +15,7 @@ pub mod midi;
 pub mod midi_io;
 pub mod midi_learn;
 pub mod mixer;
+pub mod modulation;
 pub mod multitrack;
 pub mod params;
 pub mod pattern;
@@ -75,6 +76,12 @@ pub use engine::{midi_note_hz, EngineCommand, RealtimeSynth};
 pub use envelope::{AdsrEnvelope, AdsrParams, EnvelopeStage};
 pub use filter::{clamp_cutoff, max_cutoff, FilterMode, FilterParams, StateVariableFilter};
 pub use keyboard::{map_performance_key, shift_octave, PerformanceKey};
+pub use modulation::{
+    apply_mod_command, describe_routes, parse_mod_command, ModCommand,
+    parse_mod_dest, parse_mod_source, CompiledModulation, LfoConfig, LfoWave, ModDest, ModInputs,
+    ModOffsets, ModRoute, ModRuntime, ModSource, ModulationConfig, SyncDivision,
+    MAX_LFOS, MAX_MACROS, MAX_ROUTES, MOD_CONTROL_INTERVAL,
+};
 pub use midi::{decode_message, MidiEvent, MidiPerformanceState};
 #[cfg(feature = "midi")]
 pub use midi_io::{connect_midi_input, list_midi_input_names, MidiInputHandle};
@@ -134,7 +141,7 @@ pub use scheduler::{ScheduledEvent, Scheduler, StepEvent};
 pub use scope::{PanelLayout, PeakHistory, ScopeTap, WaveformStyle, SCOPE_CAPACITY};
 pub use sequencer::LiveSequencer;
 pub use synth::{
-    parse_synth_parameter_command, CompiledSynthPatch, Oscillator, SynthParamId, SynthParamValue,
+    parse_synth_parameter_command, sync_to_index, CompiledSynthPatch, Oscillator, SynthParamId, SynthParamValue,
     SynthPatch, SynthVoice,
 };
 pub use transport::{Transport, TransportState};

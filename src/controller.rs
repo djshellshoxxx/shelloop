@@ -704,6 +704,7 @@ impl SessionController {
             "pattern" => self.pattern_command(&line[head.len()..]),
             "patterns" => Ok(self.describe_patterns()),
             "synth" => self.synth_command(line),
+            "mod" => self.mod_command(line),
             "gain" | "pan" | "mute" | "solo" | "send" | "master" => self.mixer_command(line),
             "fx" => self.fx_command(line),
             "scene" | "scenes" => self.scene_command(line, current_frame),
@@ -816,6 +817,28 @@ impl SessionController {
             "queued synth parameter {id:?} for track {}",
             track.0
         ))
+    }
+
+    fn mod_command(&mut self, line: &str) -> Result<String, String> {
+        let command = crate::parse_mod_command(line)?;
+        let track = self.selected_track();
+        let mut patch = *self.synth_patch_mut(track)?;
+        let message = crate::apply_mod_command(&mut patch.modulation, command)?;
+        if command == crate::ModCommand::List {
+            return Ok(message);
+        }
+        let sample_rate = self.sample_rate as f32;
+        let compiled = CompiledSynthPatch::new(sample_rate, patch)?;
+        self.send(AudioMessage::SynthPatch {
+            track,
+            patch: compiled,
+        })?;
+        *self.synth_patch_mut(track)? = patch;
+        if let Some(definition) = self.project.tracks.iter_mut().find(|t| t.id == track) {
+            definition.synth_patch = Some(patch);
+        }
+        self.dirty = true;
+        Ok(format!("track {}: {message}", track.0))
     }
 
     fn synth_command(&mut self, line: &str) -> Result<String, String> {
@@ -1854,6 +1877,14 @@ fn synth_value(patch: &SynthPatch, param: SynthParamId) -> f32 {
         SynthParamId::FilterRelease => patch.filter_env.release_secs,
         SynthParamId::FilterEnvAmount => patch.filter_env_amount,
         SynthParamId::OutputGain => patch.output_gain,
+        SynthParamId::Macro1 => patch.modulation.macros[0],
+        SynthParamId::Macro2 => patch.modulation.macros[1],
+        SynthParamId::Lfo1Rate => patch.modulation.lfos[0].rate_hz,
+        SynthParamId::Lfo2Rate => patch.modulation.lfos[1].rate_hz,
+        SynthParamId::Lfo1Wave => patch.modulation.lfos[0].wave as u8 as f32,
+        SynthParamId::Lfo2Wave => patch.modulation.lfos[1].wave as u8 as f32,
+        SynthParamId::Lfo1Sync => crate::sync_to_index(patch.modulation.lfos[0].sync),
+        SynthParamId::Lfo2Sync => crate::sync_to_index(patch.modulation.lfos[1].sync),
     }
 }
 

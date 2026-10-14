@@ -549,11 +549,10 @@ impl RealtimeTrack {
                 let patch = definition
                     .synth_patch
                     .unwrap_or_else(|| SynthPatch::legacy(Oscillator::Saw));
-                TrackInstrument::Synth(RealtimeSynth::new_with_patch(
-                    sample_rate as f32,
-                    patch,
-                    polyphony,
-                )?)
+                let mut synth =
+                    RealtimeSynth::new_with_patch(sample_rate as f32, patch, polyphony)?;
+                synth.set_tempo(bpm);
+                TrackInstrument::Synth(synth)
             }
             (TrackKind::Sample, Some(settings)) => {
                 let base_dir = samples.map_or(Path::new("."), |samples| samples.base_dir);
@@ -865,8 +864,19 @@ impl RealtimeTrack {
         }
 
         let gain = self.gain.next_value();
-        let pan = self.pan.next_value();
-        let send_levels = [self.sends[0].next_value(), self.sends[1].next_value()];
+        let mut pan = self.pan.next_value();
+        let mut send_levels = [self.sends[0].next_value(), self.sends[1].next_value()];
+        // Spec 13 Pan / EffectWet destinations act on the previous sample's
+        // averaged voice offsets (zero unless a route targets them).
+        if let TrackInstrument::Synth(synth) = &self.instrument {
+            let (mod_pan, mod_wet) = synth.modulation_pan_and_wet();
+            if mod_pan != 0.0 {
+                pan = (pan + mod_pan).clamp(-1.0, 1.0);
+            }
+            if mod_wet != 0.0 {
+                send_levels = send_levels.map(|level| (level + mod_wet).clamp(0.0, 1.0));
+            }
+        }
         let strip = ChannelStrip {
             gain,
             pan,

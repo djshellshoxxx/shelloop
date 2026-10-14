@@ -229,6 +229,14 @@ pub fn synth_param_descriptor(param: SynthParamId) -> ParamDescriptor {
             true,
         ),
         P::OutputGain => ("output_gain", 0.0, 2.0, 1.0, ParamCurve::Linear, true),
+        P::Macro1 => ("macro1", 0.0, 1.0, 0.0, ParamCurve::Linear, true),
+        P::Macro2 => ("macro2", 0.0, 1.0, 0.0, ParamCurve::Linear, true),
+        P::Lfo1Rate => ("lfo1_rate", 0.01, 50.0, 1.0, ParamCurve::Logarithmic, true),
+        P::Lfo2Rate => ("lfo2_rate", 0.01, 50.0, 1.0, ParamCurve::Logarithmic, true),
+        P::Lfo1Wave => ("lfo1_wave", 0.0, 4.0, 0.0, ParamCurve::Discrete, true),
+        P::Lfo2Wave => ("lfo2_wave", 0.0, 4.0, 0.0, ParamCurve::Discrete, true),
+        P::Lfo1Sync => ("lfo1_sync", 0.0, 11.0, 0.0, ParamCurve::Discrete, true),
+        P::Lfo2Sync => ("lfo2_sync", 0.0, 11.0, 0.0, ParamCurve::Discrete, true),
     };
     ParamDescriptor {
         name,

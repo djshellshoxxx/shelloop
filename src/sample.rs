@@ -880,6 +880,7 @@ impl RealtimeSampler {
 
     pub fn handle(&mut self, command: EngineCommand) {
         match command {
+            EngineCommand::ModWheel { .. } => {}
             EngineCommand::NoteOn {
                 channel,
                 note,

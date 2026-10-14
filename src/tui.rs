@@ -906,6 +906,7 @@ pub const COMMAND_WORDS: &[&str] = &[
     "undo",
     "redo",
     "synth",
+    "mod",
     "scene",
     "chain",
     "lock",
