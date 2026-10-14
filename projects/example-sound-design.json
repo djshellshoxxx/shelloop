@@ -1,0 +1,414 @@
+{
+  "schema_version": 3,
+  "revision": 1,
+  "seed": 4242,
+  "bpm": 112.0,
+  "steps_per_beat": 4,
+  "tracks": [
+    {
+      "id": 1,
+      "name": "Pad",
+      "kind": "synth",
+      "gain": 0.8,
+      "pan": 0.0,
+      "muted": false,
+      "soloed": false,
+      "pattern": {
+        "name": "Evolving Pad",
+        "seed": 11,
+        "swing": 0.0,
+        "channel": 0,
+        "steps": [
+          {
+            "note": 57,
+            "velocity": 0.8,
+            "gate": 0.95,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          {
+            "note": 60,
+            "velocity": 0.7,
+            "gate": 0.95,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "synth_patch": {
+        "oscillator": "pulse",
+        "octave": 0,
+        "semitone": 0,
+        "fine_cents": 0.0,
+        "pulse_width": 0.5,
+        "amp_env": {
+          "attack_secs": 0.4,
+          "decay_secs": 0.5,
+          "sustain": 0.8,
+          "release_secs": 1.2
+        },
+        "filter": {
+          "mode": "low_pass",
+          "cutoff_hz": 900.0,
+          "resonance": 0.25,
+          "key_tracking": 0.0
+        },
+        "filter_env": {
+          "attack_secs": 0.005,
+          "decay_secs": 0.25,
+          "sustain": 0.0,
+          "release_secs": 0.2
+        },
+        "filter_env_amount": 1.0,
+        "output_gain": 0.55,
+        "modulation": {
+          "lfos": [
+            {
+              "wave": "sine",
+              "rate_hz": 0.35
+            },
+            {
+              "wave": "triangle",
+              "sync": "1/4",
+              "retrigger": true
+            }
+          ],
+          "macros": [
+            0.25,
+            0.0
+          ],
+          "routes": [
+            {
+              "source": "lfo1",
+              "dest": "filter_cutoff",
+              "amount": 0.35,
+              "smoothing_ms": 20.0
+            },
+            {
+              "source": "lfo2",
+              "dest": "pulse_width",
+              "amount": 0.5
+            },
+            {
+              "source": "mod_wheel",
+              "dest": "filter_cutoff",
+              "amount": 0.6
+            },
+            {
+              "source": "macro1",
+              "dest": "filter_cutoff",
+              "amount": 0.5
+            },
+            {
+              "source": "velocity",
+              "dest": "amplitude",
+              "amount": 0.3
+            },
+            {
+              "source": "lfo1",
+              "dest": "pan",
+              "amount": 0.4
+            }
+          ]
+        }
+      },
+      "inserts": [
+        {
+          "kind": "chorus",
+          "params": {
+            "depth": 0.6,
+            "rate_hz": 0.6,
+            "mix": 0.45
+          }
+        }
+      ],
+      "send_a": 0.25
+    },
+    {
+      "id": 2,
+      "name": "Bass",
+      "kind": "synth",
+      "gain": 0.8,
+      "pan": 0.0,
+      "muted": false,
+      "soloed": false,
+      "pattern": {
+        "name": "Random Walk Bass",
+        "seed": 12,
+        "swing": 0.03,
+        "channel": 0,
+        "steps": [
+          {
+            "note": 33,
+            "velocity": 0.95,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 33,
+            "velocity": 0.7,
+            "gate": 0.4,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 36,
+            "velocity": 0.8,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 33,
+            "velocity": 0.8,
+            "gate": 0.4,
+            "probability": 1.0,
+            "ratchets": 2,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 40,
+            "velocity": 0.85,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 33,
+            "velocity": 0.7,
+            "gate": 0.4,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 31,
+            "velocity": 0.9,
+            "gate": 0.5,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 33,
+            "velocity": 0.7,
+            "gate": 0.4,
+            "probability": 0.7,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null
+        ]
+      },
+      "synth_patch": {
+        "oscillator": "saw",
+        "octave": 0,
+        "semitone": 0,
+        "fine_cents": 0.0,
+        "pulse_width": 0.5,
+        "amp_env": {
+          "attack_secs": 0.003,
+          "decay_secs": 0.18,
+          "sustain": 0.4,
+          "release_secs": 0.1
+        },
+        "filter": {
+          "mode": "low_pass",
+          "cutoff_hz": 420.0,
+          "resonance": 0.4,
+          "key_tracking": 0.3
+        },
+        "filter_env": {
+          "attack_secs": 0.005,
+          "decay_secs": 0.25,
+          "sustain": 0.0,
+          "release_secs": 0.2
+        },
+        "filter_env_amount": 2.5,
+        "output_gain": 0.8,
+        "modulation": {
+          "lfos": [
+            {
+              "wave": "sample_hold",
+              "sync": "1/8",
+              "retrigger": false,
+              "seed": 7
+            },
+            {
+              "wave": "sine",
+              "rate_hz": 5.0
+            }
+          ],
+          "routes": [
+            {
+              "source": "lfo1",
+              "dest": "filter_cutoff",
+              "amount": 0.3,
+              "smoothing_ms": 8.0
+            },
+            {
+              "source": "lfo2",
+              "dest": "tuning",
+              "amount": 0.01
+            },
+            {
+              "source": "key_track",
+              "dest": "filter_cutoff",
+              "amount": 0.2
+            }
+          ]
+        }
+      },
+      "inserts": [
+        {
+          "kind": "filter",
+          "params": {
+            "mode": 0,
+            "cutoff": 1800.0,
+            "resonance": 0.35,
+            "sync": 2,
+            "depth": 0.5,
+            "env_amount": 0.25,
+            "mix": 1.0
+          }
+        }
+      ]
+    }
+  ],
+  "effects": {
+    "send_buses": [
+      {
+        "effects": [
+          {
+            "kind": "reverb",
+            "params": {
+              "size": 0.8,
+              "decay": 0.7,
+              "mix": 1.0
+            }
+          }
+        ],
+        "return_gain": 0.5
+      }
+    ],
+    "master": [
+      {
+        "kind": "beat_repeat",
+        "params": {
+          "division": 2,
+          "repeats": 4,
+          "gate": 0.25,
+          "seed": 3,
+          "mix": 1.0
+        }
+      }
+    ]
+  },
+  "scenes": [
+    {
+      "id": 1,
+      "name": "Open",
+      "track_states": [
+        {
+          "track_id": 1,
+          "pattern_id": 0,
+          "muted": false
+        },
+        {
+          "track_id": 2,
+          "pattern_id": 0,
+          "muted": false
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Dark",
+      "track_states": [
+        {
+          "track_id": 1,
+          "pattern_id": 0,
+          "muted": false
+        },
+        {
+          "track_id": 2,
+          "pattern_id": 0,
+          "muted": false
+        }
+      ]
+    }
+  ],
+  "chains": [
+    {
+      "id": 1,
+      "name": "Main",
+      "steps": [
+        {
+          "scene_id": 1,
+          "repeats": 4
+        },
+        {
+          "scene_id": 2,
+          "repeats": 4
+        }
+      ],
+      "loop_chain": true
+    }
+  ],
+  "effect_macros": [
+    {
+      "location": {
+        "track": 2
+      },
+      "index": 1,
+      "slot": 0,
+      "param": "cutoff",
+      "value": 0.8,
+      "scene_values": [
+        {
+          "scene": 1,
+          "value": 0.8
+        },
+        {
+          "scene": 2,
+          "value": 0.45
+        }
+      ]
+    },
+    {
+      "location": "master",
+      "index": 2,
+      "slot": 0,
+      "param": "gate",
+      "value": 0.25
+    }
+  ]
+}

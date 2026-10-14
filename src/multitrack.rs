@@ -62,6 +62,10 @@ pub struct MultiTrackProject {
     pub chains: Vec<SceneChain>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub midi_mappings: Vec<crate::midi_learn::MidiMapping>,
+    /// Spec 15 performance macros (two per effect chain) with optional
+    /// per-scene recall values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effect_macros: Vec<crate::EffectMacro>,
 }
 
 impl MultiTrackProject {
@@ -79,7 +83,33 @@ impl MultiTrackProject {
             scenes: Vec::new(),
             chains: Vec::new(),
             midi_mappings: Vec::new(),
+            effect_macros: Vec::new(),
         }
+    }
+
+    /// Effect kind at `slot` of the chain at `location`, if it exists.
+    pub fn effect_kind_at(
+        &self,
+        location: EffectLocation,
+        slot: u8,
+    ) -> Option<crate::effects::EffectKind> {
+        let slot = usize::from(slot);
+        match location {
+            EffectLocation::Track(track) => self
+                .tracks
+                .iter()
+                .find(|definition| definition.id == track)?
+                .inserts
+                .get(slot),
+            EffectLocation::Send(bus) => self
+                .effects
+                .send_buses
+                .get(usize::from(bus))?
+                .effects
+                .get(slot),
+            EffectLocation::Master => self.effects.master.get(slot),
+        }
+        .map(|effect| effect.kind)
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -113,6 +143,11 @@ impl MultiTrackProject {
         for mapping in &self.midi_mappings {
             mapping.validate()?;
         }
+        crate::validate_effect_macros(
+            &self.effect_macros,
+            &|location, slot| self.effect_kind_at(location, slot),
+            &self.scenes,
+        )?;
         Ok(())
     }
 
@@ -963,6 +998,8 @@ struct SceneEntry {
 struct CompiledScene {
     id: SceneId,
     entries: Vec<SceneEntry>,
+    /// Effect macro recall applied when the scene launches.
+    effect_writes: Vec<crate::SceneRecall>,
 }
 
 #[derive(Debug, Clone)]
@@ -1174,7 +1211,24 @@ impl MultiTrackEngine {
         }
         engine.send_buses = buses;
         engine.set_scenes(&project.scenes, &project.chains)?;
+        engine.set_effect_macros(project);
         Ok(engine)
+    }
+
+    /// Resolves each scene's effect-macro recall. Control-side only.
+    pub fn set_effect_macros(&mut self, project: &MultiTrackProject) {
+        let recalls = crate::compile_scene_recalls(
+            &project.effect_macros,
+            &project.scenes,
+            &|location, slot| project.effect_kind_at(location, slot),
+        );
+        for scene in &mut self.scenes {
+            scene.effect_writes = recalls
+                .iter()
+                .find(|(id, _)| *id == scene.id)
+                .map(|(_, writes)| writes.clone())
+                .unwrap_or_default();
+        }
     }
 
     /// Compile scenes and chains against the engine's tracks. Control-side
@@ -1212,6 +1266,7 @@ impl MultiTrackEngine {
             compiled.push(CompiledScene {
                 id: scene.id,
                 entries,
+                effect_writes: Vec::new(),
             });
         }
         let mut compiled_chains = Vec::with_capacity(chains.len());
@@ -1396,6 +1451,11 @@ impl MultiTrackEngine {
             }
         }
         self.active_scene = Some(scene.id);
+        // Macro recall goes through the normal smoothed parameter path.
+        for index in 0..self.scenes[scene_index].effect_writes.len() {
+            let (location, slot, param, value) = self.scenes[scene_index].effect_writes[index];
+            let _ = self.set_effect_param(location, slot, param, value);
+        }
     }
 
     /// Queue a scene at `apply_at_frame`. A manual launch stops a running

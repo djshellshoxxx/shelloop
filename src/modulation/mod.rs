@@ -16,7 +16,9 @@ pub mod compile;
 pub mod model;
 pub mod runtime;
 
-pub use command::{apply_mod_command, describe_routes, parse_mod_command, ModCommand};
+pub use command::{
+    apply_mod_command, describe_routes, parse_mod_command, route_range_text, ModCommand,
+};
 pub use compile::{CompiledModulation, CompiledRoute};
 pub use model::{
     parse_mod_dest, parse_mod_source, LfoConfig, LfoWave, ModDest, ModRoute, ModSource,

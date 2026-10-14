@@ -724,6 +724,7 @@ impl SessionController {
             "sample" | "slice" => self.sample_command(line),
             "gain" | "pan" | "mute" | "solo" | "send" | "master" => self.mixer_command(line),
             "fx" => self.fx_command(line),
+            "fxmacro" => self.fxmacro_command(line),
             "scene" | "scenes" => self.scene_command(line, current_frame),
             "chain" => self.chain_command(line, current_frame),
             "lock" | "unlock" | "locks" => self.lock_command(line, current_frame),
@@ -1145,6 +1146,14 @@ impl SessionController {
         }
     }
 
+    /// The synth patch mirrored for `track`, for read-only UI feedback.
+    pub fn synth_patch(&self, track: TrackId) -> Option<SynthPatch> {
+        self.synth_patches
+            .iter()
+            .find(|(id, _)| *id == track)
+            .map(|(_, patch)| *patch)
+    }
+
     pub fn descriptor(&self, target: ParameterTarget) -> Option<ParamDescriptor> {
         if !target_exists(&self.project, target) {
             return None;
@@ -1191,6 +1200,138 @@ impl SessionController {
                 self.step_scene(action == ActionId::SceneNext, None, current_frame)
             }
             ActionId::SceneLaunch(id) => self.launch_scene(SceneId(id), None, current_frame),
+        }
+    }
+
+    /// `fxmacro` (spec 15): two performance macros per effect chain.
+    ///
+    /// ```text
+    /// fxmacro list
+    /// fxmacro assign <track|send_a|send_b|master> <1|2> <slot> <param>
+    /// fxmacro <track|send_a|send_b|master> <1|2> <0..1>
+    /// fxmacro remove <track|send_a|send_b|master> <1|2>
+    /// ```
+    /// Knob moves are live. Per-scene recall values live in the project file
+    /// (`effect_macros[].scene_values`) and are applied when a scene launches.
+    fn fxmacro_command(&mut self, line: &str) -> Result<String, String> {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let location_of = |word: Option<&&str>, this: &Self| match word.copied() {
+            Some("track") => Ok(EffectLocation::Track(this.selected_track())),
+            Some("send_a" | "a") => Ok(EffectLocation::Send(0)),
+            Some("send_b" | "b") => Ok(EffectLocation::Send(1)),
+            Some("master") => Ok(EffectLocation::Master),
+            other => Err(format!("unknown effect chain {other:?}")),
+        };
+        let index_of = |word: Option<&&str>| {
+            word.and_then(|w| w.parse::<u8>().ok())
+                .filter(|n| (1..=crate::MACROS_PER_CHAIN).contains(n))
+                .ok_or_else(|| "macro number must be 1 or 2".to_string())
+        };
+        match parts.get(1).copied() {
+            None | Some("list") => {
+                if self.project.effect_macros.is_empty() {
+                    return Ok("no effect macros".into());
+                }
+                Ok(self
+                    .project
+                    .effect_macros
+                    .iter()
+                    .map(|m| {
+                        format!(
+                            "{:?} macro {} -> slot {} {} = {:.2}",
+                            m.location, m.index, m.slot, m.param, m.value
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; "))
+            }
+            Some("assign") => {
+                let location = location_of(parts.get(2), self)?;
+                let index = index_of(parts.get(3))?;
+                let slot: u8 = parts
+                    .get(4)
+                    .and_then(|w| w.parse().ok())
+                    .ok_or("expected fxmacro assign <chain> <1|2> <slot> <param>")?;
+                let param = parts.get(5).ok_or("missing parameter name")?.to_string();
+                let mut next = self.project.effect_macros.clone();
+                next.retain(|m| !(m.location == location && m.index == index));
+                next.push(crate::EffectMacro {
+                    location,
+                    index,
+                    slot,
+                    param,
+                    value: 0.0,
+                    scene_values: Vec::new(),
+                });
+                crate::validate_effect_macros(
+                    &next,
+                    &|loc, slot| self.project.effect_kind_at(loc, slot),
+                    &self.project.scenes,
+                )?;
+                self.project.effect_macros = next;
+                self.dirty = true;
+                Ok(format!("macro {index} assigned"))
+            }
+            Some("remove") => {
+                let location = location_of(parts.get(2), self)?;
+                let index = index_of(parts.get(3))?;
+                let before = self.project.effect_macros.len();
+                self.project
+                    .effect_macros
+                    .retain(|m| !(m.location == location && m.index == index));
+                if self.project.effect_macros.len() == before {
+                    return Err("no such macro".into());
+                }
+                self.dirty = true;
+                Ok(format!("macro {index} removed"))
+            }
+            Some(_) => {
+                let location = location_of(parts.get(1), self)?;
+                let index = index_of(parts.get(2))?;
+                let position = parts
+                    .get(3)
+                    .and_then(|w| w.parse::<f32>().ok())
+                    .filter(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                    .ok_or("macro value must be between 0 and 1")?;
+                let entry = self
+                    .project
+                    .effect_macros
+                    .iter()
+                    .find(|m| m.location == location && m.index == index)
+                    .ok_or("macro is not assigned; use fxmacro assign")?
+                    .clone();
+                let kind = self
+                    .project
+                    .effect_kind_at(location, entry.slot)
+                    .ok_or("macro target no longer exists")?;
+                let (param, value) = entry
+                    .parameter_value(kind, position)
+                    .ok_or("macro parameter is unknown")?;
+                self.send(AudioMessage::EffectParam {
+                    location,
+                    slot: entry.slot_id(),
+                    param,
+                    value,
+                })?;
+                if let Some(config) =
+                    effect_config_mut(&mut self.project, location, entry.slot_id())
+                {
+                    let _ = config.set_param_value(param, value);
+                }
+                if let Some(stored) = self
+                    .project
+                    .effect_macros
+                    .iter_mut()
+                    .find(|m| m.location == location && m.index == index)
+                {
+                    stored.value = position;
+                }
+                self.dirty = true;
+                Ok(format!(
+                    "macro {index} = {position:.2} ({} {value:.3})",
+                    entry.param
+                ))
+            }
         }
     }
 
@@ -2085,6 +2226,10 @@ pub fn inspector_synth_params() -> impl Iterator<Item = SynthParamId> {
         "pulse_width",
         "fine_cents",
         "output_gain",
+        "macro1",
+        "macro2",
+        "lfo1_rate",
+        "lfo2_rate",
     ]
     .into_iter()
     .filter_map(parse_synth_param)

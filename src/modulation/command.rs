@@ -138,3 +138,64 @@ pub fn apply_mod_command(
         ModCommand::List => Ok(describe_routes(config)),
     }
 }
+
+/// Human-readable bound of the destination while only `route` is active at
+/// full source scale, for inspector feedback. The live value always lies in
+/// this range; it is a bound, not a measurement.
+pub fn route_range_text(patch: &crate::SynthPatch, route: &super::model::ModRoute) -> String {
+    use super::model::{ModDest, ModSource};
+    let depth = route.amount.abs();
+    let bipolar = matches!(
+        route.source,
+        ModSource::Lfo1 | ModSource::Lfo2 | ModSource::KeyTrack
+    );
+    let span = |scale: f32| (if bipolar { -scale } else { 0.0_f32.min(scale) }, scale);
+    match route.dest {
+        ModDest::Tuning => format!("+-{:.1} st", 12.0 * depth),
+        ModDest::PulseWidth => {
+            let (lo, hi) = span(0.45 * depth);
+            format!(
+                "{:.2}..{:.2}",
+                (patch.pulse_width + lo).clamp(0.05, 0.95),
+                (patch.pulse_width + hi).clamp(0.05, 0.95)
+            )
+        }
+        ModDest::FilterCutoff => {
+            let (lo, hi) = span(4.0 * depth);
+            let base = patch.filter.cutoff_hz;
+            format!(
+                "{:.0}..{:.0} Hz",
+                (base * lo.exp2()).clamp(20.0, 20_000.0),
+                (base * hi.exp2()).clamp(20.0, 20_000.0)
+            )
+        }
+        ModDest::FilterResonance => {
+            let (lo, hi) = span(depth);
+            format!(
+                "{:.2}..{:.2}",
+                (patch.filter.resonance + lo).clamp(0.0, 1.0),
+                (patch.filter.resonance + hi).clamp(0.0, 1.0)
+            )
+        }
+        ModDest::Amplitude => {
+            let (lo, hi) = span(depth);
+            format!(
+                "x{:.2}..x{:.2}",
+                (1.0 + lo).clamp(0.0, 2.0),
+                (1.0 + hi).clamp(0.0, 2.0)
+            )
+        }
+        ModDest::Pan => {
+            let (lo, hi) = span(depth);
+            format!("{:+.2}..{:+.2}", lo.clamp(-1.0, 1.0), hi.clamp(-1.0, 1.0))
+        }
+        ModDest::EffectWet => {
+            let (lo, hi) = span(depth);
+            format!(
+                "{:+.2}..{:+.2} send",
+                lo.clamp(-1.0, 1.0),
+                hi.clamp(-1.0, 1.0)
+            )
+        }
+    }
+}

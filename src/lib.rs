@@ -5,6 +5,7 @@ pub mod command;
 pub mod controller;
 pub mod editor;
 pub mod editor_command;
+pub mod effect_macros;
 pub mod effects;
 pub mod engine;
 pub mod envelope;
@@ -67,6 +68,10 @@ pub use editor::{
 pub use editor_command::{
     parse_pattern_edit_command, EditOutcome, PatternEditCommand, ProjectPatternEditors, StepEdit,
 };
+pub use effect_macros::{
+    compile_scene_recalls, validate_effect_macros, EffectMacro, SceneMacroValue, SceneRecall,
+    MACROS_PER_CHAIN,
+};
 pub use effects::{
     check_effect_memory, effect_params, find_effect_param, validate_track_inserts, Effect,
     EffectConfig, EffectKind, EffectRack, EffectsConfig, SendBusConfig,
@@ -92,9 +97,9 @@ pub use midi_learn::{
 pub use mixer::{protect_master, ChannelStrip, SmoothedParam};
 pub use modulation::{
     apply_mod_command, describe_routes, parse_mod_command, parse_mod_dest, parse_mod_source,
-    CompiledModulation, LfoConfig, LfoWave, ModCommand, ModDest, ModInputs, ModOffsets, ModRoute,
-    ModRuntime, ModSource, ModulationConfig, SyncDivision, MAX_LFOS, MAX_MACROS, MAX_ROUTES,
-    MOD_CONTROL_INTERVAL,
+    route_range_text, CompiledModulation, LfoConfig, LfoWave, ModCommand, ModDest, ModInputs,
+    ModOffsets, ModRoute, ModRuntime, ModSource, ModulationConfig, SyncDivision, MAX_LFOS,
+    MAX_MACROS, MAX_ROUTES, MOD_CONTROL_INTERVAL,
 };
 pub use multitrack::{
     ChainStatus, EngineError, EngineProjectSnapshot, LibraryPattern, MultiTrackEngine,

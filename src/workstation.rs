@@ -530,6 +530,23 @@ pub fn build_snapshot(
     } else {
         ui.inspector_index
     };
+    // Modulation routes of the selected synth track, after the editable rows
+    // so row indices of the parameters above never shift.
+    if let Some(patch) = controller.synth_patch(selected_track) {
+        for (index, route) in patch.modulation.routes().iter().enumerate() {
+            rows.push((
+                format!("mod {}", index + 1),
+                format!(
+                    "{:?} -> {:?} {:+.2}{} | {}",
+                    route.source,
+                    route.dest,
+                    route.amount,
+                    if route.enabled { "" } else { " (off)" },
+                    crate::route_range_text(&patch, route)
+                ),
+            ));
+        }
+    }
     let kind = project
         .tracks
         .get(selected_index)
