@@ -4,11 +4,14 @@
 //! its automation lanes, so they must never be renumbered. The state blob is
 //! keyed by [`ParamSpec::key`], which is equally stable.
 
-use shelloop::{clamp_cutoff, AdsrParams, FilterMode, FilterParams, Oscillator, SynthPatch};
+use shelloop::{
+    clamp_cutoff, AdsrParams, FilterMode, FilterParams, LfoWave, ModDest, ModRoute, ModSource,
+    Oscillator, SynthPatch,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Number of plugin parameters.
-pub const PARAM_COUNT: usize = 15;
+pub const PARAM_COUNT: usize = 23;
 
 /// Number of synthesizer voices.
 pub const POLYPHONY: usize = 16;
@@ -36,6 +39,15 @@ pub enum ParamId {
     OutputGain = 12,
     Sequencer = 13,
     MasterVolume = 14,
+    // Spec 13 modulation subset (appended; ids 0..=14 never change).
+    Lfo1Rate = 15,
+    Lfo1Wave = 16,
+    Lfo1ToCutoff = 17,
+    Lfo1ToPitch = 18,
+    Lfo1ToPulseWidth = 19,
+    Lfo1ToAmp = 20,
+    ModWheelToCutoff = 21,
+    Macro1Brightness = 22,
 }
 
 impl ParamId {
@@ -55,6 +67,14 @@ impl ParamId {
         ParamId::OutputGain,
         ParamId::Sequencer,
         ParamId::MasterVolume,
+        ParamId::Lfo1Rate,
+        ParamId::Lfo1Wave,
+        ParamId::Lfo1ToCutoff,
+        ParamId::Lfo1ToPitch,
+        ParamId::Lfo1ToPulseWidth,
+        ParamId::Lfo1ToAmp,
+        ParamId::ModWheelToCutoff,
+        ParamId::Macro1Brightness,
     ];
 
     pub fn from_raw(raw: u32) -> Option<Self> {
@@ -110,6 +130,7 @@ pub struct ParamSpec {
 pub const OSCILLATOR_NAMES: &[&str] = &["Sine", "Triangle", "Saw", "Pulse"];
 pub const FILTER_MODE_NAMES: &[&str] = &["Bypass", "Low-pass", "High-pass", "Band-pass"];
 pub const SWITCH_NAMES: &[&str] = &["Off", "On"];
+pub const LFO_WAVE_NAMES: &[&str] = &["Sine", "Triangle", "Saw", "Square", "Sample & hold"];
 
 pub static PARAMS: [ParamSpec; PARAM_COUNT] = [
     ParamSpec {
@@ -261,6 +282,86 @@ pub static PARAMS: [ParamSpec; PARAM_COUNT] = [
         max: 2.0,
         default: 1.0,
         kind: ParamKind::Continuous(Unit::Plain),
+    },
+    ParamSpec {
+        id: ParamId::Lfo1Rate,
+        key: "lfo1_rate",
+        name: "LFO rate",
+        module: "Modulation",
+        min: 0.01,
+        max: 50.0,
+        default: 2.0,
+        kind: ParamKind::Continuous(Unit::Hertz),
+    },
+    ParamSpec {
+        id: ParamId::Lfo1Wave,
+        key: "lfo1_wave",
+        name: "LFO wave",
+        module: "Modulation",
+        min: 0.0,
+        max: 4.0,
+        default: 0.0,
+        kind: ParamKind::Enum(LFO_WAVE_NAMES),
+    },
+    ParamSpec {
+        id: ParamId::Lfo1ToCutoff,
+        key: "lfo1_to_cutoff",
+        name: "LFO to cutoff",
+        module: "Modulation",
+        min: -1.0,
+        max: 1.0,
+        default: 0.0,
+        kind: ParamKind::Continuous(Unit::Percent),
+    },
+    ParamSpec {
+        id: ParamId::Lfo1ToPitch,
+        key: "lfo1_to_pitch",
+        name: "LFO to pitch",
+        module: "Modulation",
+        min: -1.0,
+        max: 1.0,
+        default: 0.0,
+        kind: ParamKind::Continuous(Unit::Percent),
+    },
+    ParamSpec {
+        id: ParamId::Lfo1ToPulseWidth,
+        key: "lfo1_to_pulse_width",
+        name: "LFO to pulse width",
+        module: "Modulation",
+        min: -1.0,
+        max: 1.0,
+        default: 0.0,
+        kind: ParamKind::Continuous(Unit::Percent),
+    },
+    ParamSpec {
+        id: ParamId::Lfo1ToAmp,
+        key: "lfo1_to_amp",
+        name: "LFO to amp",
+        module: "Modulation",
+        min: -1.0,
+        max: 1.0,
+        default: 0.0,
+        kind: ParamKind::Continuous(Unit::Percent),
+    },
+    ParamSpec {
+        id: ParamId::ModWheelToCutoff,
+        key: "modwheel_to_cutoff",
+        name: "Mod wheel to cutoff",
+        module: "Modulation",
+        min: -1.0,
+        max: 1.0,
+        default: 0.0,
+        kind: ParamKind::Continuous(Unit::Percent),
+    },
+    ParamSpec {
+        id: ParamId::Macro1Brightness,
+        key: "macro1_brightness",
+        name: "Macro 1 (brightness)",
+        module: "Modulation",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        kind: ParamKind::Continuous(Unit::Percent),
     },
 ];
 
@@ -451,7 +552,49 @@ pub fn build_patch(values: &ParamValues, sample_rate: f32) -> SynthPatch {
     patch.filter_env = FILTER_ENVELOPE;
     patch.filter_env_amount = value(ParamId::FilterEnvAmount) as f32;
     patch.output_gain = value(ParamId::OutputGain) as f32;
+    apply_modulation(&mut patch, &value);
     patch
+}
+
+/// Fixed routing behind the modulation parameters: LFO 1 to cutoff, pitch,
+/// pulse width and amplitude, the mod wheel to cutoff, and macro 1 as a
+/// brightness control (one macro-to-cutoff route at half depth). Routes whose
+/// depth is zero are omitted, so an untouched plugin renders exactly as
+/// before these parameters existed.
+fn apply_modulation(patch: &mut SynthPatch, value: &dyn Fn(ParamId) -> f64) {
+    let modulation = &mut patch.modulation;
+    modulation.lfos[0].rate_hz = value(ParamId::Lfo1Rate) as f32;
+    modulation.lfos[0].wave =
+        LfoWave::from_index(value(ParamId::Lfo1Wave).round() as i32).unwrap_or(LfoWave::Sine);
+    modulation.macros[0] = value(ParamId::Macro1Brightness) as f32;
+    for (param, source, dest) in [
+        (
+            ParamId::Lfo1ToCutoff,
+            ModSource::Lfo1,
+            ModDest::FilterCutoff,
+        ),
+        (ParamId::Lfo1ToPitch, ModSource::Lfo1, ModDest::Tuning),
+        (
+            ParamId::Lfo1ToPulseWidth,
+            ModSource::Lfo1,
+            ModDest::PulseWidth,
+        ),
+        (ParamId::Lfo1ToAmp, ModSource::Lfo1, ModDest::Amplitude),
+        (
+            ParamId::ModWheelToCutoff,
+            ModSource::ModWheel,
+            ModDest::FilterCutoff,
+        ),
+    ] {
+        let amount = value(param) as f32;
+        if amount != 0.0 {
+            // Capacity (8) exceeds the six fixed routes, so this cannot fail.
+            let _ = modulation.add_route(ModRoute::new(source, dest, amount));
+        }
+    }
+    if modulation.macros[0] > 0.0 {
+        let _ = modulation.add_route(ModRoute::new(ModSource::Macro1, ModDest::FilterCutoff, 0.5));
+    }
 }
 
 #[cfg(test)]
@@ -466,6 +609,31 @@ mod tests {
             assert!(spec.min <= spec.default && spec.default <= spec.max);
         }
         assert_eq!(ParamId::from_raw(PARAM_COUNT as u32), None);
+    }
+
+    #[test]
+    fn original_parameter_ids_are_frozen() {
+        assert_eq!(ParamId::Oscillator.raw(), 0);
+        assert_eq!(ParamId::MasterVolume.raw(), 14);
+        assert_eq!(ParamId::Lfo1Rate.raw(), 15);
+        assert_eq!(ParamId::Macro1Brightness.raw(), 22);
+    }
+
+    #[test]
+    fn default_modulation_adds_no_routes_and_depths_add_routes() {
+        let values = default_values();
+        let patch = build_patch(&values, 48_000.0);
+        patch.validate(48_000.0).unwrap();
+        assert!(patch.modulation.routes().is_empty());
+        let mut values = values;
+        values[ParamId::Lfo1ToCutoff.index()] = 0.5;
+        values[ParamId::ModWheelToCutoff.index()] = -1.0;
+        values[ParamId::Macro1Brightness.index()] = 0.25;
+        values[ParamId::Lfo1Wave.index()] = 3.0;
+        let patch = build_patch(&values, 48_000.0);
+        patch.validate(48_000.0).unwrap();
+        assert_eq!(patch.modulation.routes().len(), 3);
+        assert_eq!(patch.modulation.lfos[0].wave, LfoWave::Square);
     }
 
     #[test]
