@@ -5,10 +5,13 @@ use shelloop::{
     MAX_SEND_BUSES, MAX_SEND_EFFECTS, MAX_TRACK_INSERTS,
 };
 
-const KINDS: [EffectKind; 3] = [
+const KINDS: [EffectKind; 6] = [
     EffectKind::Saturation,
     EffectKind::Delay,
     EffectKind::Reverb,
+    EffectKind::Filter,
+    EffectKind::Chorus,
+    EffectKind::BeatRepeat,
 ];
 
 fn param(kind: EffectKind, name: &str) -> EffectParamId {
@@ -85,7 +88,7 @@ fn descriptor_tables_are_stable_and_named_in_snake_case() {
             );
         }
     }
-    assert_eq!(EffectKind::parse("chorus"), None);
+    assert_eq!(EffectKind::parse("phaser"), None);
     assert_eq!(find_effect_param(EffectKind::Delay, "drive"), None);
 }
 

@@ -9,6 +9,7 @@ pub mod effects;
 pub mod engine;
 pub mod envelope;
 pub mod filter;
+pub mod fx_creative;
 pub mod keyboard;
 pub mod midi;
 pub mod midi_io;

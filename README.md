@@ -320,14 +320,14 @@ cd shelloop
 The current playable development work is on:
 
 ```text
-continuation/rebuild-baseline
+main
 ```
 
 Switch to it:
 
 ```powershell
 git fetch origin
-git switch continuation/rebuild-baseline
+git switch main
 ```
 
 Confirm the branch:
@@ -339,7 +339,7 @@ git branch --show-current
 It should print:
 
 ```text
-continuation/rebuild-baseline
+main
 ```
 
 #### 5. Run the automated tests

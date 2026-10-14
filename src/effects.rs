@@ -4,6 +4,10 @@
 //! `process`, `set_param`, `set_bypassed`, `set_tempo` and `reset` never
 //! allocate, lock or panic, and always produce finite output.
 
+use crate::fx_creative::{
+    beat_repeat_max_frames, chorus_buffer_len, cho, flt, BeatRepeatFx, ChorusFx, FilterFx,
+    MAX_FILTER_RESONANCE, MAX_MOD_FEEDBACK,
+};
 use crate::mixer::SmoothedParam;
 use crate::params::{EffectParamId, EffectSlotId, ParamCurve, ParamDescriptor};
 use serde::{Deserialize, Serialize};
@@ -17,7 +21,7 @@ pub const MAX_MASTER_INSERTS: usize = 4;
 pub const MAX_DELAY_SECONDS: f32 = 4.0;
 pub const DEFAULT_EFFECT_MEMORY_BUDGET: usize = 64 * 1024 * 1024;
 
-const MAX_EFFECT_PARAMS: usize = 6;
+const MAX_EFFECT_PARAMS: usize = 7;
 const PARAM_SMOOTH_SECONDS: f32 = 0.02;
 const BYPASS_CROSSFADE_SECONDS: f32 = 0.01;
 const DELAY_GLIDE_SECONDS: f32 = 0.1;
@@ -32,6 +36,9 @@ pub enum EffectKind {
     Saturation,
     Delay,
     Reverb,
+    Filter,
+    Chorus,
+    BeatRepeat,
 }
 
 impl EffectKind {
@@ -40,6 +47,9 @@ impl EffectKind {
             Self::Saturation => "saturation",
             Self::Delay => "delay",
             Self::Reverb => "reverb",
+            Self::Filter => "filter",
+            Self::Chorus => "chorus",
+            Self::BeatRepeat => "beat_repeat",
         }
     }
 
@@ -48,6 +58,9 @@ impl EffectKind {
             "saturation" => Some(Self::Saturation),
             "delay" => Some(Self::Delay),
             "reverb" => Some(Self::Reverb),
+            "filter" => Some(Self::Filter),
+            "chorus" => Some(Self::Chorus),
+            "beat_repeat" => Some(Self::BeatRepeat),
             _ => None,
         }
     }
@@ -122,6 +135,37 @@ static REVERB_PARAMS: [ParamDescriptor; 6] = [
     param("width", 0.0, 1.0, 1.0, ParamCurve::Linear),
 ];
 
+
+static FILTER_PARAMS: [ParamDescriptor; 7] = [
+    param("mode", 0.0, 2.0, 0.0, ParamCurve::Discrete),
+    param("cutoff", 20.0, 20_000.0, 2_000.0, ParamCurve::Logarithmic),
+    param("resonance", 0.0, MAX_FILTER_RESONANCE, 0.2, ParamCurve::Linear),
+    param("env_amount", -1.0, 1.0, 0.0, ParamCurve::Linear),
+    param("sync", 0.0, 6.0, 0.0, ParamCurve::Discrete),
+    param("depth", 0.0, 1.0, 0.5, ParamCurve::Linear),
+    param("mix", 0.0, 1.0, 1.0, ParamCurve::Linear),
+];
+
+static CHORUS_PARAMS: [ParamDescriptor; 7] = [
+    param("mode", 0.0, 1.0, 0.0, ParamCurve::Discrete),
+    param("rate_hz", 0.05, 10.0, 0.8, ParamCurve::Logarithmic),
+    param("sync", 0.0, 6.0, 0.0, ParamCurve::Discrete),
+    param("depth", 0.0, 1.0, 0.5, ParamCurve::Linear),
+    param("feedback", -MAX_MOD_FEEDBACK, MAX_MOD_FEEDBACK, 0.0, ParamCurve::Linear),
+    param("width", 0.0, 1.0, 1.0, ParamCurve::Linear),
+    param("mix", 0.0, 1.0, 0.5, ParamCurve::Linear),
+];
+
+static BEAT_REPEAT_PARAMS: [ParamDescriptor; 7] = [
+    param("division", 0.0, 4.0, 1.0, ParamCurve::Discrete),
+    param("repeats", 0.0, 16.0, 0.0, ParamCurve::Discrete),
+    param("reverse", 0.0, 1.0, 0.0, ParamCurve::Discrete),
+    param("gate", 0.0, 1.0, 0.0, ParamCurve::Linear),
+    param("mix", 0.0, 1.0, 1.0, ParamCurve::Linear),
+    param("active", 0.0, 1.0, 0.0, ParamCurve::Discrete),
+    param("seed", 0.0, 65_535.0, 1.0, ParamCurve::Discrete),
+];
+
 /// Static descriptor table; index in the slice == `EffectParamId.0`.
 /// Descriptor `name` is the persisted snake_case key.
 pub fn effect_params(kind: EffectKind) -> &'static [ParamDescriptor] {
@@ -129,6 +173,9 @@ pub fn effect_params(kind: EffectKind) -> &'static [ParamDescriptor] {
         EffectKind::Saturation => &SATURATION_PARAMS,
         EffectKind::Delay => &DELAY_PARAMS,
         EffectKind::Reverb => &REVERB_PARAMS,
+        EffectKind::Filter => &FILTER_PARAMS,
+        EffectKind::Chorus => &CHORUS_PARAMS,
+        EffectKind::BeatRepeat => &BEAT_REPEAT_PARAMS,
     }
 }
 
@@ -224,6 +271,9 @@ impl EffectConfig {
             EffectKind::Saturation => 0,
             EffectKind::Delay => 2 * delay_buffer_len(sample_rate),
             EffectKind::Reverb => ReverbLayout::new(sample_rate).total_samples(),
+            EffectKind::Filter => 0,
+            EffectKind::Chorus => 2 * chorus_buffer_len(sample_rate),
+            EffectKind::BeatRepeat => 4 * beat_repeat_max_frames(sample_rate),
         };
         samples * std::mem::size_of::<f32>()
     }
@@ -384,6 +434,9 @@ enum EffectState {
     Saturation(SaturationState),
     Delay(DelayState),
     Reverb(Box<ReverbState>),
+    Filter(Box<FilterFx>),
+    Chorus(Box<ChorusFx>),
+    BeatRepeat(Box<BeatRepeatFx>),
 }
 
 impl Effect {
@@ -402,6 +455,12 @@ impl Effect {
             EffectKind::Saturation => EffectState::Saturation(SaturationState::new(rate)),
             EffectKind::Delay => EffectState::Delay(DelayState::new(sample_rate)),
             EffectKind::Reverb => EffectState::Reverb(Box::new(ReverbState::new(sample_rate))),
+            EffectKind::Filter => EffectState::Filter(Box::new(FilterFx::new(rate))),
+            EffectKind::Chorus => EffectState::Chorus(Box::new(ChorusFx::new(sample_rate))),
+            EffectKind::BeatRepeat => EffectState::BeatRepeat(Box::new(BeatRepeatFx::new(
+                sample_rate,
+                sanitize_bpm(bpm).unwrap_or(DEFAULT_BPM),
+            ))),
         };
         let mut effect = Self {
             kind: config.kind,
@@ -432,6 +491,9 @@ impl Effect {
             EffectState::Saturation(state) => state.process(left, right),
             EffectState::Delay(state) => state.process(left, right),
             EffectState::Reverb(state) => state.process(left, right),
+            EffectState::Filter(state) => state.process(left, right),
+            EffectState::Chorus(state) => state.process(left, right),
+            EffectState::BeatRepeat(state) => state.process(left, right),
         };
         (
             finite_or_zero(left * (1.0 - gain) + finite_or_zero(wet_left) * gain),
@@ -480,8 +542,16 @@ impl Effect {
             return;
         };
         self.bpm = bpm;
-        if self.kind == EffectKind::Delay {
-            self.apply(dly::TIME_MS, false);
+        match self.kind {
+            EffectKind::Delay => self.apply(dly::TIME_MS, false),
+            EffectKind::Filter => self.apply(flt::SYNC, false),
+            EffectKind::Chorus => self.apply(cho::SYNC, false),
+            EffectKind::BeatRepeat => {
+                if let EffectState::BeatRepeat(state) = &mut self.state {
+                    state.set_tempo(bpm);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -491,6 +561,9 @@ impl Effect {
             EffectState::Saturation(state) => state.lowpass = [0.0; 2],
             EffectState::Delay(state) => state.clear(),
             EffectState::Reverb(state) => state.clear(),
+            EffectState::Filter(state) => state.clear(),
+            EffectState::Chorus(state) => state.clear(),
+            EffectState::BeatRepeat(state) => state.clear(),
         }
         self.bypass_gain
             .set_target(if self.bypassed { 0.0 } else { 1.0 }, 0);
@@ -548,6 +621,21 @@ impl Effect {
                 rev::WIDTH => state.width.set_target(value, smooth),
                 _ => {}
             },
+            EffectState::Filter(state) => {
+                if index == flt::SYNC {
+                    state.set_sync(value, self.bpm);
+                } else {
+                    state.apply(index, value, smooth);
+                }
+            }
+            EffectState::Chorus(state) => {
+                if index == cho::SYNC {
+                    state.set_sync(value, self.bpm);
+                } else {
+                    state.apply(index, value, smooth);
+                }
+            }
+            EffectState::BeatRepeat(state) => state.apply(index, value, smooth),
         }
     }
 }
