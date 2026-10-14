@@ -1,3 +1,7 @@
+use crate::modulation::{
+    CompiledModulation, LfoWave, ModInputs, ModOffsets, ModRuntime, ModulationConfig, SyncDivision,
+    MAX_LFOS,
+};
 use crate::{
     clamp_cutoff, AdsrEnvelope, AdsrParams, FilterMode, FilterParams, SmoothedParam,
     StateVariableFilter,
@@ -36,6 +40,14 @@ pub enum SynthParamId {
     FilterRelease,
     FilterEnvAmount,
     OutputGain,
+    Macro1,
+    Macro2,
+    Lfo1Rate,
+    Lfo2Rate,
+    Lfo1Wave,
+    Lfo2Wave,
+    Lfo1Sync,
+    Lfo2Sync,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -51,6 +63,9 @@ pub struct SynthPatch {
     pub filter_env: AdsrParams,
     pub filter_env_amount: f32,
     pub output_gain: f32,
+    /// Spec 13 modulation matrix; omitted from JSON when unused.
+    #[serde(default, skip_serializing_if = "ModulationConfig::is_default")]
+    pub modulation: ModulationConfig,
 }
 
 impl SynthPatch {
@@ -81,6 +96,7 @@ impl SynthPatch {
             },
             filter_env_amount: 0.0,
             output_gain: 1.0,
+            modulation: ModulationConfig::default(),
         }
     }
 
@@ -96,6 +112,12 @@ impl SynthPatch {
             }
             (SynthParamId::FilterMode, SynthParamValue::FilterMode(value)) => {
                 self.filter.mode = value
+            }
+            (SynthParamId::Lfo1Wave, SynthParamValue::LfoWave(value)) => {
+                self.modulation.lfos[0].wave = value
+            }
+            (SynthParamId::Lfo2Wave, SynthParamValue::LfoWave(value)) => {
+                self.modulation.lfos[1].wave = value
             }
             (id, SynthParamValue::Number(value)) => {
                 if !value.is_finite() {
@@ -127,6 +149,26 @@ impl SynthPatch {
                     SynthParamId::FilterRelease => self.filter_env.release_secs = value,
                     SynthParamId::FilterEnvAmount => self.filter_env_amount = value,
                     SynthParamId::OutputGain => self.output_gain = value,
+                    SynthParamId::Macro1 => self.modulation.macros[0] = value,
+                    SynthParamId::Macro2 => self.modulation.macros[1] = value,
+                    SynthParamId::Lfo1Rate => self.modulation.lfos[0].rate_hz = value,
+                    SynthParamId::Lfo2Rate => self.modulation.lfos[1].rate_hz = value,
+                    SynthParamId::Lfo1Wave | SynthParamId::Lfo2Wave => {
+                        let wave = (value.fract() == 0.0)
+                            .then(|| LfoWave::from_index(value as i32))
+                            .flatten()
+                            .ok_or("LFO wave must be an index from 0 (sine) to 4 (sample-hold)")?;
+                        let lfo = usize::from(id == SynthParamId::Lfo2Wave);
+                        self.modulation.lfos[lfo].wave = wave;
+                    }
+                    SynthParamId::Lfo1Sync | SynthParamId::Lfo2Sync => {
+                        let sync = (value.fract() == 0.0)
+                            .then(|| sync_from_index(value as i32))
+                            .flatten()
+                            .ok_or("LFO sync must be 0 (off) or an index from 1 to 11")?;
+                        let lfo = usize::from(id == SynthParamId::Lfo2Sync);
+                        self.modulation.lfos[lfo].sync = sync;
+                    }
                     SynthParamId::Oscillator | SynthParamId::FilterMode => {
                         return Err("parameter requires a typed enum value".into())
                     }
@@ -162,6 +204,7 @@ impl SynthPatch {
         if !self.output_gain.is_finite() || !(0.0..=2.0).contains(&self.output_gain) {
             return Err("synth output gain must be finite and between 0.0 and 2.0".into());
         }
+        self.modulation.validate()?;
         Ok(())
     }
 }
@@ -171,6 +214,39 @@ pub enum SynthParamValue {
     Number(f32),
     Oscillator(Oscillator),
     FilterMode(FilterMode),
+    LfoWave(LfoWave),
+}
+
+/// 0 = free-running, otherwise 1-based position in [`SYNC_DIVISIONS`].
+pub const SYNC_DIVISIONS: [SyncDivision; 11] = [
+    SyncDivision::Whole,
+    SyncDivision::Half,
+    SyncDivision::Quarter,
+    SyncDivision::Eighth,
+    SyncDivision::Sixteenth,
+    SyncDivision::ThirtySecond,
+    SyncDivision::QuarterTriplet,
+    SyncDivision::EighthTriplet,
+    SyncDivision::SixteenthTriplet,
+    SyncDivision::DottedQuarter,
+    SyncDivision::DottedEighth,
+];
+
+fn sync_from_index(index: i32) -> Option<Option<SyncDivision>> {
+    match index {
+        0 => Some(None),
+        1..=11 => Some(Some(SYNC_DIVISIONS[(index - 1) as usize])),
+        _ => None,
+    }
+}
+
+pub fn sync_to_index(sync: Option<SyncDivision>) -> f32 {
+    sync.map_or(0.0, |division| {
+        SYNC_DIVISIONS
+            .iter()
+            .position(|candidate| *candidate == division)
+            .map_or(0.0, |position| (position + 1) as f32)
+    })
 }
 
 /// Validated on the control thread; applying it does not allocate or parse.
@@ -180,6 +256,7 @@ pub struct CompiledSynthPatch {
     sample_rate: f32,
     smoothing_frames: u32,
     parameters: [f32; 7],
+    modulation: CompiledModulation,
 }
 
 impl CompiledSynthPatch {
@@ -190,6 +267,7 @@ impl CompiledSynthPatch {
             sample_rate,
             smoothing_frames: (sample_rate * 0.005).round().max(1.0) as u32,
             parameters: patch_parameters(patch),
+            modulation: CompiledModulation::compile(&patch.modulation, sample_rate)?,
         })
     }
 
@@ -225,6 +303,24 @@ pub fn parse_synth_parameter_command(
             serde_json::from_value(serde_json::Value::String(raw.to_owned()))
                 .map_err(|_| format!("unknown filter mode: {raw}"))?,
         ),
+        SynthParamId::Lfo1Wave | SynthParamId::Lfo2Wave => match LfoWave::parse(raw) {
+            Some(wave) => SynthParamValue::LfoWave(wave),
+            None => SynthParamValue::Number(
+                raw.parse::<f32>()
+                    .map_err(|_| format!("unknown LFO wave: {raw}"))?,
+            ),
+        },
+        SynthParamId::Lfo1Sync | SynthParamId::Lfo2Sync => {
+            let index = if raw == "off" {
+                0.0
+            } else if let Some(division) = SyncDivision::parse(raw) {
+                sync_to_index(Some(division))
+            } else {
+                raw.parse::<f32>()
+                    .map_err(|_| format!("unknown LFO sync: {raw}"))?
+            };
+            SynthParamValue::Number(index)
+        }
         _ => {
             let number = raw
                 .parse::<f32>()
@@ -250,6 +346,9 @@ pub struct SynthVoice {
     amp_env: AdsrEnvelope,
     filter_env: AdsrEnvelope,
     filter: StateVariableFilter,
+    modulation: ModRuntime,
+    mod_wheel: f32,
+    last_offsets: ModOffsets,
 }
 
 impl SynthVoice {
@@ -283,6 +382,13 @@ impl SynthVoice {
             amp_env: AdsrEnvelope::new(sample_rate, patch.amp_env)?,
             filter_env: AdsrEnvelope::new(sample_rate, patch.filter_env)?,
             filter: StateVariableFilter::new(sample_rate, patch.filter)?,
+            modulation: ModRuntime::new(
+                sample_rate,
+                120.0,
+                CompiledModulation::compile(&patch.modulation, sample_rate)?,
+            ),
+            mod_wheel: 0.0,
+            last_offsets: ModOffsets::default(),
         })
     }
 
@@ -290,7 +396,35 @@ impl SynthVoice {
         self.patch
     }
 
+    pub fn set_tempo(&mut self, bpm: f64) {
+        self.modulation.set_tempo(bpm);
+    }
+
+    pub fn set_mod_wheel(&mut self, value: f32) {
+        self.mod_wheel = if value.is_finite() {
+            value.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
+    /// Pan and send-level offsets from the last rendered sample.
+    pub fn modulation_offsets(&self) -> ModOffsets {
+        self.last_offsets
+    }
+
     pub fn note_on(&mut self, frequency_hz: f32, velocity: f32) {
+        self.note_on_with_phase(frequency_hz, velocity, [0.0; MAX_LFOS]);
+    }
+
+    /// As [`SynthVoice::note_on`], with the shared free-running LFO phase for
+    /// LFOs whose `retrigger` flag is off.
+    pub fn note_on_with_phase(
+        &mut self,
+        frequency_hz: f32,
+        velocity: f32,
+        free_cycles: [f64; MAX_LFOS],
+    ) {
         self.base_frequency_hz = if frequency_hz.is_finite() {
             frequency_hz.max(0.0)
         } else {
@@ -305,6 +439,15 @@ impl SynthVoice {
         };
         self.phase = 0.0;
         self.filter.reset();
+        let note = if self.base_frequency_hz > 0.0 {
+            (69.0 + 12.0 * (self.base_frequency_hz / 440.0).log2())
+                .round()
+                .clamp(0.0, 127.0) as u8
+        } else {
+            60
+        };
+        self.modulation.note_on(note, free_cycles);
+        self.last_offsets = ModOffsets::default();
         self.amp_env.note_on();
         self.filter_env.note_on();
     }
@@ -319,6 +462,7 @@ impl SynthVoice {
         }
         self.amp_env.update_params(self.patch.amp_env);
         self.filter_env.update_params(self.patch.filter_env);
+        self.modulation.apply(compiled.modulation);
         true
     }
 
@@ -343,8 +487,32 @@ impl SynthVoice {
             return 0.0;
         }
 
-        let [tuning, pulse_width, base_cutoff, resonance, key_tracking, env_amount, gain] =
+        let [mut tuning, mut pulse_width, base_cutoff, mut resonance, key_tracking, env_amount, mut gain] =
             std::array::from_fn(|index| self.parameters[index].next_value());
+        let amp = self.amp_env.next_value();
+        let filter_env = self.filter_env.next_value();
+
+        // Order: base (smoothed) value -> modulation sum -> final clamp.
+        // With no active routes none of this runs, so the legacy path is
+        // bit-identical.
+        let mut cutoff_octaves = 0.0;
+        if self.modulation.is_active() {
+            let offsets = self.modulation.next(&ModInputs {
+                velocity: self.velocity,
+                amp_env: amp,
+                filter_env,
+                mod_wheel: self.mod_wheel,
+            });
+            self.last_offsets = offsets;
+            tuning *= (offsets.tuning_semitones / 12.0).exp2();
+            pulse_width = (pulse_width + offsets.pulse_width).clamp(0.05, 0.95);
+            resonance = (resonance + offsets.resonance).clamp(0.0, 1.0);
+            gain *= (1.0 + offsets.amplitude).clamp(0.0, 2.0);
+            cutoff_octaves = offsets.cutoff_octaves;
+        } else {
+            self.last_offsets = ModOffsets::default();
+        }
+
         self.frequency_hz = (self.base_frequency_hz * tuning).clamp(0.0, self.sample_rate * 0.49);
         self.filter
             .set_mode_and_resonance(self.patch.filter.mode, resonance);
@@ -361,15 +529,17 @@ impl SynthVoice {
             }
         };
 
-        let amp = self.amp_env.next_value();
-        let filter_env = self.filter_env.next_value();
         let keytrack = if self.frequency_hz > 0.0 {
             (self.frequency_hz / 440.0).max(0.01).powf(key_tracking)
         } else {
             1.0
         };
         let env_multiplier = 2.0_f32.powf(env_amount * filter_env);
-        let cutoff = clamp_cutoff(base_cutoff * keytrack * env_multiplier, self.sample_rate);
+        let mut cutoff_target = base_cutoff * keytrack * env_multiplier;
+        if cutoff_octaves != 0.0 {
+            cutoff_target *= cutoff_octaves.exp2();
+        }
+        let cutoff = clamp_cutoff(cutoff_target, self.sample_rate);
         self.filter.set_cutoff_hz(cutoff);
 
         let filtered = self.filter.process(raw * self.velocity);

@@ -27,9 +27,12 @@ def verify(binary):
     init_name = "InitDll" if sys.platform == "win32" else "ModuleEntry"
     init = getattr(lib, init_name, None)
     if init is not None:
-        init.argtypes = [ctypes.c_void_p]
+        # VST3 Windows InitDll takes no arguments. On Linux ModuleEntry
+        # receives the shared-object handle.
+        init.argtypes = [] if sys.platform == "win32" else [ctypes.c_void_p]
         init.restype = ctypes.c_bool
-        if not init(None):
+        initialized = init() if sys.platform == "win32" else init(None)
+        if not initialized:
             raise ValueError(f"{init_name} reported failure")
     lib.GetPluginFactory.restype = ctypes.c_void_p
     factory = lib.GetPluginFactory()

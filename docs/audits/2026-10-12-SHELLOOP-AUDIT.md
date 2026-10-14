@@ -29,3 +29,26 @@ Do not merge `continuation/*` by branch name alone; compare each against `main` 
 
 ## Next audit execution checklist
 Obtain a fresh checkout; inventory every module and `TODO/unimplemented!` marker; run `cargo fmt --all -- --check`, `cargo test --workspace --all-targets --all-features`, strict clippy and release builds on Linux and Windows; inspect build logs and fix failures with failing-before/passing-after regression tests; run VST3 and CLAP plug-in validators; perform long-running audio stress tests; then review DSP numerical and realtime safety. Record commands, OS/toolchain, result hashes, and remaining risks.
+
+
+---
+
+# Execution update — 2026-10-14
+
+A full checkout was built and tested (Linux, Rust 1.97). Result: the original v1 work was real and passing; the three expansion specs were then implemented.
+
+## Baseline (before changes)
+* `cargo test --workspace --all-targets`: all tests passed on `main`.
+* No `TODO`/`FIXME`/`unimplemented!`/`todo!` markers in `src`, `clap-plugin`, `tests`, `scripts` or workflows.
+* Stale `continuation/rebuild-baseline` references in README, `docs/index.html` and `pages.yml` were replaced with `main`.
+* Open PR #8 (sequencer pending-note-off capacity, VST3 validator `InitDll` ABI, ambiguous VST3 output) was merged into this branch; its clippy `collapsible_if` failure was fixed on the way.
+
+## Delivered
+| Spec | Status | Evidence |
+|---|---|---|
+| 13 Modulation matrix | implemented | `tests/modulation.rs`, `tests/realtime_allocations.rs`, CLAP host test |
+| 14 Sample shaping and slices | implemented | `tests/sample_shaping.rs`, `tests/example_projects.rs` |
+| 15 Creative effects + macros | implemented | `tests/creative_effects.rs`, `tests/effect_macros.rs` |
+
+## Remaining risks (unchanged by software testing)
+Real-DAW and hardware acceptance (`docs/HARDWARE-ACCEPTANCE.md`), VST3 validator runs, subjective sound quality, CPU headroom at maximum voice/effect load, and the documented gaps in each spec's implementation notes (slice maps are not quantised to a musical boundary; beat-repeat grid is relative to the effect's reset).

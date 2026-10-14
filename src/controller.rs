@@ -78,6 +78,12 @@ pub enum AudioMessage {
     Restart,
     Panic,
     AddTrack(PreparedTrack),
+    /// Live sample shaping and slice map for a sample track (spec 14).
+    SampleConfig {
+        track: TrackId,
+        shaping: crate::CompiledShaping,
+        slices: crate::SliceTable,
+    },
     ReplaceSample {
         track: TrackId,
         playback: CompiledSamplePlayback,
@@ -155,6 +161,13 @@ pub fn apply_audio_message(
             if let Err((_, track)) = engine.add_track(track) {
                 release(Garbage::Track(track));
             }
+        }
+        AudioMessage::SampleConfig {
+            track,
+            shaping,
+            slices,
+        } => {
+            let _ = engine.apply_sample_config(track, shaping, slices);
         }
         AudioMessage::ReplaceSample { track, playback } => {
             match engine.replace_sample(track, playback) {
@@ -409,6 +422,8 @@ pub struct SessionController {
     dirty: bool,
     /// Monotonic control clock in milliseconds (learn deadlines).
     now_ms: u64,
+    /// Previous sample shaping / slice snapshots for `sample undo`.
+    sample_history: Vec<(TrackId, crate::SampleShaping, crate::SliceSettings)>,
 }
 
 impl SessionController {
@@ -484,6 +499,7 @@ impl SessionController {
             dropped_messages: 0,
             dirty: false,
             now_ms: 0,
+            sample_history: Vec::new(),
         };
         if !orphans.is_empty() {
             controller.dirty = true;
@@ -704,8 +720,11 @@ impl SessionController {
             "pattern" => self.pattern_command(&line[head.len()..]),
             "patterns" => Ok(self.describe_patterns()),
             "synth" => self.synth_command(line),
+            "mod" => self.mod_command(line),
+            "sample" | "slice" => self.sample_command(line),
             "gain" | "pan" | "mute" | "solo" | "send" | "master" => self.mixer_command(line),
             "fx" => self.fx_command(line),
+            "fxmacro" => self.fxmacro_command(line),
             "scene" | "scenes" => self.scene_command(line, current_frame),
             "chain" => self.chain_command(line, current_frame),
             "lock" | "unlock" | "locks" => self.lock_command(line, current_frame),
@@ -816,6 +835,92 @@ impl SessionController {
             "queued synth parameter {id:?} for track {}",
             track.0
         ))
+    }
+
+    /// `sample ...` / `slice ...` (spec 14). Edits are validated as a unit,
+    /// delivered as one bounded message and recorded for `sample undo`.
+    fn sample_command(&mut self, line: &str) -> Result<String, String> {
+        let command = crate::parse_sample_command(line)?;
+        let track = self.selected_track();
+        if self.track_kind(track) != Some(TrackKind::Sample) {
+            return Err("selected track is not a sample track".into());
+        }
+        let sample_rate = self.sample_rate;
+        let (mut shaping, mut slices) = {
+            let settings = self
+                .project
+                .tracks
+                .iter()
+                .find(|definition| definition.id == track)
+                .and_then(|definition| definition.sample.as_ref())
+                .ok_or("sample track has no sample settings")?;
+            (settings.sample_shaping, settings.slices.clone())
+        };
+        let previous = (shaping, slices.clone());
+        let message = match command {
+            crate::SampleCommand::SliceList => {
+                return Ok(crate::sample_shaping::command::describe_slices(&slices))
+            }
+            crate::SampleCommand::Undo => {
+                let index = self
+                    .sample_history
+                    .iter()
+                    .rposition(|(id, _, _)| *id == track)
+                    .ok_or("nothing to undo")?;
+                let (_, old_shaping, old_slices) = self.sample_history.remove(index);
+                shaping = old_shaping;
+                slices = old_slices;
+                "undid the last sample edit".to_owned()
+            }
+            other => crate::apply_sample_command(&mut shaping, &mut slices, other)?,
+        };
+        let compiled = crate::CompiledShaping::compile(&shaping, sample_rate)?;
+        let table = crate::SliceTable::compile(&slices)?;
+        self.send(AudioMessage::SampleConfig {
+            track,
+            shaping: compiled,
+            slices: table,
+        })?;
+        if command != crate::SampleCommand::Undo {
+            if self.sample_history.len() >= EDIT_HISTORY_CAPACITY {
+                self.sample_history.remove(0);
+            }
+            self.sample_history.push((track, previous.0, previous.1));
+        }
+        if let Some(settings) = self
+            .project
+            .tracks
+            .iter_mut()
+            .find(|definition| definition.id == track)
+            .and_then(|definition| definition.sample.as_mut())
+        {
+            settings.sample_shaping = shaping;
+            settings.slices = slices;
+        }
+        self.dirty = true;
+        Ok(format!("track {}: {message}", track.0))
+    }
+
+    fn mod_command(&mut self, line: &str) -> Result<String, String> {
+        let command = crate::parse_mod_command(line)?;
+        let track = self.selected_track();
+        let mut patch = *self.synth_patch_mut(track)?;
+        let message = crate::apply_mod_command(&mut patch.modulation, command)?;
+        if command == crate::ModCommand::List {
+            return Ok(message);
+        }
+        let sample_rate = self.sample_rate as f32;
+        let compiled = CompiledSynthPatch::new(sample_rate, patch)?;
+        self.send(AudioMessage::SynthPatch {
+            track,
+            patch: compiled,
+        })?;
+        *self.synth_patch_mut(track)? = patch;
+        if let Some(definition) = self.project.tracks.iter_mut().find(|t| t.id == track) {
+            definition.synth_patch = Some(patch);
+        }
+        self.dirty = true;
+        Ok(format!("track {}: {message}", track.0))
     }
 
     fn synth_command(&mut self, line: &str) -> Result<String, String> {
@@ -1041,6 +1146,14 @@ impl SessionController {
         }
     }
 
+    /// The synth patch mirrored for `track`, for read-only UI feedback.
+    pub fn synth_patch(&self, track: TrackId) -> Option<SynthPatch> {
+        self.synth_patches
+            .iter()
+            .find(|(id, _)| *id == track)
+            .map(|(_, patch)| *patch)
+    }
+
     pub fn descriptor(&self, target: ParameterTarget) -> Option<ParamDescriptor> {
         if !target_exists(&self.project, target) {
             return None;
@@ -1087,6 +1200,138 @@ impl SessionController {
                 self.step_scene(action == ActionId::SceneNext, None, current_frame)
             }
             ActionId::SceneLaunch(id) => self.launch_scene(SceneId(id), None, current_frame),
+        }
+    }
+
+    /// `fxmacro` (spec 15): two performance macros per effect chain.
+    ///
+    /// ```text
+    /// fxmacro list
+    /// fxmacro assign <track|send_a|send_b|master> <1|2> <slot> <param>
+    /// fxmacro <track|send_a|send_b|master> <1|2> <0..1>
+    /// fxmacro remove <track|send_a|send_b|master> <1|2>
+    /// ```
+    /// Knob moves are live. Per-scene recall values live in the project file
+    /// (`effect_macros[].scene_values`) and are applied when a scene launches.
+    fn fxmacro_command(&mut self, line: &str) -> Result<String, String> {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let location_of = |word: Option<&&str>, this: &Self| match word.copied() {
+            Some("track") => Ok(EffectLocation::Track(this.selected_track())),
+            Some("send_a" | "a") => Ok(EffectLocation::Send(0)),
+            Some("send_b" | "b") => Ok(EffectLocation::Send(1)),
+            Some("master") => Ok(EffectLocation::Master),
+            other => Err(format!("unknown effect chain {other:?}")),
+        };
+        let index_of = |word: Option<&&str>| {
+            word.and_then(|w| w.parse::<u8>().ok())
+                .filter(|n| (1..=crate::MACROS_PER_CHAIN).contains(n))
+                .ok_or_else(|| "macro number must be 1 or 2".to_string())
+        };
+        match parts.get(1).copied() {
+            None | Some("list") => {
+                if self.project.effect_macros.is_empty() {
+                    return Ok("no effect macros".into());
+                }
+                Ok(self
+                    .project
+                    .effect_macros
+                    .iter()
+                    .map(|m| {
+                        format!(
+                            "{:?} macro {} -> slot {} {} = {:.2}",
+                            m.location, m.index, m.slot, m.param, m.value
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; "))
+            }
+            Some("assign") => {
+                let location = location_of(parts.get(2), self)?;
+                let index = index_of(parts.get(3))?;
+                let slot: u8 = parts
+                    .get(4)
+                    .and_then(|w| w.parse().ok())
+                    .ok_or("expected fxmacro assign <chain> <1|2> <slot> <param>")?;
+                let param = parts.get(5).ok_or("missing parameter name")?.to_string();
+                let mut next = self.project.effect_macros.clone();
+                next.retain(|m| !(m.location == location && m.index == index));
+                next.push(crate::EffectMacro {
+                    location,
+                    index,
+                    slot,
+                    param,
+                    value: 0.0,
+                    scene_values: Vec::new(),
+                });
+                crate::validate_effect_macros(
+                    &next,
+                    &|loc, slot| self.project.effect_kind_at(loc, slot),
+                    &self.project.scenes,
+                )?;
+                self.project.effect_macros = next;
+                self.dirty = true;
+                Ok(format!("macro {index} assigned"))
+            }
+            Some("remove") => {
+                let location = location_of(parts.get(2), self)?;
+                let index = index_of(parts.get(3))?;
+                let before = self.project.effect_macros.len();
+                self.project
+                    .effect_macros
+                    .retain(|m| !(m.location == location && m.index == index));
+                if self.project.effect_macros.len() == before {
+                    return Err("no such macro".into());
+                }
+                self.dirty = true;
+                Ok(format!("macro {index} removed"))
+            }
+            Some(_) => {
+                let location = location_of(parts.get(1), self)?;
+                let index = index_of(parts.get(2))?;
+                let position = parts
+                    .get(3)
+                    .and_then(|w| w.parse::<f32>().ok())
+                    .filter(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                    .ok_or("macro value must be between 0 and 1")?;
+                let entry = self
+                    .project
+                    .effect_macros
+                    .iter()
+                    .find(|m| m.location == location && m.index == index)
+                    .ok_or("macro is not assigned; use fxmacro assign")?
+                    .clone();
+                let kind = self
+                    .project
+                    .effect_kind_at(location, entry.slot)
+                    .ok_or("macro target no longer exists")?;
+                let (param, value) = entry
+                    .parameter_value(kind, position)
+                    .ok_or("macro parameter is unknown")?;
+                self.send(AudioMessage::EffectParam {
+                    location,
+                    slot: entry.slot_id(),
+                    param,
+                    value,
+                })?;
+                if let Some(config) =
+                    effect_config_mut(&mut self.project, location, entry.slot_id())
+                {
+                    let _ = config.set_param_value(param, value);
+                }
+                if let Some(stored) = self
+                    .project
+                    .effect_macros
+                    .iter_mut()
+                    .find(|m| m.location == location && m.index == index)
+                {
+                    stored.value = position;
+                }
+                self.dirty = true;
+                Ok(format!(
+                    "macro {index} = {position:.2} ({} {value:.3})",
+                    entry.param
+                ))
+            }
         }
     }
 
@@ -1854,6 +2099,14 @@ fn synth_value(patch: &SynthPatch, param: SynthParamId) -> f32 {
         SynthParamId::FilterRelease => patch.filter_env.release_secs,
         SynthParamId::FilterEnvAmount => patch.filter_env_amount,
         SynthParamId::OutputGain => patch.output_gain,
+        SynthParamId::Macro1 => patch.modulation.macros[0],
+        SynthParamId::Macro2 => patch.modulation.macros[1],
+        SynthParamId::Lfo1Rate => patch.modulation.lfos[0].rate_hz,
+        SynthParamId::Lfo2Rate => patch.modulation.lfos[1].rate_hz,
+        SynthParamId::Lfo1Wave => patch.modulation.lfos[0].wave as u8 as f32,
+        SynthParamId::Lfo2Wave => patch.modulation.lfos[1].wave as u8 as f32,
+        SynthParamId::Lfo1Sync => crate::sync_to_index(patch.modulation.lfos[0].sync),
+        SynthParamId::Lfo2Sync => crate::sync_to_index(patch.modulation.lfos[1].sync),
     }
 }
 
@@ -1952,10 +2205,12 @@ pub fn effect_kind_label(kind: EffectKind) -> &'static str {
 }
 
 /// Sample parameter IDs for inspector listings.
-pub const SAMPLE_PARAMS: [SampleParamId; 3] = [
+pub const SAMPLE_PARAMS: [SampleParamId; 5] = [
     SampleParamId::Pitch,
     SampleParamId::Gain,
     SampleParamId::Reverse,
+    SampleParamId::Slice,
+    SampleParamId::FilterCutoff,
 ];
 
 /// Synth parameters listed by the inspector and accepted by `learn`.
@@ -1971,6 +2226,10 @@ pub fn inspector_synth_params() -> impl Iterator<Item = SynthParamId> {
         "pulse_width",
         "fine_cents",
         "output_gain",
+        "macro1",
+        "macro2",
+        "lfo1_rate",
+        "lfo2_rate",
     ]
     .into_iter()
     .filter_map(parse_synth_param)

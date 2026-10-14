@@ -1097,6 +1097,8 @@ fn parse_scoped_target(name: &str, track: TrackId) -> Result<ParameterTarget, St
             "pitch" => SampleParamId::Pitch,
             "gain" => SampleParamId::Gain,
             "reverse" => SampleParamId::Reverse,
+            "slice" => SampleParamId::Slice,
+            "filter_cutoff" => SampleParamId::FilterCutoff,
             _ => return Err(unknown()),
         };
         return Ok(ParameterTarget::Sample { track, param });
@@ -1176,6 +1178,8 @@ pub fn format_target(target: ParameterTarget) -> String {
                 SampleParamId::Pitch => "pitch",
                 SampleParamId::Gain => "gain",
                 SampleParamId::Reverse => "reverse",
+                SampleParamId::Slice => "slice",
+                SampleParamId::FilterCutoff => "filter_cutoff",
             };
             format!("track {} sample.{name}", track.0)
         }

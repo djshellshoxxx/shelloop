@@ -389,7 +389,10 @@ fn extensions_describe_ports_params_and_latency() {
 
         let params = instance.params();
         let count = params.count.unwrap()(plugin);
-        assert_eq!(count, 15);
+        assert_eq!(
+            count, 23,
+            "15 original parameters plus the 8 spec-13 modulation ones"
+        );
         let mut names = Vec::new();
         for index in 0..count {
             let mut info: clap_param_info = std::mem::zeroed();
@@ -408,7 +411,9 @@ fn extensions_describe_ports_params_and_latency() {
             let stepped = info.flags & CLAP_PARAM_IS_STEPPED != 0;
             let is_enum = info.flags & CLAP_PARAM_IS_ENUM != 0;
             match name.as_str() {
-                "Oscillator" | "Filter mode" | "Sequencer" => assert!(stepped && is_enum),
+                "Oscillator" | "Filter mode" | "Sequencer" | "LFO wave" => {
+                    assert!(stepped && is_enum)
+                }
                 "Octave" => assert!(stepped && !is_enum),
                 _ => assert!(!stepped && !is_enum, "{name}"),
             }
@@ -432,6 +437,14 @@ fn extensions_describe_ports_params_and_latency() {
                 "Output gain",
                 "Sequencer",
                 "Master volume",
+                "LFO rate",
+                "LFO wave",
+                "LFO to cutoff",
+                "LFO to pitch",
+                "LFO to pulse width",
+                "LFO to amp",
+                "Mod wheel to cutoff",
+                "Macro 1 (brightness)",
             ]
         );
         let mut info: clap_param_info = std::mem::zeroed();
@@ -733,5 +746,50 @@ fn reset_and_reactivation_are_clean() {
         ));
         let [out, _] = instance.process(vec![note(CLAP_EVENT_NOTE_ON, 0, 60, 1.0)], None);
         assert!(peak(&out) > 0.01);
+    });
+}
+
+#[test]
+fn modulation_parameters_and_mod_wheel_shape_the_sound_in_process() {
+    with_entry(|| {
+        let render = |events: Vec<Event>| {
+            let mut instance = Instance::new();
+            instance.activate();
+            instance.process(events, None);
+            let mut out = Vec::new();
+            for _ in 0..4 {
+                out.extend(instance.process(Vec::new(), None)[0].iter().copied());
+            }
+            out
+        };
+        let base = || {
+            vec![
+                param(0, ParamId::Oscillator, 3.0),
+                param(0, ParamId::AmpAttack, 0.0),
+                param(0, ParamId::AmpDecay, 0.0),
+                param(0, ParamId::AmpSustain, 1.0),
+                param(0, ParamId::FilterEnvAmount, 0.0),
+                param(0, ParamId::Cutoff, 1_000.0),
+                midi(1, [0x90, 57, 120]),
+            ]
+        };
+        let plain = render(base());
+        let mut with_lfo = base();
+        with_lfo.push(param(0, ParamId::Lfo1ToAmp, 1.0));
+        with_lfo.push(param(0, ParamId::Lfo1Rate, 20.0));
+        let lfo = render(with_lfo);
+        assert!(lfo.iter().all(|s| s.is_finite()));
+        assert_ne!(plain, lfo, "LFO to amp must change the output");
+
+        let wheel = |position: u8| {
+            let mut events = base();
+            events.push(param(0, ParamId::ModWheelToCutoff, 1.0));
+            events.push(midi(0, [0xB0, 1, position]));
+            render(events)
+        };
+        assert_ne!(wheel(0), wheel(127), "CC1 moves the cutoff");
+
+        // Untouched modulation parameters leave the sound unchanged.
+        assert_eq!(plain, render(base()));
     });
 }

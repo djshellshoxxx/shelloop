@@ -2,7 +2,7 @@
 
 SHELLOOP is a terminal-only real-time music instrument: a live step sequencer plus a playable synthesizer designed for Windows and Linux.
 
-All twelve v1 specifications (`docs/specs/01`–`12`) are implemented: multitrack engine, live pattern editing, synth/filter/ADSR, WAV samples, scenes and chains, MIDI learn, effects, a full-screen terminal UI, per-step parameter locks, resampling, a retrospective performance black box and invariant-locked pattern variation. SHELLOOP also ships as a **CLAP instrument plugin** (`clap-plugin/`). Release builds are published on the GitHub Releases page as a Windows `.exe`, a Linux binary and CLAP plugins for both. Physical audio-hardware latency and MIDI-controller validation is tracked separately in `docs/HARDWARE-ACCEPTANCE.md`.
+All fifteen specifications (`docs/specs/01`–`15`) are implemented. The twelve v1 specs are: multitrack engine, live pattern editing, synth/filter/ADSR, WAV samples, scenes and chains, MIDI learn, effects, a full-screen terminal UI, per-step parameter locks, resampling, a retrospective performance black box and invariant-locked pattern variation. SHELLOOP also ships as a **CLAP instrument plugin** (`clap-plugin/`). Release builds are published on the GitHub Releases page as a Windows `.exe`, a Linux binary and CLAP plugins for both. The sound-design expansion adds a modulation matrix with macros (spec 13), sample shaping and slices (spec 14) and creative effects (spec 15), described below. Physical audio-hardware latency and MIDI-controller validation is tracked separately in `docs/HARDWARE-ACCEPTANCE.md`.
 
 ## Implemented
 
@@ -35,7 +35,10 @@ All twelve v1 specifications (`docs/specs/01`–`12`) are implemented: multitrac
 - Internal resampling (spec 10): sample-accurate master or track capture to a new sample track or replacing a track's sample
 - Performance black box (spec 11): `--black-box-seconds` keeps the last 1–120 s; F8 saves a WAV plus JSON event sidecar
 - Invariant-locked variation (spec 12): seeded, reproducible pattern variations that keep locked anchors, rhythm, contour, count or range
-- CLAP instrument plugin: polyphonic synth with 15 automatable parameters, host-synced sequencer and saved state
+- Modulation matrix (spec 13): 2 LFOs (sine, triangle, saw, square, seeded sample-and-hold; Hz or tempo divisions), 2 macros, mod wheel, envelopes, velocity and key tracking routed through up to 8 routes per synth patch
+- Sample shaping and slices (spec 14): per-track low-/high-pass filter, drive, ADSR amplitude envelope, zero-latency transient shaper, up to 128 slices selected by note, seeded random or step lock, offline transient detection
+- Creative effects (spec 15): tempo-synced multimode filter, stereo chorus/flanger and quantized beat repeat, usable as inserts, sends or master effects, with two performance macros per effect chain and per-scene recall
+- CLAP instrument plugin: polyphonic synth with 23 automatable parameters (including LFO/mod-wheel/macro modulation), host-synced sequencer and saved state
 - Windows/Linux all-feature compile, test, strict Clippy and optimized-release CI gates
 - Tag-triggered release workflow publishing the Windows `.exe`, Linux build and CLAP plugins with SHA-256 checksums
 
@@ -210,7 +213,7 @@ Shelloop targets 64-bit Windows. There are two ways to run it: download the preb
 
 ### Option A: use the prebuilt Windows release
 
-Open the repository's **Releases** section and download either the single executable or the full bundle (VERSION is the release tag, for example `v1.0.0-rc.1`):
+Open the repository's **Releases** section and download either the single executable or the full bundle (VERSION is the release tag, for example `v1.1.0-rc.1`):
 
 ```text
 shelloop-VERSION-windows-x86_64.exe          standalone executable
@@ -320,14 +323,14 @@ cd shelloop
 The current playable development work is on:
 
 ```text
-continuation/rebuild-baseline
+main
 ```
 
 Switch to it:
 
 ```powershell
 git fetch origin
-git switch continuation/rebuild-baseline
+git switch main
 ```
 
 Confirm the branch:
@@ -339,7 +342,7 @@ git branch --show-current
 It should print:
 
 ```text
-continuation/rebuild-baseline
+main
 ```
 
 #### 5. Run the automated tests
@@ -726,9 +729,114 @@ save                         # writes the project, including mappings and locks
 
 Resampled audio is written to `<project folder>/captures/Resample-NNNN.wav` (change it with `--capture-directory`). Black-box takes go to `./shelloop-takes` (change it with `--black-box-directory`).
 
+## Sound design: modulation, macros, sample shaping and creative effects
+
+Two example projects show the new features:
+
+```text
+shelloop --project projects/example-sound-design.json --tui
+shelloop --project projects/example-sliced-break.json --tui
+```
+
+### Modulation matrix and macros (spec 13)
+
+A synth patch may carry an optional `modulation` object (omitted = no modulation, so every existing project sounds exactly as before). It holds two LFOs, two macro values and up to eight routes:
+
+```json
+"modulation": {
+  "lfos": [{"wave": "sine", "rate_hz": 0.35}, {"wave": "triangle", "sync": "1/4", "retrigger": true}],
+  "macros": [0.25, 0.0],
+  "routes": [
+    {"source": "lfo1", "dest": "filter_cutoff", "amount": 0.35, "smoothing_ms": 20},
+    {"source": "mod_wheel", "dest": "filter_cutoff", "amount": 0.6}
+  ]
+}
+```
+
+| Item | Values |
+|---|---|
+| Sources | `lfo1`, `lfo2`, `amp_env`, `filter_env`, `velocity`, `key_track`, `mod_wheel` (MIDI CC 1), `macro1`, `macro2` |
+| Destinations | `tuning` (amount 1.0 = 12 semitones, total clamped to ±24), `pulse_width`, `filter_cutoff` (1.0 = 4 octaves, clamped to ±8), `filter_resonance`, `amplitude` (gain × (1 + sum), clamped 0–2), `pan`, `effect_wet` (adds to the track's send levels) |
+| LFO waves | `sine`, `triangle`, `saw`, `square`, `sample_hold` (deterministic per `seed`) |
+| LFO rate | `rate_hz` 0.01–50, or `sync` `1/1 1/2 1/4 1/8 1/16 1/32 1/4t 1/8t 1/16t 1/4d 1/8d` (follows the project tempo) |
+| LFO phase | `retrigger: true` restarts at every note, `false` free-runs so all notes share one phase |
+
+Order of evaluation: base patch value → active step lock → summed modulation → final clamp. Modulation is evaluated every 16 samples and linearly interpolated; per-route `smoothing_ms` adds a one-pole smoother.
+
+Live editing (selected synth track):
+
+```text
+mod add lfo1 filter_cutoff 0.5 25     # source dest amount [smoothing_ms]
+mod set 2 velocity amplitude 0.3
+mod off 1 | mod on 1 | mod remove 1 | mod clear | mod list
+synth macro1 0.7                       # also macro2, lfo1_rate, lfo2_rate
+synth lfo1_wave triangle               # sine|triangle|saw|square|sample_hold (or 0-4)
+synth lfo1_sync 1/8                    # or off
+```
+
+`macro1`, `macro2`, `lfo*_rate`, `lfo*_wave` and `lfo*_sync` are normal synth parameters, so they can be MIDI-learned (`learn macro1`) and parameter-locked per step (`lock macro1 0.9`). The inspector lists each route with its destination range.
+
+### Sample shaping and slices (spec 14)
+
+Sample settings accept two optional blocks. Omit them and playback is unchanged.
+
+```json
+"sample": {
+  "path": "samples/break.wav", "mode": "one_shot",
+  "slices": {"regions": [{"start": 0.0, "end": 0.125}, {"start": 0.125, "end": 0.25}],
+             "select": "note", "base_note": 36},
+  "sample_shaping": {"filter_mode": "low_pass", "filter_cutoff": 9000, "drive_db": 3,
+                     "envelope": {"attack_secs": 0.002, "decay_secs": 0.08, "sustain": 0.6, "release_secs": 0.03},
+                     "transient_attack": 0.35, "transient_sustain": -0.2}
+}
+```
+
+* **Slices** (≤128, normalised positions, no overlaps). `select`: `none` (whole sample; step locks can still pick a slice), `note` (note `base_note + n` plays slice *n*; other notes are silent) or `random` (seeded, reproducible; resets on panic/restart). Slices honour `reverse`, `root_note`, `gate`/`loop` mode and the sample's play region.
+* **Shaping**: `filter_mode` `off|low_pass|high_pass` with `filter_cutoff` (20–20000 Hz) and `filter_resonance` (≤0.95); `drive_db` 0–24 (0 = off); optional ADSR `envelope` (in `one_shot` mode note-off is still ignored); `transient_attack` / `transient_sustain` −1…1 (zero latency, 0 = off). Stages with neutral settings are skipped entirely.
+* **Step locks**: `lock sample.slice 3` (one-based slice, 0 = none) and `lock sample.filter_cutoff 800` (also switches the filter on for that step).
+
+Commands (selected sample track; every edit is validated as a unit, applies to new notes and can be undone):
+
+```text
+slice auto 8 | slice add 0.0 0.25 | slice delete 3 | slice clear | slice list
+slice assign note 36 | slice assign random 99 | slice assign none
+sample filter lowpass 900 0.3 | sample filter off
+sample drive 6 | sample envelope 0.01 0.1 0.6 0.3 | sample envelope off
+sample transient 0.5 -0.25 | sample undo
+```
+
+Offline slice detection is available to tooling as `shelloop::detect_slices` (deterministic transient detection that returns contiguous, validated slices).
+
+### Creative effects (spec 15)
+
+Use these `kind`s in a track `inserts` list, a send bus or `master`. Parameters are addressed by name (`fx track 0 cutoff 800`) and by index for locks and MIDI learn.
+
+| Kind | Parameters |
+|---|---|
+| `filter` | `mode` 0 LP / 1 BP / 2 HP, `cutoff`, `resonance` (≤0.95), `env_amount` (envelope follower, −1…1), `sync` (0 off, 1–6 tempo divisions for a cutoff sweep), `depth`, `mix` |
+| `chorus` | `mode` 0 chorus / 1 flanger, `rate_hz`, `sync`, `depth`, `feedback` (−0.9…0.9), `width` (stereo LFO phase), `mix` |
+| `beat_repeat` | `division` (0 ¼, 1 ⅛, 2 1/16, 3 1/32, 4 ⅛ triplet), `repeats` (0 = hold), `reverse`, `gate` (seeded probability of muting a repeat), `mix`, `active`, `seed` |
+
+Performance macros: every effect chain (a track's inserts, a send bus, the master chain) has two macro knobs that drive one effect parameter each across its whole range, using the parameter's own response curve. Assign and move them live, and store per-scene positions in the project file; they are recalled through the normal smoothed parameter path when the scene launches.
+
+```text
+fxmacro assign track 1 0 cutoff      # chain, macro 1|2, slot, parameter
+fxmacro track 1 0.75                 # move macro 1 of the selected track's chain (0..1)
+fxmacro list | fxmacro remove track 1
+```
+
+```json
+"effect_macros": [{"location": {"track": 2}, "index": 1, "slot": 0, "param": "cutoff", "value": 0.8,
+                   "scene_values": [{"scene": 1, "value": 0.8}, {"scene": 2, "value": 0.45}]}]
+```
+
+Assignments and scene values edited live are saved with the project and take effect for scene recall the next time it is loaded; knob moves are always live.
+
+Beat repeat captures continuously, arms when `active` becomes 1, and starts only at the next slice boundary once a full slice has been captured, so it never plays stale or uninitialised audio. A reset (stop, panic, project switch) clears every buffer. Its grid starts at the effect's last reset; host/transport alignment is a documented follow-up.
+
 ## CLAP and VST3 plugins
 
-`clap-plugin/` builds SHELLOOP's synthesizer and step sequencer as a CLAP instrument. Release downloads include `shelloop.clap`; copy it to `~/.clap/` on Linux or `C:\Program Files\Common Files\CLAP\` on Windows and rescan plugins in your DAW. See `clap-plugin/README.md` for its parameters and build instructions.
+`clap-plugin/` builds SHELLOOP's synthesizer and step sequencer as a CLAP instrument. Eight appended parameters (ids 15–22) expose LFO 1 (rate, wave) and its depth to cutoff, pitch, pulse width and amplitude, the mod wheel (CC 1) to cutoff, and a brightness macro; the original ids 0–14 are unchanged and older saved states load with the new parameters at their neutral defaults. Release downloads include `shelloop.clap`; copy it to `~/.clap/` on Linux or `C:\Program Files\Common Files\CLAP\` on Windows and rescan plugins in your DAW. See `clap-plugin/README.md` for its parameters and build instructions.
 
 The same instrument is also released as a **VST3** (`SHELLOOP.vst3`, Windows and Linux): copy it to `C:\Program Files\Common Files\VST3\` on Windows or `~/.vst3/` on Linux. See `vst3/README.md`.
 

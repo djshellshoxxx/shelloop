@@ -5,10 +5,13 @@ use shelloop::{
     MAX_SEND_BUSES, MAX_SEND_EFFECTS, MAX_TRACK_INSERTS,
 };
 
-const KINDS: [EffectKind; 3] = [
+const KINDS: [EffectKind; 6] = [
     EffectKind::Saturation,
     EffectKind::Delay,
     EffectKind::Reverb,
+    EffectKind::Filter,
+    EffectKind::Chorus,
+    EffectKind::BeatRepeat,
 ];
 
 fn param(kind: EffectKind, name: &str) -> EffectParamId {
@@ -85,7 +88,7 @@ fn descriptor_tables_are_stable_and_named_in_snake_case() {
             );
         }
     }
-    assert_eq!(EffectKind::parse("chorus"), None);
+    assert_eq!(EffectKind::parse("phaser"), None);
     assert_eq!(find_effect_param(EffectKind::Delay, "drive"), None);
 }
 
@@ -698,7 +701,7 @@ fn effects_config_round_trips_through_serde_with_snake_case_names() {
         serde_json::from_str(r#"{"send_buses":[{"effects":[{"kind":"reverb"}]}]}"#).unwrap();
     assert_eq!(minimal.send_buses[0].return_gain, 1.0);
     assert!(minimal.send_buses[0].effects[0].params.is_empty());
-    assert!(serde_json::from_str::<EffectsConfig>(r#"{"master":[{"kind":"chorus"}]}"#).is_err());
+    assert!(serde_json::from_str::<EffectsConfig>(r#"{"master":[{"kind":"phaser"}]}"#).is_err());
     assert!(
         serde_json::from_str::<EffectsConfig>(r#"{"master":[{"kind":"delay","wet":1}]}"#).is_err()
     );

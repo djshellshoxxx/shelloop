@@ -1,5 +1,6 @@
 use crate::{
-    protect_master, CompiledSynthPatch, Oscillator, SynthPatch, SynthVoice, VoiceAllocator, VoiceId,
+    protect_master, CompiledSynthPatch, Oscillator, SynthPatch, SynthVoice, VoiceAllocator,
+    VoiceId, MAX_LFOS,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -17,6 +18,10 @@ pub enum EngineCommand {
         channel: u8,
         enabled: bool,
     },
+    /// Mod wheel position, 0.0..=1.0 (MIDI CC 1), shared by all voices.
+    ModWheel {
+        value: f32,
+    },
     Panic,
 }
 
@@ -30,6 +35,13 @@ pub struct RealtimeSynth {
     voices: Vec<SynthVoice>,
     voice_ids: Vec<Option<VoiceId>>,
     sustain_releases: Vec<VoiceId>,
+    sample_rate: f64,
+    bpm: f64,
+    /// Shared LFO phase for LFOs with `retrigger` off, so every note joins
+    /// the same cycle.
+    free_cycles: [f64; MAX_LFOS],
+    mod_pan: f32,
+    mod_wet: f32,
 }
 
 impl RealtimeSynth {
@@ -56,6 +68,11 @@ impl RealtimeSynth {
             voices,
             voice_ids: vec![None; polyphony],
             sustain_releases: Vec::with_capacity(polyphony),
+            sample_rate: f64::from(sample_rate),
+            bpm: 120.0,
+            free_cycles: [0.0; MAX_LFOS],
+            mod_pan: 0.0,
+            mod_wet: 0.0,
         })
     }
 
@@ -74,6 +91,22 @@ impl RealtimeSynth {
         true
     }
 
+    /// Tempo for tempo-synced LFOs.
+    pub fn set_tempo(&mut self, bpm: f64) {
+        if bpm.is_finite() && bpm > 0.0 {
+            self.bpm = bpm;
+            for voice in &mut self.voices {
+                voice.set_tempo(bpm);
+            }
+        }
+    }
+
+    /// Averaged pan and send-level offsets from the Pan/EffectWet
+    /// modulation destinations at the last rendered sample.
+    pub fn modulation_pan_and_wet(&self) -> (f32, f32) {
+        (self.mod_pan, self.mod_wet)
+    }
+
     pub fn active_voice_count(&self) -> usize {
         self.allocator.active_count()
     }
@@ -87,7 +120,11 @@ impl RealtimeSynth {
             } => {
                 if let Ok(id) = self.allocator.note_on(channel, note, velocity) {
                     let slot = usize::from(id.slot);
-                    self.voices[slot].note_on(midi_note_hz(note), velocity);
+                    self.voices[slot].note_on_with_phase(
+                        midi_note_hz(note),
+                        velocity,
+                        self.free_cycles,
+                    );
                     self.voice_ids[slot] = Some(id);
                 }
             }
@@ -112,6 +149,11 @@ impl RealtimeSynth {
                     self.voices[usize::from(id.slot)].note_off();
                 }
             }
+            EngineCommand::ModWheel { value } => {
+                for voice in &mut self.voices {
+                    voice.set_mod_wheel(value);
+                }
+            }
             EngineCommand::Panic => {
                 self.allocator.panic();
                 for voice in &mut self.voices {
@@ -122,6 +164,19 @@ impl RealtimeSynth {
     }
 
     pub fn next_sample(&mut self) -> f32 {
+        let patch_modulation = self.voices[0].patch().modulation;
+        if !patch_modulation.is_default() {
+            for (index, cycles) in self.free_cycles.iter_mut().enumerate() {
+                let lfo = patch_modulation.lfos[index];
+                let hz = lfo.sync.map_or(f64::from(lfo.rate_hz), |division| {
+                    self.bpm / 60.0 / f64::from(division.beats())
+                });
+                *cycles += hz / self.sample_rate;
+            }
+        }
+        let mut pan_sum = 0.0;
+        let mut wet_sum = 0.0;
+        let mut sounding = 0.0;
         let mut mix = 0.0;
         for slot in 0..self.voices.len() {
             let Some(id) = self.voice_ids[slot] else {
@@ -132,11 +187,22 @@ impl RealtimeSynth {
 
             if allocator_active || voice_active {
                 mix += self.voices[slot].next_sample();
+                let offsets = self.voices[slot].modulation_offsets();
+                pan_sum += offsets.pan;
+                wet_sum += offsets.effect_wet;
+                sounding += 1.0;
             }
 
             if !allocator_active && !self.voices[slot].is_active() {
                 self.voice_ids[slot] = None;
             }
+        }
+        if sounding > 0.0 {
+            self.mod_pan = pan_sum / sounding;
+            self.mod_wet = wet_sum / sounding;
+        } else {
+            self.mod_pan = 0.0;
+            self.mod_wet = 0.0;
         }
         protect_master(mix)
     }

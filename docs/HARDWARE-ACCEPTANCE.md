@@ -41,5 +41,9 @@ Verify the inner archive before extracting it:
 | Missing pattern/invalid device errors | NOT RUN |
 | Audio disconnect/no-output behavior | NOT RUN |
 | Terminal restored after errors | NOT RUN |
+| `example-sound-design.json`: LFO/macro/mod-wheel movement is audible and click-free (mod wheel on a controller) | NOT RUN |
+| `example-sliced-break.json`: slices, filter, drive and transient shaper sound correct on the interface | NOT RUN |
+| Filter, chorus/flanger and beat repeat at slow (60) and fast (180) BPM; beat repeat engages on the grid | NOT RUN |
+| CLAP/VST3 in two DAWs: modulation parameters automate, state reloads, CC 1 moves the cutoff | NOT RUN |
 
 Use PASS, FAIL or NOT RUN with concrete observations. Attach errors and reproduction steps for failures. Any unexecuted gate remains open. If a fix changes runtime code, repeat affected checks against its candidate archive before tagging.

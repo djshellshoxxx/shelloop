@@ -1,0 +1,348 @@
+{
+  "schema_version": 3,
+  "revision": 1,
+  "seed": 777,
+  "bpm": 120.0,
+  "steps_per_beat": 4,
+  "tracks": [
+    {
+      "id": 1,
+      "name": "Chopped break",
+      "kind": "sample",
+      "gain": 0.8,
+      "pan": 0.0,
+      "muted": false,
+      "soloed": false,
+      "pattern": {
+        "name": "Rearranged Slices",
+        "seed": 21,
+        "swing": 0.0,
+        "channel": 0,
+        "steps": [
+          {
+            "note": 36,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 36,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 38,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 37,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 36,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 40,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 38,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 43,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 36,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 36,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 38,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 37,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 36,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 40,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 38,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          {
+            "note": 43,
+            "velocity": 0.9,
+            "gate": 0.9,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          }
+        ]
+      },
+      "sample": {
+        "path": "samples/break.wav",
+        "mode": "one_shot",
+        "gain": 0.9,
+        "slices": {
+          "regions": [
+            {
+              "start": 0.0,
+              "end": 0.125
+            },
+            {
+              "start": 0.125,
+              "end": 0.25
+            },
+            {
+              "start": 0.25,
+              "end": 0.375
+            },
+            {
+              "start": 0.375,
+              "end": 0.5
+            },
+            {
+              "start": 0.5,
+              "end": 0.625
+            },
+            {
+              "start": 0.625,
+              "end": 0.75
+            },
+            {
+              "start": 0.75,
+              "end": 0.875
+            },
+            {
+              "start": 0.875,
+              "end": 1.0
+            }
+          ],
+          "select": "note",
+          "base_note": 36
+        },
+        "sample_shaping": {
+          "filter_mode": "low_pass",
+          "filter_cutoff": 9000.0,
+          "filter_resonance": 0.15,
+          "drive_db": 3.0,
+          "transient_attack": 0.35
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Random slices",
+      "kind": "sample",
+      "gain": 0.8,
+      "pan": 0.0,
+      "muted": false,
+      "soloed": false,
+      "pattern": {
+        "name": "Seeded Random",
+        "seed": 22,
+        "swing": 0.0,
+        "channel": 0,
+        "steps": [
+          {
+            "note": 60,
+            "velocity": 0.7,
+            "gate": 0.4,
+            "probability": 0.75,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 60,
+            "velocity": 0.6,
+            "gate": 0.4,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 60,
+            "velocity": 0.7,
+            "gate": 0.4,
+            "probability": 0.75,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 60,
+            "velocity": 0.6,
+            "gate": 0.4,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 60,
+            "velocity": 0.7,
+            "gate": 0.4,
+            "probability": 0.75,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 60,
+            "velocity": 0.6,
+            "gate": 0.4,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 60,
+            "velocity": 0.7,
+            "gate": 0.4,
+            "probability": 0.75,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null,
+          {
+            "note": 60,
+            "velocity": 0.6,
+            "gate": 0.4,
+            "probability": 1.0,
+            "ratchets": 1,
+            "microtiming_frames": 0
+          },
+          null
+        ]
+      },
+      "sample": {
+        "path": "samples/break.wav",
+        "mode": "gate",
+        "gain": 0.6,
+        "release_secs": 0.03,
+        "slices": {
+          "regions": [
+            {
+              "start": 0.0,
+              "end": 0.125
+            },
+            {
+              "start": 0.125,
+              "end": 0.25
+            },
+            {
+              "start": 0.25,
+              "end": 0.375
+            },
+            {
+              "start": 0.375,
+              "end": 0.5
+            },
+            {
+              "start": 0.5,
+              "end": 0.625
+            },
+            {
+              "start": 0.625,
+              "end": 0.75
+            },
+            {
+              "start": 0.75,
+              "end": 0.875
+            },
+            {
+              "start": 0.875,
+              "end": 1.0
+            }
+          ],
+          "select": "random",
+          "seed": 99
+        },
+        "sample_shaping": {
+          "filter_mode": "high_pass",
+          "filter_cutoff": 400.0,
+          "envelope": {
+            "attack_secs": 0.002,
+            "decay_secs": 0.08,
+            "sustain": 0.6,
+            "release_secs": 0.03
+          },
+          "transient_sustain": -0.4
+        }
+      }
+    }
+  ]
+}
