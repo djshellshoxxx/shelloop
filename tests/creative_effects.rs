@@ -41,22 +41,37 @@ fn new_effects_have_stable_ids_and_valid_descriptors() {
     for (kind, names) in [
         (
             EffectKind::Filter,
-            vec!["mode", "cutoff", "resonance", "env_amount", "sync", "depth", "mix"],
+            vec![
+                "mode",
+                "cutoff",
+                "resonance",
+                "env_amount",
+                "sync",
+                "depth",
+                "mix",
+            ],
         ),
         (
             EffectKind::Chorus,
-            vec!["mode", "rate_hz", "sync", "depth", "feedback", "width", "mix"],
+            vec![
+                "mode", "rate_hz", "sync", "depth", "feedback", "width", "mix",
+            ],
         ),
         (
             EffectKind::BeatRepeat,
-            vec!["division", "repeats", "reverse", "gate", "mix", "active", "seed"],
+            vec![
+                "division", "repeats", "reverse", "gate", "mix", "active", "seed",
+            ],
         ),
     ] {
         let got: Vec<_> = effect_params(kind).iter().map(|d| d.name).collect();
         assert_eq!(got, names);
         assert_eq!(EffectKind::parse(kind.name()), Some(kind));
         for (index, d) in effect_params(kind).iter().enumerate() {
-            assert_eq!(find_effect_param(kind, d.name), Some(EffectParamId(index as u8)));
+            assert_eq!(
+                find_effect_param(kind, d.name),
+                Some(EffectParamId(index as u8))
+            );
             assert!(d.min <= d.default && d.default <= d.max);
         }
     }
@@ -67,16 +82,52 @@ fn new_effects_have_stable_ids_and_valid_descriptors() {
 #[test]
 fn filter_modes_pass_and_reject_the_right_bands() {
     let sr = 48_000.0;
-    let mut lp = build(EffectKind::Filter, &[("mode", 0.0), ("cutoff", 1_000.0)], 48_000, 120.0);
-    let mut hp = build(EffectKind::Filter, &[("mode", 2.0), ("cutoff", 1_000.0)], 48_000, 120.0);
+    let mut lp = build(
+        EffectKind::Filter,
+        &[("mode", 0.0), ("cutoff", 1_000.0)],
+        48_000,
+        120.0,
+    );
+    let mut hp = build(
+        EffectKind::Filter,
+        &[("mode", 2.0), ("cutoff", 1_000.0)],
+        48_000,
+        120.0,
+    );
     let mut bp = build(
         EffectKind::Filter,
         &[("mode", 1.0), ("cutoff", 1_000.0), ("resonance", 0.6)],
         48_000,
         120.0,
     );
-    assert!(rms_of(&mut lp, 100.0, sr) > 5.0 * rms_of(&mut build(EffectKind::Filter, &[("mode", 0.0), ("cutoff", 1_000.0)], 48_000, 120.0), 8_000.0, sr));
-    assert!(rms_of(&mut hp, 8_000.0, sr) > 5.0 * rms_of(&mut build(EffectKind::Filter, &[("mode", 2.0), ("cutoff", 1_000.0)], 48_000, 120.0), 100.0, sr));
+    assert!(
+        rms_of(&mut lp, 100.0, sr)
+            > 5.0
+                * rms_of(
+                    &mut build(
+                        EffectKind::Filter,
+                        &[("mode", 0.0), ("cutoff", 1_000.0)],
+                        48_000,
+                        120.0
+                    ),
+                    8_000.0,
+                    sr
+                )
+    );
+    assert!(
+        rms_of(&mut hp, 8_000.0, sr)
+            > 5.0
+                * rms_of(
+                    &mut build(
+                        EffectKind::Filter,
+                        &[("mode", 2.0), ("cutoff", 1_000.0)],
+                        48_000,
+                        120.0
+                    ),
+                    100.0,
+                    sr
+                )
+    );
     let centre = rms_of(&mut bp, 1_000.0, sr);
     let mut bp2 = build(
         EffectKind::Filter,
@@ -89,10 +140,21 @@ fn filter_modes_pass_and_reject_the_right_bands() {
 
 #[test]
 fn filter_mix_zero_is_exactly_dry_and_max_resonance_is_finite() {
-    let mut dry = build(EffectKind::Filter, &[("mix", 0.0), ("cutoff", 300.0)], 44_100, 120.0);
+    let mut dry = build(
+        EffectKind::Filter,
+        &[("mix", 0.0), ("cutoff", 300.0)],
+        44_100,
+        120.0,
+    );
     let mut wild = build(
         EffectKind::Filter,
-        &[("resonance", 0.95), ("cutoff", 400.0), ("env_amount", 1.0), ("sync", 2.0), ("depth", 1.0)],
+        &[
+            ("resonance", 0.95),
+            ("cutoff", 400.0),
+            ("env_amount", 1.0),
+            ("sync", 2.0),
+            ("depth", 1.0),
+        ],
         44_100,
         200.0,
     );
@@ -110,7 +172,12 @@ fn filter_sweep_follows_tempo_and_is_deterministic() {
     let run = |bpm: f64| {
         let mut fx = build(
             EffectKind::Filter,
-            &[("sync", 1.0), ("depth", 1.0), ("cutoff", 1_500.0), ("mode", 0.0)],
+            &[
+                ("sync", 1.0),
+                ("depth", 1.0),
+                ("cutoff", 1_500.0),
+                ("mode", 0.0),
+            ],
             48_000,
             bpm,
         );
@@ -121,9 +188,16 @@ fn filter_sweep_follows_tempo_and_is_deterministic() {
     assert_eq!(run(120.0), run(120.0));
     assert_ne!(run(120.0), run(90.0));
     // set_tempo re-derives the sweep rate to match a fresh instance.
-    let mut fx = build(EffectKind::Filter, &[("sync", 1.0), ("depth", 1.0), ("cutoff", 1_500.0)], 48_000, 90.0);
+    let mut fx = build(
+        EffectKind::Filter,
+        &[("sync", 1.0), ("depth", 1.0), ("cutoff", 1_500.0)],
+        48_000,
+        90.0,
+    );
     fx.set_tempo(120.0);
-    let retuned: Vec<_> = (0..24_000).map(|n| fx.process(sine(n, 3_000.0, 48_000.0), 0.0).0).collect();
+    let retuned: Vec<_> = (0..24_000)
+        .map(|n| fx.process(sine(n, 3_000.0, 48_000.0), 0.0).0)
+        .collect();
     assert_eq!(retuned, run(120.0));
 }
 
@@ -132,7 +206,12 @@ fn flanger_impulse_arrives_at_the_centre_delay_and_channels_stay_isolated() {
     let sr = 48_000;
     let mut fx = build(
         EffectKind::Chorus,
-        &[("mode", 1.0), ("depth", 0.0), ("mix", 1.0), ("feedback", 0.0)],
+        &[
+            ("mode", 1.0),
+            ("depth", 0.0),
+            ("mix", 1.0),
+            ("feedback", 0.0),
+        ],
         sr,
         120.0,
     );
@@ -147,12 +226,20 @@ fn flanger_impulse_arrives_at_the_centre_delay_and_channels_stay_isolated() {
         .unwrap();
     assert_eq!(peak.0, (0.003 * sr as f32) as usize);
     assert!((peak.1 .0 - 1.0).abs() < 1e-4);
-    assert!(out.iter().all(|(_, r)| *r == 0.0), "left input must not leak right");
+    assert!(
+        out.iter().all(|(_, r)| *r == 0.0),
+        "left input must not leak right"
+    );
 }
 
 #[test]
 fn chorus_silence_in_silence_out_and_max_feedback_decays() {
-    let mut fx = build(EffectKind::Chorus, &[("feedback", 0.9), ("mix", 1.0)], 48_000, 120.0);
+    let mut fx = build(
+        EffectKind::Chorus,
+        &[("feedback", 0.9), ("mix", 1.0)],
+        48_000,
+        120.0,
+    );
     for _ in 0..10_000 {
         assert_eq!(fx.process(0.0, 0.0), (0.0, 0.0));
     }
@@ -165,13 +252,26 @@ fn chorus_silence_in_silence_out_and_max_feedback_decays() {
             peak_late = peak_late.max(l.abs()).max(r.abs());
         }
     }
-    assert!(peak_late < 1e-3, "feedback tail must decay, got {peak_late}");
+    assert!(
+        peak_late < 1e-3,
+        "feedback tail must decay, got {peak_late}"
+    );
 }
 
 #[test]
 fn chorus_sync_rate_tracks_tempo() {
-    let mut a = build(EffectKind::Chorus, &[("sync", 1.0), ("mix", 1.0)], 48_000, 120.0);
-    let mut b = build(EffectKind::Chorus, &[("sync", 1.0), ("mix", 1.0)], 48_000, 60.0);
+    let mut a = build(
+        EffectKind::Chorus,
+        &[("sync", 1.0), ("mix", 1.0)],
+        48_000,
+        120.0,
+    );
+    let mut b = build(
+        EffectKind::Chorus,
+        &[("sync", 1.0), ("mix", 1.0)],
+        48_000,
+        60.0,
+    );
     let sig = |n: usize| sine(n, 700.0, 48_000.0);
     let oa: Vec<f32> = (0..30_000).map(|n| a.process(sig(n), sig(n)).0).collect();
     let ob: Vec<f32> = (0..30_000).map(|n| b.process(sig(n), sig(n)).0).collect();
@@ -204,7 +304,11 @@ fn beat_repeat_never_plays_before_a_full_slice_is_captured() {
     let mut fx = repeat_fx(&[("active", 1.0)]);
     let out = run(&mut fx, 0, 1_999);
     for (n, v) in out.iter().enumerate() {
-        assert_eq!(*v, ramp(n), "frame {n} must be dry before capture completes");
+        assert_eq!(
+            *v,
+            ramp(n),
+            "frame {n} must be dry before capture completes"
+        );
     }
 }
 
@@ -273,7 +377,11 @@ fn beat_repeat_reset_discards_captured_audio() {
 #[test]
 fn creative_effects_chain_inside_a_rack_without_allocating_budget_surprises() {
     let mut config = EffectsConfig::default();
-    for kind in [EffectKind::Filter, EffectKind::Chorus, EffectKind::BeatRepeat] {
+    for kind in [
+        EffectKind::Filter,
+        EffectKind::Chorus,
+        EffectKind::BeatRepeat,
+    ] {
         config.master.push(EffectConfig::new(kind));
     }
     config.validate().unwrap();

@@ -286,7 +286,9 @@ impl ModulationConfig {
         route.validate()?;
         let count = usize::from(self.route_count);
         if count >= MAX_ROUTES {
-            return Err(format!("a patch supports at most {MAX_ROUTES} modulation routes"));
+            return Err(format!(
+                "a patch supports at most {MAX_ROUTES} modulation routes"
+            ));
         }
         self.routes[count] = route;
         self.route_count += 1;
@@ -368,7 +370,9 @@ impl TryFrom<ModulationRepr> for ModulationConfig {
             return Err(format!("at most {MAX_MACROS} macros are supported"));
         }
         if repr.routes.len() > MAX_ROUTES {
-            return Err(format!("at most {MAX_ROUTES} modulation routes are supported"));
+            return Err(format!(
+                "at most {MAX_ROUTES} modulation routes are supported"
+            ));
         }
         let mut config = Self::default();
         for (slot, lfo) in repr.lfos.into_iter().enumerate() {

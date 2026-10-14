@@ -4,8 +4,8 @@ use shelloop::modulation::runtime::lfo_value;
 use shelloop::{
     apply_mod_command, parse_mod_command, parse_synth_parameter_command, CompiledModulation,
     CompiledSynthPatch, EngineCommand, LfoWave, ModDest, ModInputs, ModRoute, ModRuntime,
-    ModSource, ModulationConfig, Oscillator, RealtimeSynth, SynthParamId, SynthParamValue,
-    SynthPatch, SyncDivision, MAX_ROUTES, MOD_CONTROL_INTERVAL,
+    ModSource, ModulationConfig, Oscillator, RealtimeSynth, SyncDivision, SynthParamId,
+    SynthParamValue, SynthPatch, MAX_ROUTES, MOD_CONTROL_INTERVAL,
 };
 
 fn render(patch: SynthPatch, sample_rate: f32, frames: usize) -> Vec<f32> {
@@ -74,7 +74,10 @@ fn active_modulation_changes_the_sound_and_stays_bounded() {
         let mut modulated = with_route(patch, route);
         modulated.modulation.lfos[0].rate_hz = 20.0;
         let out = render(modulated, 48_000.0, 6_000);
-        assert!(out.iter().all(|v| v.is_finite() && v.abs() <= 1.0), "{dest:?}");
+        assert!(
+            out.iter().all(|v| v.is_finite() && v.abs() <= 1.0),
+            "{dest:?}"
+        );
         assert_ne!(out, reference, "{dest:?} had no effect");
     }
     assert_ne!(baseline.len(), 0);
@@ -85,7 +88,9 @@ fn lfo_rate_is_wall_clock_across_sample_rates_and_tempo_sync_follows_bpm() {
     for sample_rate in [44_100.0_f32, 48_000.0, 96_000.0] {
         let mut config = ModulationConfig::default();
         config.lfos[0].rate_hz = 5.0;
-        config.add_route(ModRoute::new(ModSource::Lfo1, ModDest::Pan, 1.0)).unwrap();
+        config
+            .add_route(ModRoute::new(ModSource::Lfo1, ModDest::Pan, 1.0))
+            .unwrap();
         let compiled = CompiledModulation::compile(&config, sample_rate).unwrap();
         let mut runtime = ModRuntime::new(sample_rate, 120.0, compiled);
         runtime.note_on(60, [0.0; 2]);
@@ -99,13 +104,18 @@ fn lfo_rate_is_wall_clock_across_sample_rates_and_tempo_sync_follows_bpm() {
             }
             previous = value;
         }
-        assert!((9..=11).contains(&rising), "{sample_rate}: {rising} cycles in 2 s");
+        assert!(
+            (9..=11).contains(&rising),
+            "{sample_rate}: {rising} cycles in 2 s"
+        );
     }
 
     let count = |bpm: f64, retempo: Option<f64>| {
         let mut config = ModulationConfig::default();
         config.lfos[0].sync = Some(SyncDivision::Quarter);
-        config.add_route(ModRoute::new(ModSource::Lfo1, ModDest::Pan, 1.0)).unwrap();
+        config
+            .add_route(ModRoute::new(ModSource::Lfo1, ModDest::Pan, 1.0))
+            .unwrap();
         let compiled = CompiledModulation::compile(&config, 48_000.0).unwrap();
         let mut runtime = ModRuntime::new(48_000.0, bpm, compiled);
         if let Some(new) = retempo {
@@ -131,7 +141,11 @@ fn lfo_rate_is_wall_clock_across_sample_rates_and_tempo_sync_follows_bpm() {
 
 #[test]
 fn sample_and_hold_is_deterministic_per_seed_and_constant_within_a_cycle() {
-    let sequence = |seed: u32| (0..64).map(|cycle| lfo_value(LfoWave::SampleHold, f64::from(cycle) + 0.25, seed)).collect::<Vec<_>>();
+    let sequence = |seed: u32| {
+        (0..64)
+            .map(|cycle| lfo_value(LfoWave::SampleHold, f64::from(cycle) + 0.25, seed))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(sequence(7), sequence(7));
     assert_ne!(sequence(7), sequence(8));
     for cycle in 0..32 {
@@ -146,7 +160,12 @@ fn sample_and_hold_is_deterministic_per_seed_and_constant_within_a_cycle() {
 
 #[test]
 fn lfo_waves_have_expected_shape_and_range() {
-    for wave in [LfoWave::Sine, LfoWave::Triangle, LfoWave::Saw, LfoWave::Square] {
+    for wave in [
+        LfoWave::Sine,
+        LfoWave::Triangle,
+        LfoWave::Saw,
+        LfoWave::Square,
+    ] {
         let mut min = f32::MAX;
         let mut max = f32::MIN;
         for i in 0..1000 {
@@ -167,29 +186,57 @@ fn lfo_waves_have_expected_shape_and_range() {
 fn routes_sum_clamp_and_stay_finite_at_extremes() {
     let mut config = ModulationConfig::default();
     for _ in 0..MAX_ROUTES {
-        config.add_route(ModRoute::new(ModSource::Velocity, ModDest::Tuning, 1.0)).unwrap();
+        config
+            .add_route(ModRoute::new(ModSource::Velocity, ModDest::Tuning, 1.0))
+            .unwrap();
     }
     let compiled = CompiledModulation::compile(&config, 48_000.0).unwrap();
     let mut runtime = ModRuntime::new(48_000.0, 120.0, compiled);
     runtime.note_on(60, [0.0; 2]);
-    let inputs = ModInputs { velocity: 1.0, amp_env: 1.0, filter_env: 1.0, mod_wheel: 1.0 };
+    let inputs = ModInputs {
+        velocity: 1.0,
+        amp_env: 1.0,
+        filter_env: 1.0,
+        mod_wheel: 1.0,
+    };
     let offsets = runtime.next(&inputs);
-    assert_eq!(offsets.tuning_semitones, 24.0, "8 routes x 12 st clamp to +-24");
+    assert_eq!(
+        offsets.tuning_semitones, 24.0,
+        "8 routes x 12 st clamp to +-24"
+    );
 
     // Two routes to one destination add in the defined order-independent sum.
     let mut config = ModulationConfig::default();
     config.macros = [0.5, 1.0];
-    config.add_route(ModRoute::new(ModSource::Macro1, ModDest::Pan, 0.5)).unwrap();
-    config.add_route(ModRoute::new(ModSource::Macro2, ModDest::Pan, -0.25)).unwrap();
-    let mut runtime =
-        ModRuntime::new(48_000.0, 120.0, CompiledModulation::compile(&config, 48_000.0).unwrap());
+    config
+        .add_route(ModRoute::new(ModSource::Macro1, ModDest::Pan, 0.5))
+        .unwrap();
+    config
+        .add_route(ModRoute::new(ModSource::Macro2, ModDest::Pan, -0.25))
+        .unwrap();
+    let mut runtime = ModRuntime::new(
+        48_000.0,
+        120.0,
+        CompiledModulation::compile(&config, 48_000.0).unwrap(),
+    );
     runtime.note_on(60, [0.0; 2]);
     assert!((runtime.next(&inputs).pan - 0.0).abs() < 1e-6);
 
     // Synth output remains finite at every extreme.
     let mut patch = filtered_patch();
-    for dest in [ModDest::Tuning, ModDest::FilterCutoff, ModDest::FilterResonance, ModDest::Amplitude, ModDest::PulseWidth, ModDest::Pan, ModDest::EffectWet] {
-        patch.modulation.add_route(ModRoute::new(ModSource::Lfo1, dest, 1.0)).ok();
+    for dest in [
+        ModDest::Tuning,
+        ModDest::FilterCutoff,
+        ModDest::FilterResonance,
+        ModDest::Amplitude,
+        ModDest::PulseWidth,
+        ModDest::Pan,
+        ModDest::EffectWet,
+    ] {
+        patch
+            .modulation
+            .add_route(ModRoute::new(ModSource::Lfo1, dest, 1.0))
+            .ok();
     }
     patch.modulation.lfos[0].rate_hz = 50.0;
     for sample_rate in [8_000.0, 44_100.0, 192_000.0] {
@@ -205,8 +252,14 @@ fn retrigger_restarts_lfo_phase_and_free_run_joins_shared_phase() {
         config.lfos[0].rate_hz = 1.0;
         config.lfos[0].retrigger = retrigger;
         config.lfos[0].wave = LfoWave::Saw;
-        config.add_route(ModRoute::new(ModSource::Lfo1, ModDest::Pan, 1.0)).unwrap();
-        ModRuntime::new(48_000.0, 120.0, CompiledModulation::compile(&config, 48_000.0).unwrap())
+        config
+            .add_route(ModRoute::new(ModSource::Lfo1, ModDest::Pan, 1.0))
+            .unwrap();
+        ModRuntime::new(
+            48_000.0,
+            120.0,
+            CompiledModulation::compile(&config, 48_000.0).unwrap(),
+        )
     };
     let mut retrig = make(true);
     retrig.note_on(60, [0.5, 0.5]);
@@ -220,7 +273,10 @@ fn retrigger_restarts_lfo_phase_and_free_run_joins_shared_phase() {
 fn legacy_patches_load_unchanged_and_modulation_round_trips() {
     let legacy = SynthPatch::legacy(Oscillator::Saw);
     let json = serde_json::to_value(legacy).unwrap();
-    assert!(json.get("modulation").is_none(), "default modulation is not serialised");
+    assert!(
+        json.get("modulation").is_none(),
+        "default modulation is not serialised"
+    );
     let back: SynthPatch = serde_json::from_value(json).unwrap();
     assert_eq!(back, legacy);
 
@@ -239,26 +295,33 @@ fn legacy_patches_load_unchanged_and_modulation_round_trips() {
 
 #[test]
 fn invalid_modulation_is_rejected_with_clear_errors() {
-    let parse = |json: &str| serde_json::from_str::<ModulationConfig>(json).map_err(|e| e.to_string());
+    let parse =
+        |json: &str| serde_json::from_str::<ModulationConfig>(json).map_err(|e| e.to_string());
     assert!(parse("{}").is_ok());
     assert!(parse(r#"{"version":2}"#).unwrap_err().contains("version"));
     assert!(parse(r#"{"routes":[{"source":"lfo1","dest":"pan","amount":1.5}]}"#).is_err());
     assert!(parse(r#"{"routes":[{"source":"nope","dest":"pan","amount":1.0}]}"#).is_err());
-    assert!(parse(r#"{"routes":[{"source":"lfo1","dest":"pan","amount":0.5,"extra":1}]}"#).is_err());
+    assert!(
+        parse(r#"{"routes":[{"source":"lfo1","dest":"pan","amount":0.5,"extra":1}]}"#).is_err()
+    );
     assert!(parse(r#"{"macros":[0.1,0.2,0.3]}"#).is_err());
     assert!(parse(r#"{"macros":[1.5]}"#).is_err());
     assert!(parse(r#"{"lfos":[{"rate_hz":0.0}]}"#).is_err());
     let nine = format!(
         r#"{{"routes":[{}]}}"#,
-        vec![r#"{"source":"lfo1","dest":"pan","amount":0.1}"#; 9].join(",")
+        [r#"{"source":"lfo1","dest":"pan","amount":0.1}"#; 9].join(",")
     );
     assert!(parse(&nine).unwrap_err().contains("at most 8"));
 
     let mut config = ModulationConfig::default();
     for _ in 0..MAX_ROUTES {
-        config.add_route(ModRoute::new(ModSource::Lfo1, ModDest::Pan, 0.1)).unwrap();
+        config
+            .add_route(ModRoute::new(ModSource::Lfo1, ModDest::Pan, 0.1))
+            .unwrap();
     }
-    assert!(config.add_route(ModRoute::new(ModSource::Lfo1, ModDest::Pan, 0.1)).is_err());
+    assert!(config
+        .add_route(ModRoute::new(ModSource::Lfo1, ModDest::Pan, 0.1))
+        .is_err());
     let mut nan = ModRoute::new(ModSource::Lfo1, ModDest::Pan, f32::NAN);
     assert!(ModulationConfig::default().add_route(nan).is_err());
     nan.amount = 0.0;
@@ -311,13 +374,43 @@ fn macro_and_lfo_synth_parameters_use_stable_ids_and_commands() {
     let (id, value) = parse_synth_parameter_command("synth lfo1_sync off").unwrap();
     let patch = patch.with_parameter(id, value, sample_rate).unwrap();
     assert_eq!(patch.modulation.lfos[0].sync, None);
-    assert!(patch.with_parameter(SynthParamId::Macro2, SynthParamValue::Number(1.5), sample_rate).is_err());
-    assert!(patch.with_parameter(SynthParamId::Lfo1Wave, SynthParamValue::Number(9.0), sample_rate).is_err());
-    assert!(patch.with_parameter(SynthParamId::Lfo1Rate, SynthParamValue::Number(0.0), sample_rate).is_err());
+    assert!(patch
+        .with_parameter(
+            SynthParamId::Macro2,
+            SynthParamValue::Number(1.5),
+            sample_rate
+        )
+        .is_err());
+    assert!(patch
+        .with_parameter(
+            SynthParamId::Lfo1Wave,
+            SynthParamValue::Number(9.0),
+            sample_rate
+        )
+        .is_err());
+    assert!(patch
+        .with_parameter(
+            SynthParamId::Lfo1Rate,
+            SynthParamValue::Number(0.0),
+            sample_rate
+        )
+        .is_err());
     assert!(CompiledSynthPatch::new(sample_rate, patch).is_ok());
     // Stable snake_case identifiers.
-    for name in ["macro1", "macro2", "lfo1_rate", "lfo2_rate", "lfo1_wave", "lfo2_wave", "lfo1_sync", "lfo2_sync"] {
-        assert!(shelloop::params::parse_synth_param(name).is_some(), "{name}");
+    for name in [
+        "macro1",
+        "macro2",
+        "lfo1_rate",
+        "lfo2_rate",
+        "lfo1_wave",
+        "lfo2_wave",
+        "lfo1_sync",
+        "lfo2_sync",
+    ] {
+        assert!(
+            shelloop::params::parse_synth_param(name).is_some(),
+            "{name}"
+        );
     }
 }
 
@@ -325,27 +418,53 @@ fn macro_and_lfo_synth_parameters_use_stable_ids_and_commands() {
 fn macro_value_routes_to_cutoff_and_live_patch_updates_keep_notes_playing() {
     let sample_rate = 48_000.0;
     let mut patch = filtered_patch();
-    patch.modulation.add_route(ModRoute::new(ModSource::Macro1, ModDest::FilterCutoff, -1.0)).unwrap();
+    patch
+        .modulation
+        .add_route(ModRoute::new(
+            ModSource::Macro1,
+            ModDest::FilterCutoff,
+            -1.0,
+        ))
+        .unwrap();
     let mut synth = RealtimeSynth::new_with_patch(sample_rate, patch, 2).unwrap();
-    synth.handle(EngineCommand::NoteOn { channel: 0, note: 69, velocity: 1.0 });
-    let energy = |synth: &mut RealtimeSynth| (0..6_000).map(|_| synth.next_sample().powi(2)).sum::<f32>();
+    synth.handle(EngineCommand::NoteOn {
+        channel: 0,
+        note: 69,
+        velocity: 1.0,
+    });
+    let energy =
+        |synth: &mut RealtimeSynth| (0..6_000).map(|_| synth.next_sample().powi(2)).sum::<f32>();
     let open = energy(&mut synth);
     let closed_patch = patch
-        .with_parameter(SynthParamId::Macro1, SynthParamValue::Number(1.0), sample_rate)
+        .with_parameter(
+            SynthParamId::Macro1,
+            SynthParamValue::Number(1.0),
+            sample_rate,
+        )
         .unwrap();
     assert!(synth.apply_patch(CompiledSynthPatch::new(sample_rate, closed_patch).unwrap()));
     energy(&mut synth); // glide
     let closed = energy(&mut synth);
-    assert!(closed < open * 0.5, "closing the macro should darken the sound ({closed} vs {open})");
+    assert!(
+        closed < open * 0.5,
+        "closing the macro should darken the sound ({closed} vs {open})"
+    );
     assert_eq!(synth.active_voice_count(), 1);
 }
 
 #[test]
 fn mod_wheel_source_follows_engine_command() {
     let mut patch = filtered_patch();
-    patch.modulation.add_route(ModRoute::new(ModSource::ModWheel, ModDest::Amplitude, -1.0)).unwrap();
+    patch
+        .modulation
+        .add_route(ModRoute::new(ModSource::ModWheel, ModDest::Amplitude, -1.0))
+        .unwrap();
     let mut synth = RealtimeSynth::new_with_patch(48_000.0, patch, 2).unwrap();
-    synth.handle(EngineCommand::NoteOn { channel: 0, note: 60, velocity: 1.0 });
+    synth.handle(EngineCommand::NoteOn {
+        channel: 0,
+        note: 60,
+        velocity: 1.0,
+    });
     let loud: f32 = (0..4_000).map(|_| synth.next_sample().abs()).sum();
     synth.handle(EngineCommand::ModWheel { value: 1.0 });
     for _ in 0..200 {
@@ -353,22 +472,38 @@ fn mod_wheel_source_follows_engine_command() {
     }
     let silent: f32 = (0..4_000).map(|_| synth.next_sample().abs()).sum();
     assert!(loud > 1.0);
-    assert!(silent < 1e-3, "mod wheel at max with -1 amplitude depth mutes: {silent}");
+    assert!(
+        silent < 1e-3,
+        "mod wheel at max with -1 amplitude depth mutes: {silent}"
+    );
 }
 
 #[test]
 fn pan_and_effect_wet_destinations_are_reported_to_the_track_mixer() {
     let mut patch = filtered_patch();
-    patch.modulation.add_route(ModRoute::new(ModSource::Velocity, ModDest::Pan, -0.5)).unwrap();
-    patch.modulation.add_route(ModRoute::new(ModSource::Velocity, ModDest::EffectWet, 0.25)).unwrap();
+    patch
+        .modulation
+        .add_route(ModRoute::new(ModSource::Velocity, ModDest::Pan, -0.5))
+        .unwrap();
+    patch
+        .modulation
+        .add_route(ModRoute::new(ModSource::Velocity, ModDest::EffectWet, 0.25))
+        .unwrap();
     let mut synth = RealtimeSynth::new_with_patch(48_000.0, patch, 2).unwrap();
     assert_eq!(synth.modulation_pan_and_wet(), (0.0, 0.0));
-    synth.handle(EngineCommand::NoteOn { channel: 0, note: 60, velocity: 1.0 });
+    synth.handle(EngineCommand::NoteOn {
+        channel: 0,
+        note: 60,
+        velocity: 1.0,
+    });
     for _ in 0..64 {
         synth.next_sample();
     }
     let (pan, wet) = synth.modulation_pan_and_wet();
-    assert!((pan + 0.5).abs() < 1e-3 && (wet - 0.25).abs() < 1e-3, "{pan} {wet}");
+    assert!(
+        (pan + 0.5).abs() < 1e-3 && (wet - 0.25).abs() < 1e-3,
+        "{pan} {wet}"
+    );
 }
 
 #[test]

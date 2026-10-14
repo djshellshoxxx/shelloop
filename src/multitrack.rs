@@ -440,7 +440,7 @@ pub struct SampleContext<'a> {
 #[derive(Debug, Clone)]
 enum TrackInstrument {
     Synth(RealtimeSynth),
-    Sample(RealtimeSampler),
+    Sample(Box<RealtimeSampler>),
 }
 
 impl TrackInstrument {
@@ -571,7 +571,7 @@ impl RealtimeTrack {
                     })?;
                 let playback = CompiledSamplePlayback::new(asset, settings, sample_rate)
                     .map_err(|error| format!("sample track {}: {error}", definition.id.0))?;
-                TrackInstrument::Sample(RealtimeSampler::new(playback))
+                TrackInstrument::Sample(Box::new(RealtimeSampler::new(playback)))
             }
             (kind, _) => {
                 return Err(format!(
@@ -785,6 +785,11 @@ impl RealtimeTrack {
             reverse: self
                 .locked_value(LockTarget::Sample(SampleParamId::Reverse))
                 .map(|value| value >= 0.5),
+            slice: self
+                .locked_value(LockTarget::Sample(SampleParamId::Slice))
+                .map(|value| value.round().clamp(0.0, 128.0) as u8)
+                .filter(|slice| *slice > 0),
+            filter_cutoff: self.locked_value(LockTarget::Sample(SampleParamId::FilterCutoff)),
         };
         if let TrackInstrument::Sample(sampler) = &mut self.instrument {
             sampler.set_lock_overrides(overrides);
@@ -1836,6 +1841,28 @@ impl MultiTrackEngine {
         match &mut track.instrument {
             TrackInstrument::Sample(sampler) => Ok(sampler.replace_playback(playback)),
             TrackInstrument::Synth(_) => Err((EngineError::WrongTrackKind, playback)),
+        }
+    }
+
+    /// Installs shaping and a slice table on a sample track. Sounding voices
+    /// glide to the new shaping and keep their slice region; new notes use
+    /// the new table. Allocation-free.
+    pub fn apply_sample_config(
+        &mut self,
+        id: TrackId,
+        shaping: crate::CompiledShaping,
+        slices: crate::SliceTable,
+    ) -> Result<(), EngineError> {
+        let Some(track) = self.tracks.iter_mut().find(|track| track.id == id) else {
+            return Err(EngineError::TrackNotFound(id.0));
+        };
+        match &mut track.instrument {
+            TrackInstrument::Sample(sampler) => {
+                sampler.set_shaping(shaping);
+                sampler.set_slices(slices);
+                Ok(())
+            }
+            TrackInstrument::Synth(_) => Err(EngineError::WrongTrackKind),
         }
     }
 

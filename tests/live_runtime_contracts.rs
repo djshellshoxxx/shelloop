@@ -72,13 +72,22 @@ fn midi_sustain_and_all_notes_off_route_to_engine_controls() {
 
 #[test]
 fn unsupported_live_midi_messages_are_ignored() {
+    // CC 1 is the mod wheel since spec 13; CC 2 stays unmapped.
+    assert_eq!(
+        engine_command_from_midi(MidiEvent::ControlChange {
+            channel: 0,
+            controller: 2,
+            value: 100,
+        }),
+        None
+    );
     assert_eq!(
         engine_command_from_midi(MidiEvent::ControlChange {
             channel: 0,
             controller: 1,
-            value: 100,
+            value: 127,
         }),
-        None
+        Some(EngineCommand::ModWheel { value: 1.0 })
     );
     assert_eq!(
         engine_command_from_midi(MidiEvent::PitchBend {

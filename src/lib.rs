@@ -27,6 +27,7 @@ pub mod recording;
 pub mod resample;
 pub mod runtime;
 pub mod sample;
+pub mod sample_shaping;
 pub mod scenes;
 pub mod scheduler;
 pub mod scope;
@@ -76,12 +77,6 @@ pub use engine::{midi_note_hz, EngineCommand, RealtimeSynth};
 pub use envelope::{AdsrEnvelope, AdsrParams, EnvelopeStage};
 pub use filter::{clamp_cutoff, max_cutoff, FilterMode, FilterParams, StateVariableFilter};
 pub use keyboard::{map_performance_key, shift_octave, PerformanceKey};
-pub use modulation::{
-    apply_mod_command, describe_routes, parse_mod_command, ModCommand,
-    parse_mod_dest, parse_mod_source, CompiledModulation, LfoConfig, LfoWave, ModDest, ModInputs,
-    ModOffsets, ModRoute, ModRuntime, ModSource, ModulationConfig, SyncDivision,
-    MAX_LFOS, MAX_MACROS, MAX_ROUTES, MOD_CONTROL_INTERVAL,
-};
 pub use midi::{decode_message, MidiEvent, MidiPerformanceState};
 #[cfg(feature = "midi")]
 pub use midi_io::{connect_midi_input, list_midi_input_names, MidiInputHandle};
@@ -95,6 +90,12 @@ pub use midi_learn::{
     DEFAULT_LEARN_TIMEOUT_MS, MAX_MAPPINGS,
 };
 pub use mixer::{protect_master, ChannelStrip, SmoothedParam};
+pub use modulation::{
+    apply_mod_command, describe_routes, parse_mod_command, parse_mod_dest, parse_mod_source,
+    CompiledModulation, LfoConfig, LfoWave, ModCommand, ModDest, ModInputs, ModOffsets, ModRoute,
+    ModRuntime, ModSource, ModulationConfig, SyncDivision, MAX_LFOS, MAX_MACROS, MAX_ROUTES,
+    MOD_CONTROL_INTERVAL,
+};
 pub use multitrack::{
     ChainStatus, EngineError, EngineProjectSnapshot, LibraryPattern, MultiTrackEngine,
     MultiTrackProject, PreparedTrack, SampleContext, TrackCommand, TrackDefinition, TrackId,
@@ -133,6 +134,11 @@ pub use sample::{
     SampleAsset, SampleAssetBank, SampleAssetId, SampleLockOverrides, SampleMode, SampleSettings,
     StereoFrame, DEFAULT_SAMPLE_MEMORY_BUDGET,
 };
+pub use sample_shaping::{
+    apply_sample_command, detect_slices, equal_slices, parse_sample_command, CompiledShaping,
+    SampleCommand, SampleEnvelope, SampleFilterMode, SampleShaping, SliceDef, SliceSelect,
+    SliceSettings, SliceTable, VoiceShaping, MAX_SLICES,
+};
 pub use scenes::{
     resolve_chain, resolve_scene, ChainId, ChainStep, FollowAction, PatternId, Scene, SceneChain,
     SceneId, SceneTrackState,
@@ -141,8 +147,8 @@ pub use scheduler::{ScheduledEvent, Scheduler, StepEvent};
 pub use scope::{PanelLayout, PeakHistory, ScopeTap, WaveformStyle, SCOPE_CAPACITY};
 pub use sequencer::LiveSequencer;
 pub use synth::{
-    parse_synth_parameter_command, sync_to_index, CompiledSynthPatch, Oscillator, SynthParamId, SynthParamValue,
-    SynthPatch, SynthVoice,
+    parse_synth_parameter_command, sync_to_index, CompiledSynthPatch, Oscillator, SynthParamId,
+    SynthParamValue, SynthPatch, SynthVoice,
 };
 pub use transport::{Transport, TransportState};
 pub use tui::{route_input, TuiLayout, TuiSnapshot, UiAction, UiInput, UiMode};

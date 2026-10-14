@@ -89,6 +89,10 @@ pub enum SampleParamId {
     Gain,
     /// 0 = configured direction, 1 = reversed.
     Reverse,
+    /// One-based slice to play (0 = use the note/assignment mode).
+    Slice,
+    /// Sample filter cutoff in Hz; switches the filter on for the step.
+    FilterCutoff,
 }
 
 /// Effect insert/send/master slot index.
@@ -180,6 +184,14 @@ pub fn sample_param_descriptor(param: SampleParamId) -> ParamDescriptor {
         SampleParamId::Pitch => ("pitch", -48.0, 48.0, 0.0, ParamCurve::Linear),
         SampleParamId::Gain => ("gain", 0.0, 2.0, 1.0, ParamCurve::Linear),
         SampleParamId::Reverse => ("reverse", 0.0, 1.0, 0.0, ParamCurve::Discrete),
+        SampleParamId::Slice => ("slice", 0.0, 128.0, 0.0, ParamCurve::Discrete),
+        SampleParamId::FilterCutoff => (
+            "filter_cutoff",
+            20.0,
+            20_000.0,
+            20_000.0,
+            ParamCurve::Logarithmic,
+        ),
     };
     ParamDescriptor {
         name,

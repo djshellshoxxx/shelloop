@@ -268,10 +268,9 @@ impl ChorusFx {
             cho::MODE => self.flanger = value >= 0.5,
             cho::RATE_HZ => self.rate_hz = value,
             cho::DEPTH => self.depth.set_target(value, smooth),
-            cho::FEEDBACK => self.feedback.set_target(
-                value.clamp(-MAX_MOD_FEEDBACK, MAX_MOD_FEEDBACK),
-                smooth,
-            ),
+            cho::FEEDBACK => self
+                .feedback
+                .set_target(value.clamp(-MAX_MOD_FEEDBACK, MAX_MOD_FEEDBACK), smooth),
             cho::WIDTH => self.width.set_target(value, smooth),
             cho::MIX => self.mix.set_target(value, smooth),
             _ => {}
@@ -309,10 +308,7 @@ impl ChorusFx {
         } else {
             (CHORUS_CENTER_SECONDS, CHORUS_DEPTH_SECONDS)
         };
-        let phases = [
-            self.phase as f32,
-            (self.phase as f32 + 0.5 * width).fract(),
-        ];
+        let phases = [self.phase as f32, (self.phase as f32 + 0.5 * width).fract()];
         self.phase = (self.phase + rate / f64::from(self.sample_rate)).fract();
 
         let input = [left, right];
@@ -507,7 +503,10 @@ impl BeatRepeatFx {
     pub(crate) fn process(&mut self, left: f32, right: f32) -> (f32, f32) {
         let mix = self.mix.next_value().clamp(0.0, 1.0);
 
-        if self.armed && self.frame % self.slice_len as u64 == 0 && self.filled >= self.slice_len {
+        if self.armed
+            && self.frame.is_multiple_of(self.slice_len as u64)
+            && self.filled >= self.slice_len
+        {
             self.start_playback();
         }
 
@@ -554,10 +553,5 @@ impl BeatRepeatFx {
             input[0] * (1.0 - amount) + wet[0] * amount,
             input[1] * (1.0 - amount) + wet[1] * amount,
         )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_playing(&self) -> bool {
-        self.playing
     }
 }

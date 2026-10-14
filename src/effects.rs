@@ -5,7 +5,7 @@
 //! allocate, lock or panic, and always produce finite output.
 
 use crate::fx_creative::{
-    beat_repeat_max_frames, chorus_buffer_len, cho, flt, BeatRepeatFx, ChorusFx, FilterFx,
+    beat_repeat_max_frames, cho, chorus_buffer_len, flt, BeatRepeatFx, ChorusFx, FilterFx,
     MAX_FILTER_RESONANCE, MAX_MOD_FEEDBACK,
 };
 use crate::mixer::SmoothedParam;
@@ -135,11 +135,16 @@ static REVERB_PARAMS: [ParamDescriptor; 6] = [
     param("width", 0.0, 1.0, 1.0, ParamCurve::Linear),
 ];
 
-
 static FILTER_PARAMS: [ParamDescriptor; 7] = [
     param("mode", 0.0, 2.0, 0.0, ParamCurve::Discrete),
     param("cutoff", 20.0, 20_000.0, 2_000.0, ParamCurve::Logarithmic),
-    param("resonance", 0.0, MAX_FILTER_RESONANCE, 0.2, ParamCurve::Linear),
+    param(
+        "resonance",
+        0.0,
+        MAX_FILTER_RESONANCE,
+        0.2,
+        ParamCurve::Linear,
+    ),
     param("env_amount", -1.0, 1.0, 0.0, ParamCurve::Linear),
     param("sync", 0.0, 6.0, 0.0, ParamCurve::Discrete),
     param("depth", 0.0, 1.0, 0.5, ParamCurve::Linear),
@@ -151,7 +156,13 @@ static CHORUS_PARAMS: [ParamDescriptor; 7] = [
     param("rate_hz", 0.05, 10.0, 0.8, ParamCurve::Logarithmic),
     param("sync", 0.0, 6.0, 0.0, ParamCurve::Discrete),
     param("depth", 0.0, 1.0, 0.5, ParamCurve::Linear),
-    param("feedback", -MAX_MOD_FEEDBACK, MAX_MOD_FEEDBACK, 0.0, ParamCurve::Linear),
+    param(
+        "feedback",
+        -MAX_MOD_FEEDBACK,
+        MAX_MOD_FEEDBACK,
+        0.0,
+        ParamCurve::Linear,
+    ),
     param("width", 0.0, 1.0, 1.0, ParamCurve::Linear),
     param("mix", 0.0, 1.0, 0.5, ParamCurve::Linear),
 ];

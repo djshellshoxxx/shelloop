@@ -193,16 +193,14 @@ impl LiveSequencer {
         while index > 0 {
             index -= 1;
             let pending = self.pending_note_offs[index];
-            if pending.frame <= self.position_frame {
-                if output.len() < Self::MAX_COMMANDS_PER_FRAME {
-                    output.push(EngineCommand::NoteOff {
-                        channel: pending.channel,
-                        note: pending.note,
-                    });
-                    self.pending_note_offs.swap_remove(index);
-                }
-                // Keep an overdue release until a command slot is available.
-                // Dropping it here could leave a synthesizer voice held forever.
+            // An overdue release stays queued until a command slot is free;
+            // dropping it could leave a synthesizer voice held forever.
+            if pending.frame <= self.position_frame && output.len() < Self::MAX_COMMANDS_PER_FRAME {
+                output.push(EngineCommand::NoteOff {
+                    channel: pending.channel,
+                    note: pending.note,
+                });
+                self.pending_note_offs.swap_remove(index);
             }
         }
     }
@@ -250,16 +248,26 @@ mod capacity_regressions {
     fn full_command_buffer_keeps_pending_note_off() {
         let mut seq = rig();
         seq.pending_note_offs.push(PendingNoteOff {
-            frame: 0, channel: 0, note: 60,
+            frame: 0,
+            channel: 0,
+            note: 60,
         });
-        let mut output = vec![EngineCommand::NoteOff { channel: 0, note: 1 };
-            LiveSequencer::MAX_COMMANDS_PER_FRAME];
+        let mut output = vec![
+            EngineCommand::NoteOff {
+                channel: 0,
+                note: 1
+            };
+            LiveSequencer::MAX_COMMANDS_PER_FRAME
+        ];
         seq.emit_note_offs(&mut output);
         assert_eq!(seq.pending_note_offs.len(), 1);
         output.clear();
         seq.emit_note_offs(&mut output);
         assert_eq!(seq.pending_note_offs.len(), 0);
-        assert!(matches!(output.as_slice(), [EngineCommand::NoteOff { note: 60, .. }]));
+        assert!(matches!(
+            output.as_slice(),
+            [EngineCommand::NoteOff { note: 60, .. }]
+        ));
     }
 
     #[test]
@@ -267,7 +275,11 @@ mod capacity_regressions {
         let mut seq = rig();
         seq.pending_note_offs.resize(
             PENDING_NOTE_OFF_CAPACITY,
-            PendingNoteOff { frame: 999, channel: 0, note: 60 },
+            PendingNoteOff {
+                frame: 999,
+                channel: 0,
+                note: 60,
+            },
         );
         seq.event_buffer.push(PatternEvent {
             absolute_frame: 0,

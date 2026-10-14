@@ -2,7 +2,9 @@
 //! with typed enums and precomputed coefficients, so applying it on the
 //! audio thread never parses, validates or allocates.
 
-use super::model::{LfoWave, ModDest, ModSource, ModulationConfig, MAX_LFOS, MAX_MACROS, MAX_ROUTES};
+use super::model::{
+    LfoWave, ModDest, ModSource, ModulationConfig, MAX_LFOS, MAX_MACROS, MAX_ROUTES,
+};
 use super::runtime::MOD_CONTROL_INTERVAL;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

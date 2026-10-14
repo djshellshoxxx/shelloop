@@ -78,6 +78,12 @@ pub enum AudioMessage {
     Restart,
     Panic,
     AddTrack(PreparedTrack),
+    /// Live sample shaping and slice map for a sample track (spec 14).
+    SampleConfig {
+        track: TrackId,
+        shaping: crate::CompiledShaping,
+        slices: crate::SliceTable,
+    },
     ReplaceSample {
         track: TrackId,
         playback: CompiledSamplePlayback,
@@ -155,6 +161,13 @@ pub fn apply_audio_message(
             if let Err((_, track)) = engine.add_track(track) {
                 release(Garbage::Track(track));
             }
+        }
+        AudioMessage::SampleConfig {
+            track,
+            shaping,
+            slices,
+        } => {
+            let _ = engine.apply_sample_config(track, shaping, slices);
         }
         AudioMessage::ReplaceSample { track, playback } => {
             match engine.replace_sample(track, playback) {
@@ -409,6 +422,8 @@ pub struct SessionController {
     dirty: bool,
     /// Monotonic control clock in milliseconds (learn deadlines).
     now_ms: u64,
+    /// Previous sample shaping / slice snapshots for `sample undo`.
+    sample_history: Vec<(TrackId, crate::SampleShaping, crate::SliceSettings)>,
 }
 
 impl SessionController {
@@ -484,6 +499,7 @@ impl SessionController {
             dropped_messages: 0,
             dirty: false,
             now_ms: 0,
+            sample_history: Vec::new(),
         };
         if !orphans.is_empty() {
             controller.dirty = true;
@@ -705,6 +721,7 @@ impl SessionController {
             "patterns" => Ok(self.describe_patterns()),
             "synth" => self.synth_command(line),
             "mod" => self.mod_command(line),
+            "sample" | "slice" => self.sample_command(line),
             "gain" | "pan" | "mute" | "solo" | "send" | "master" => self.mixer_command(line),
             "fx" => self.fx_command(line),
             "scene" | "scenes" => self.scene_command(line, current_frame),
@@ -817,6 +834,70 @@ impl SessionController {
             "queued synth parameter {id:?} for track {}",
             track.0
         ))
+    }
+
+    /// `sample ...` / `slice ...` (spec 14). Edits are validated as a unit,
+    /// delivered as one bounded message and recorded for `sample undo`.
+    fn sample_command(&mut self, line: &str) -> Result<String, String> {
+        let command = crate::parse_sample_command(line)?;
+        let track = self.selected_track();
+        if self.track_kind(track) != Some(TrackKind::Sample) {
+            return Err("selected track is not a sample track".into());
+        }
+        let sample_rate = self.sample_rate;
+        let (mut shaping, mut slices) = {
+            let settings = self
+                .project
+                .tracks
+                .iter()
+                .find(|definition| definition.id == track)
+                .and_then(|definition| definition.sample.as_ref())
+                .ok_or("sample track has no sample settings")?;
+            (settings.sample_shaping, settings.slices.clone())
+        };
+        let previous = (shaping, slices.clone());
+        let message = match command {
+            crate::SampleCommand::SliceList => {
+                return Ok(crate::sample_shaping::command::describe_slices(&slices))
+            }
+            crate::SampleCommand::Undo => {
+                let index = self
+                    .sample_history
+                    .iter()
+                    .rposition(|(id, _, _)| *id == track)
+                    .ok_or("nothing to undo")?;
+                let (_, old_shaping, old_slices) = self.sample_history.remove(index);
+                shaping = old_shaping;
+                slices = old_slices;
+                "undid the last sample edit".to_owned()
+            }
+            other => crate::apply_sample_command(&mut shaping, &mut slices, other)?,
+        };
+        let compiled = crate::CompiledShaping::compile(&shaping, sample_rate)?;
+        let table = crate::SliceTable::compile(&slices)?;
+        self.send(AudioMessage::SampleConfig {
+            track,
+            shaping: compiled,
+            slices: table,
+        })?;
+        if command != crate::SampleCommand::Undo {
+            if self.sample_history.len() >= EDIT_HISTORY_CAPACITY {
+                self.sample_history.remove(0);
+            }
+            self.sample_history.push((track, previous.0, previous.1));
+        }
+        if let Some(settings) = self
+            .project
+            .tracks
+            .iter_mut()
+            .find(|definition| definition.id == track)
+            .and_then(|definition| definition.sample.as_mut())
+        {
+            settings.sample_shaping = shaping;
+            settings.slices = slices;
+        }
+        self.dirty = true;
+        Ok(format!("track {}: {message}", track.0))
     }
 
     fn mod_command(&mut self, line: &str) -> Result<String, String> {
@@ -1983,10 +2064,12 @@ pub fn effect_kind_label(kind: EffectKind) -> &'static str {
 }
 
 /// Sample parameter IDs for inspector listings.
-pub const SAMPLE_PARAMS: [SampleParamId; 3] = [
+pub const SAMPLE_PARAMS: [SampleParamId; 5] = [
     SampleParamId::Pitch,
     SampleParamId::Gain,
     SampleParamId::Reverse,
+    SampleParamId::Slice,
+    SampleParamId::FilterCutoff,
 ];
 
 /// Synth parameters listed by the inspector and accepted by `learn`.

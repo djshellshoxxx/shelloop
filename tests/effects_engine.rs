@@ -701,7 +701,7 @@ fn effects_config_round_trips_through_serde_with_snake_case_names() {
         serde_json::from_str(r#"{"send_buses":[{"effects":[{"kind":"reverb"}]}]}"#).unwrap();
     assert_eq!(minimal.send_buses[0].return_gain, 1.0);
     assert!(minimal.send_buses[0].effects[0].params.is_empty());
-    assert!(serde_json::from_str::<EffectsConfig>(r#"{"master":[{"kind":"chorus"}]}"#).is_err());
+    assert!(serde_json::from_str::<EffectsConfig>(r#"{"master":[{"kind":"phaser"}]}"#).is_err());
     assert!(
         serde_json::from_str::<EffectsConfig>(r#"{"master":[{"kind":"delay","wet":1}]}"#).is_err()
     );

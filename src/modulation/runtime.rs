@@ -178,7 +178,8 @@ impl ModRuntime {
             let lfo = self.compiled.lfos[index];
             *value = lfo_value(lfo.wave, self.lfo_cycles[index], lfo.seed);
             let hz = self.compiled.lfo_hz(index, self.bpm);
-            self.lfo_cycles[index] += hz * MOD_CONTROL_INTERVAL as f64 / f64::from(self.sample_rate);
+            self.lfo_cycles[index] +=
+                hz * MOD_CONTROL_INTERVAL as f64 / f64::from(self.sample_rate);
         }
 
         let mut target = [0.0_f32; ModDest::COUNT];
@@ -208,12 +209,13 @@ impl ModRuntime {
         target[ModDest::Pan.index()] = target[ModDest::Pan.index()].clamp(-1.0, 1.0);
         target[ModDest::EffectWet.index()] = target[ModDest::EffectWet.index()].clamp(-1.0, 1.0);
 
-        for index in 0..ModDest::COUNT {
-            if self.snap {
-                self.current[index] = target[index];
-                self.step[index] = 0.0;
+        let snap = self.snap;
+        for ((current, step), target) in self.current.iter_mut().zip(&mut self.step).zip(target) {
+            if snap {
+                *current = target;
+                *step = 0.0;
             } else {
-                self.step[index] = (target[index] - self.current[index]) / MOD_CONTROL_INTERVAL as f32;
+                *step = (target - *current) / MOD_CONTROL_INTERVAL as f32;
             }
         }
         self.snap = false;

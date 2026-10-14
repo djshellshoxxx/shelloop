@@ -1,6 +1,6 @@
 use crate::{
-    protect_master, CompiledSynthPatch, Oscillator, SynthPatch, SynthVoice, VoiceAllocator, VoiceId,
-    MAX_LFOS,
+    protect_master, CompiledSynthPatch, Oscillator, SynthPatch, SynthVoice, VoiceAllocator,
+    VoiceId, MAX_LFOS,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]

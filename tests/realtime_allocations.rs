@@ -37,6 +37,82 @@ fn allocations_during(f: impl FnOnce()) -> usize {
 
 #[test]
 fn warmed_renders_do_not_allocate() {
+    sample_shaping_does_not_allocate();
+    modulation_and_effects_do_not_allocate();
+}
+
+fn sample_shaping_does_not_allocate() {
+    use shelloop::{
+        equal_slices, CompiledSamplePlayback, CompiledShaping, RealtimeSampler, SampleAsset,
+        SampleAssetId, SampleEnvelope, SampleFilterMode, SampleMode, SampleSettings, SampleShaping,
+        SliceSelect, SliceTable, StereoFrame,
+    };
+    let asset = SampleAsset {
+        id: SampleAssetId(0),
+        source_path: std::path::PathBuf::from("x.wav"),
+        source_sample_rate: 48_000,
+        channels: 1,
+        frames: (0..48_000)
+            .map(|i| StereoFrame::new((i as f32 * 0.05).sin(), (i as f32 * 0.07).cos()))
+            .collect::<Vec<_>>()
+            .into(),
+    };
+    let mut settings = SampleSettings::new("x.wav", SampleMode::Loop);
+    settings.slices.regions = equal_slices(8).unwrap();
+    settings.slices.select = SliceSelect::Random;
+    settings.sample_shaping.filter_mode = SampleFilterMode::LowPass;
+    settings.sample_shaping.filter_cutoff = 2_000.0;
+    settings.sample_shaping.drive_db = 6.0;
+    settings.sample_shaping.transient_attack = 0.5;
+    settings.sample_shaping.envelope = Some(SampleEnvelope {
+        attack_secs: 0.01,
+        decay_secs: 0.05,
+        sustain: 0.7,
+        release_secs: 0.1,
+    });
+    let mut sampler =
+        RealtimeSampler::new(CompiledSamplePlayback::new(&asset, &settings, 48_000).unwrap());
+    let shaping = SampleShaping {
+        filter_mode: SampleFilterMode::HighPass,
+        ..SampleShaping::default()
+    };
+    let compiled = CompiledShaping::compile(&shaping, 48_000).unwrap();
+    let table = SliceTable::compile(&settings.slices).unwrap();
+    for note in 36..40 {
+        sampler.handle(EngineCommand::NoteOn {
+            channel: 0,
+            note,
+            velocity: 1.0,
+        });
+    }
+    for _ in 0..500 {
+        sampler.next_stereo_frame();
+    }
+    assert_eq!(
+        allocations_during(|| {
+            for note in 40..46 {
+                sampler.handle(EngineCommand::NoteOn {
+                    channel: 0,
+                    note,
+                    velocity: 1.0,
+                });
+            }
+            sampler.set_shaping(compiled);
+            sampler.set_slices(table);
+            for note in 36..40 {
+                sampler.handle(EngineCommand::NoteOff { channel: 0, note });
+            }
+            for _ in 0..30_000 {
+                std::hint::black_box(sampler.next_stereo_frame());
+            }
+            sampler.handle(EngineCommand::Panic);
+        }),
+        0,
+        "shaped sample playback must not allocate"
+    );
+}
+
+fn modulation_and_effects_do_not_allocate() {
     // Modulated synth: note-on, patch swap and 20k samples.
     let mut patch = SynthPatch::legacy(Oscillator::Saw);
     patch.filter.mode = shelloop::FilterMode::LowPass;
@@ -48,7 +124,10 @@ fn warmed_renders_do_not_allocate() {
         (ModSource::Velocity, ModDest::Amplitude),
         (ModSource::Macro1, ModDest::Pan),
     ] {
-        patch.modulation.add_route(ModRoute::new(source, dest, 0.4)).unwrap();
+        patch
+            .modulation
+            .add_route(ModRoute::new(source, dest, 0.4))
+            .unwrap();
     }
     let mut synth = RealtimeSynth::new_with_patch(48_000.0, patch, 8).unwrap();
     let swapped = {
@@ -58,7 +137,11 @@ fn warmed_renders_do_not_allocate() {
     };
     let compiled = CompiledSynthPatch::new(48_000.0, swapped).unwrap();
     for note in 48..52 {
-        synth.handle(EngineCommand::NoteOn { channel: 0, note, velocity: 0.8 });
+        synth.handle(EngineCommand::NoteOn {
+            channel: 0,
+            note,
+            velocity: 0.8,
+        });
     }
     for _ in 0..1_000 {
         synth.next_sample();
@@ -66,7 +149,11 @@ fn warmed_renders_do_not_allocate() {
     assert_eq!(
         allocations_during(|| {
             for note in 52..56 {
-                synth.handle(EngineCommand::NoteOn { channel: 0, note, velocity: 0.8 });
+                synth.handle(EngineCommand::NoteOn {
+                    channel: 0,
+                    note,
+                    velocity: 0.8,
+                });
             }
             synth.handle(EngineCommand::ModWheel { value: 0.5 });
             let compiled = CompiledSynthPatch::new(48_000.0, swapped).unwrap();
@@ -82,9 +169,21 @@ fn warmed_renders_do_not_allocate() {
     let _ = compiled;
 
     // Creative effects: process and parameter updates after construction.
-    for kind in [EffectKind::Filter, EffectKind::Chorus, EffectKind::BeatRepeat] {
+    for kind in [
+        EffectKind::Filter,
+        EffectKind::Chorus,
+        EffectKind::BeatRepeat,
+    ] {
         let mut fx = Effect::new(&EffectConfig::new(kind), 48_000, 120.0).unwrap();
-        let active = shelloop::find_effect_param(kind, if kind == EffectKind::BeatRepeat { "active" } else { "mix" }).unwrap();
+        let active = shelloop::find_effect_param(
+            kind,
+            if kind == EffectKind::BeatRepeat {
+                "active"
+            } else {
+                "mix"
+            },
+        )
+        .unwrap();
         for n in 0..5_000 {
             fx.process((n as f32 * 0.01).sin(), 0.0);
         }
@@ -93,7 +192,9 @@ fn warmed_renders_do_not_allocate() {
                 fx.set_param(active, 1.0);
                 fx.set_tempo(140.0);
                 for n in 0..60_000 {
-                    std::hint::black_box(fx.process((n as f32 * 0.01).sin(), (n as f32 * 0.02).cos()));
+                    std::hint::black_box(
+                        fx.process((n as f32 * 0.01).sin(), (n as f32 * 0.02).cos()),
+                    );
                 }
                 fx.set_bypassed(true);
                 for n in 0..2_000 {
