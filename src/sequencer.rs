@@ -193,13 +193,13 @@ impl LiveSequencer {
         while index > 0 {
             index -= 1;
             let pending = self.pending_note_offs[index];
-            if pending.frame <= self.position_frame {
-                if output.len() < Self::MAX_COMMANDS_PER_FRAME {
-                    output.push(EngineCommand::NoteOff {
-                        channel: pending.channel,
-                        note: pending.note,
-                    });
-                }
+            // An overdue release stays queued until a command slot is free;
+            // dropping it could leave a synthesizer voice held forever.
+            if pending.frame <= self.position_frame && output.len() < Self::MAX_COMMANDS_PER_FRAME {
+                output.push(EngineCommand::NoteOff {
+                    channel: pending.channel,
+                    note: pending.note,
+                });
                 self.pending_note_offs.swap_remove(index);
             }
         }
@@ -211,15 +211,17 @@ impl LiveSequencer {
                 break;
             }
 
-            if output.len() < Self::MAX_COMMANDS_PER_FRAME {
+            // Never create an orphan note-off for a note-on that was dropped.
+            // Likewise, do not start a note if its eventual release cannot
+            // be tracked by the bounded pending-note-off queue.
+            if output.len() < Self::MAX_COMMANDS_PER_FRAME
+                && self.pending_note_offs.len() < PENDING_NOTE_OFF_CAPACITY
+            {
                 output.push(EngineCommand::NoteOn {
                     channel: event.channel,
                     note: event.note,
                     velocity: event.velocity,
                 });
-            }
-
-            if self.pending_note_offs.len() < PENDING_NOTE_OFF_CAPACITY {
                 self.pending_note_offs.push(PendingNoteOff {
                     frame: event
                         .absolute_frame
@@ -230,5 +232,68 @@ impl LiveSequencer {
             }
             self.event_index += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod capacity_regressions {
+    use super::*;
+
+    fn rig() -> LiveSequencer {
+        let pattern = Pattern::new("capacity", 1, 0.0, 0, vec![None]).unwrap();
+        LiveSequencer::new(48_000, 120.0, 4, 1, pattern).unwrap()
+    }
+
+    #[test]
+    fn full_command_buffer_keeps_pending_note_off() {
+        let mut seq = rig();
+        seq.pending_note_offs.push(PendingNoteOff {
+            frame: 0,
+            channel: 0,
+            note: 60,
+        });
+        let mut output = vec![
+            EngineCommand::NoteOff {
+                channel: 0,
+                note: 1
+            };
+            LiveSequencer::MAX_COMMANDS_PER_FRAME
+        ];
+        seq.emit_note_offs(&mut output);
+        assert_eq!(seq.pending_note_offs.len(), 1);
+        output.clear();
+        seq.emit_note_offs(&mut output);
+        assert_eq!(seq.pending_note_offs.len(), 0);
+        assert!(matches!(
+            output.as_slice(),
+            [EngineCommand::NoteOff { note: 60, .. }]
+        ));
+    }
+
+    #[test]
+    fn full_release_queue_prevents_new_note_on() {
+        let mut seq = rig();
+        seq.pending_note_offs.resize(
+            PENDING_NOTE_OFF_CAPACITY,
+            PendingNoteOff {
+                frame: 999,
+                channel: 0,
+                note: 60,
+            },
+        );
+        seq.event_buffer.push(PatternEvent {
+            absolute_frame: 0,
+            frame_offset: 0,
+            channel: 0,
+            note: 64,
+            velocity: 1.0,
+            duration_frames: 100,
+            step_index: 0,
+            ratchet_index: 0,
+        });
+        let mut output = Vec::new();
+        seq.emit_note_ons(&mut output);
+        assert!(output.is_empty());
+        assert_eq!(seq.pending_note_offs.len(), PENDING_NOTE_OFF_CAPACITY);
     }
 }

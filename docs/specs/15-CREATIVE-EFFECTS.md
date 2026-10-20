@@ -1,6 +1,6 @@
 # Spec 15 — Creative modulation effects and sound-design performance controls
 
-Status: proposed, not implemented.
+Status: implemented (see the implementation notes at the end of this document).
 
 ## Goal
 Extend saturation, delay and reverb with distinctive musical movement suited to electronic performance, without compromising reliable live playback.
@@ -25,3 +25,14 @@ Automated: impulse response and silence tests, DC/finite checks, maximum-feedbac
 
 ## Phases
 Phase A: reusable modulation/timing primitives and effect parameter schema. Phase B: filter + chorus/flanger with golden renders. Phase C: beat repeat and quantized transport scheduling. Phase D: interface, preset examples, automation and documentation. Release only after cross-platform CI and real-host validation.
+
+## Implementation notes
+
+Implemented in `src/fx_creative.rs` (DSP) and `src/effect_macros.rs` (macros), wired through `effects.rs` as enum-dispatched `EffectKind::{Filter, Chorus, BeatRepeat}`. Tests: `tests/creative_effects.rs`, `tests/effect_macros.rs`, `tests/realtime_allocations.rs`.
+
+* **Filter**: state-variable LP/BP/HP with envelope-follower modulation and a tempo-synced sine sweep; resonance ≤ 0.95.
+* **Chorus/flanger**: bounded stereo delay (35 ms), linear interpolation, per-channel LFO phase via `width`, feedback clamped to ±0.9.
+* **Beat repeat**: fixed buffers for one beat at 20 BPM; engages only at a slice boundary after a full slice is captured; `reset` clears everything. The boundary grid counts frames since the effect's last reset (effects have no transport position), so it is aligned to the host/project grid only when started together with it.
+* **Macros**: two per effect chain with per-scene recall via the engine's smoothed parameter path. Spec 13 macros remain separate synth-patch macros; both can be MIDI-learned/locked through their underlying parameters.
+* **Memory**: counted in `required_memory_bytes` against the existing 64 MiB effects budget.
+* **Not verified**: DAW smoke tests and listening tests.

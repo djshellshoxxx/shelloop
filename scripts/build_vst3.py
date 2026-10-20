@@ -33,9 +33,14 @@ def main(out_dir):
     run("cargo", "build", "--release", "-p", "shelloop-clap")
     run("cmake", "-S", "vst3", "-B", str(BUILD), "-DCMAKE_BUILD_TYPE=Release")
     run("cmake", "--build", str(BUILD), "--config", "Release")
-    found = [p for p in BUILD.rglob("SHELLOOP.vst3")]
+    found = sorted(p for p in BUILD.rglob("SHELLOOP.vst3") if p.is_file() or p.is_dir())
     if not found:
         raise FileNotFoundError(f"SHELLOOP.vst3 was not produced under {BUILD}")
+    if len(found) != 1:
+        raise RuntimeError(
+            "ambiguous VST3 build outputs; remove stale build directories: "
+            + ", ".join(map(str, found))
+        )
     built = found[0]
     run(sys.executable, "-I", "scripts/verify_vst3.py", str(module_binary(built)))
     out = Path(out_dir).resolve()

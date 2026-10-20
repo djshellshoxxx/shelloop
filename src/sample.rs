@@ -6,6 +6,10 @@
 //! [`SampleVoice`]s, so playback never touches the filesystem, allocates or
 //! indexes outside the decoded buffer.
 
+use crate::envelope::{AdsrEnvelope, AdsrParams};
+use crate::sample_shaping::{
+    CompiledShaping, SampleShaping, SliceSelect, SliceSettings, SliceTable, VoiceShaping,
+};
 use crate::EngineCommand;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -355,6 +359,12 @@ pub struct SampleSettings {
     pub release_secs: f32,
     #[serde(default = "default_voices")]
     pub voices: u16,
+    /// Spec 14 filter/drive/envelope/transient block; omitted when unused.
+    #[serde(default, skip_serializing_if = "SampleShaping::is_default")]
+    pub sample_shaping: SampleShaping,
+    /// Spec 14 slice map; omitted when unused.
+    #[serde(default, skip_serializing_if = "SliceSettings::is_default")]
+    pub slices: SliceSettings,
 }
 
 impl SampleSettings {
@@ -375,6 +385,8 @@ impl SampleSettings {
             attack_secs: 0.0,
             release_secs: default_release(),
             voices: DEFAULT_SAMPLE_VOICES,
+            sample_shaping: SampleShaping::default(),
+            slices: SliceSettings::default(),
         }
     }
 
@@ -438,6 +450,8 @@ impl SampleSettings {
                 "sample voices must be between 1 and {MAX_SAMPLE_VOICES}"
             ));
         }
+        self.sample_shaping.validate()?;
+        self.slices.validate()?;
         Ok(())
     }
 }
@@ -487,6 +501,16 @@ pub struct CompiledSamplePlayback {
     release_frames: u32,
     voices: u16,
     interpolation: Interpolation,
+    output_sample_rate: u32,
+    /// Boxed: the slice table is 2 KiB and only read when a sampler
+    /// installs this playback, which keeps the playback itself small.
+    extras: Box<PlaybackExtras>,
+}
+
+#[derive(Debug, Clone)]
+struct PlaybackExtras {
+    shaping: CompiledShaping,
+    slices: SliceTable,
 }
 
 impl CompiledSamplePlayback {
@@ -541,7 +565,35 @@ impl CompiledSamplePlayback {
             release_frames: seconds_to_frames(settings.release_secs),
             voices: settings.voices,
             interpolation: Interpolation::Linear,
+            output_sample_rate,
+            extras: Box::new(PlaybackExtras {
+                shaping: CompiledShaping::compile(&settings.sample_shaping, output_sample_rate)?,
+                slices: SliceTable::compile(&settings.slices)?,
+            }),
         })
+    }
+
+    pub fn shaping(&self) -> &CompiledShaping {
+        &self.extras.shaping
+    }
+
+    pub fn slices(&self) -> &SliceTable {
+        &self.extras.slices
+    }
+
+    pub fn frame_count(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// Frame range of slice `index`, clamped to the configured region.
+    /// `None` when the slice does not exist or lies outside the region.
+    pub fn slice_frames(&self, slices: &SliceTable, index: usize) -> Option<(usize, usize)> {
+        let slice = slices.region(index)?;
+        let len = self.frames.len();
+        let to_frame = |position: f64| ((position * len as f64).round() as usize).min(len);
+        let start = to_frame(slice.start).max(self.start_frame);
+        let end = to_frame(slice.end).min(self.end_frame);
+        (start < end).then_some((start, end))
     }
 
     pub fn mode(&self) -> SampleMode {
@@ -593,10 +645,26 @@ pub struct SampleVoice {
     key_held: bool,
     started_order: u64,
     reverse: bool,
+    region_start: usize,
+    region_end: usize,
+    loop_start: usize,
+    loop_end: usize,
+    sample_rate: f32,
+    shaped: bool,
+    shape: VoiceShaping,
+    use_adsr: bool,
+    adsr: AdsrEnvelope,
 }
 
 impl Default for SampleVoice {
     fn default() -> Self {
+        Self::new(48_000)
+    }
+}
+
+impl SampleVoice {
+    pub fn new(sample_rate: u32) -> Self {
+        let sample_rate = sample_rate.max(1);
         Self {
             phase: VoicePhase::Idle,
             position: 0.0,
@@ -610,11 +678,27 @@ impl Default for SampleVoice {
             key_held: false,
             started_order: 0,
             reverse: false,
+            region_start: 0,
+            region_end: 0,
+            loop_start: 0,
+            loop_end: 0,
+            sample_rate: sample_rate as f32,
+            shaped: false,
+            shape: VoiceShaping::new(sample_rate),
+            use_adsr: false,
+            adsr: AdsrEnvelope::new(
+                sample_rate as f32,
+                AdsrParams {
+                    attack_secs: 0.0,
+                    decay_secs: 0.0,
+                    sustain: 1.0,
+                    release_secs: 0.0,
+                },
+            )
+            .expect("default envelope is valid"),
         }
     }
-}
 
-impl SampleVoice {
     pub fn is_active(&self) -> bool {
         self.phase != VoicePhase::Idle
     }
@@ -629,6 +713,8 @@ impl SampleVoice {
         playback: &CompiledSamplePlayback,
         trigger: VoiceTrigger,
         overrides: SampleLockOverrides,
+        region: VoiceRegion,
+        shaping: &CompiledShaping,
     ) {
         let VoiceTrigger {
             channel,
@@ -645,17 +731,28 @@ impl SampleVoice {
                 * 2.0_f64.powf(f64::from(overrides.pitch_semitones) / 12.0))
             .clamp(MIN_PLAYBACK_INCREMENT, MAX_PLAYBACK_INCREMENT)
         };
+        self.region_start = region.start;
+        self.region_end = region.end;
+        self.loop_start = region.loop_start;
+        self.loop_end = region.loop_end;
         self.position = if self.reverse {
-            (playback.end_frame - 1) as f64
+            (self.region_end - 1) as f64
         } else {
-            playback.start_frame as f64
+            self.region_start as f64
         };
+        self.shape.start(shaping, overrides.filter_cutoff);
+        self.shaped = self.shape.is_active();
+        self.use_adsr = shaping.envelope.is_some();
+        if let Some(params) = shaping.envelope {
+            self.adsr.update_params(params);
+            self.adsr.note_on();
+        }
         self.amplitude = velocity.clamp(0.0, 1.0) * playback.gain * overrides.gain;
         self.channel = channel;
         self.note = note;
         self.key_held = true;
         self.started_order = order;
-        if playback.attack_frames == 0 {
+        if self.use_adsr || playback.attack_frames == 0 {
             self.level = 1.0;
             self.level_step = 0.0;
             self.attack_remaining = 0;
@@ -671,6 +768,15 @@ impl SampleVoice {
         if self.phase != VoicePhase::Playing || playback.mode == SampleMode::OneShot {
             return;
         }
+        if self.use_adsr {
+            self.adsr.note_off();
+            if self.adsr.is_active() {
+                self.phase = VoicePhase::Releasing;
+            } else {
+                self.stop();
+            }
+            return;
+        }
         if playback.release_frames == 0 {
             self.stop();
             return;
@@ -681,6 +787,7 @@ impl SampleVoice {
     }
 
     fn stop(&mut self) {
+        self.adsr.reset();
         self.phase = VoicePhase::Idle;
         self.key_held = false;
         self.level = 0.0;
@@ -699,8 +806,8 @@ impl SampleVoice {
 
         // Bounds check before every read: the position is always inside
         // [start_frame, end_frame) here, and the neighbour is wrapped or clamped.
-        if self.position < playback.start_frame as f64
-            || self.position >= playback.end_frame as f64
+        if self.position < self.region_start as f64
+            || self.position >= self.region_end as f64
             || !self.position.is_finite()
         {
             self.stop();
@@ -711,24 +818,42 @@ impl SampleVoice {
         let next = if self.reverse {
             // Reading backwards, the next frame in time is the one below, but
             // interpolation is always between `index` and `index + 1`.
-            (index + 1).min(playback.end_frame - 1)
-        } else if looping && index + 1 >= playback.loop_end {
-            playback.loop_start
+            (index + 1).min(self.region_end - 1)
+        } else if looping && index + 1 >= self.loop_end {
+            self.loop_start
         } else {
-            (index + 1).min(playback.end_frame - 1)
+            (index + 1).min(self.region_end - 1)
         };
         let frame = playback
             .interpolation
             .read(&playback.frames, index, next, fraction);
 
-        let gain = self.amplitude * self.level;
+        let (mut source_left, mut source_right) = (frame.left, frame.right);
+        if self.shaped {
+            (source_left, source_right) =
+                self.shape
+                    .process(self.sample_rate, source_left, source_right);
+        }
+        let level = if self.use_adsr {
+            self.adsr.next_value()
+        } else {
+            self.level
+        };
+        let gain = self.amplitude * level;
         let out = StereoFrame::new(
-            frame.left * gain * playback.left_gain,
-            frame.right * gain * playback.right_gain,
+            source_left * gain * playback.left_gain,
+            source_right * gain * playback.right_gain,
         );
 
-        self.advance_level();
-        self.advance_position(playback, looping);
+        if self.use_adsr {
+            if !self.adsr.is_active() {
+                self.stop();
+                return out;
+            }
+        } else {
+            self.advance_level();
+        }
+        self.advance_position(looping);
         out
     }
 
@@ -752,19 +877,18 @@ impl SampleVoice {
         }
     }
 
-    fn advance_position(&mut self, playback: &CompiledSamplePlayback, looping: bool) {
+    fn advance_position(&mut self, looping: bool) {
         if self.phase == VoicePhase::Idle {
             return;
         }
         if self.reverse {
             self.position -= self.increment;
             if looping {
-                let loop_start = playback.loop_start as f64;
-                let loop_len = (playback.loop_end - playback.loop_start) as f64;
+                let loop_start = self.loop_start as f64;
+                let loop_len = (self.loop_end - self.loop_start) as f64;
                 if self.position < loop_start {
-                    self.position =
-                        playback.loop_end as f64 - (loop_start - self.position) % loop_len;
-                    if self.position >= playback.loop_end as f64 {
+                    self.position = self.loop_end as f64 - (loop_start - self.position) % loop_len;
+                    if self.position >= self.loop_end as f64 {
                         self.position = loop_start;
                     }
                 }
@@ -772,8 +896,8 @@ impl SampleVoice {
         } else {
             self.position += self.increment;
             if looping {
-                let loop_start = playback.loop_start as f64;
-                let loop_end = playback.loop_end as f64;
+                let loop_start = self.loop_start as f64;
+                let loop_end = self.loop_end as f64;
                 if self.position >= loop_end {
                     let loop_len = loop_end - loop_start;
                     self.position = loop_start + (self.position - loop_start) % loop_len;
@@ -782,8 +906,7 @@ impl SampleVoice {
         }
         // Retire the voice as soon as it leaves the region, so the voice count
         // drops on the frame that played the last sample rather than one later.
-        if self.position < playback.start_frame as f64 || self.position >= playback.end_frame as f64
-        {
+        if self.position < self.region_start as f64 || self.position >= self.region_end as f64 {
             self.stop();
         }
     }
@@ -797,6 +920,20 @@ pub struct RealtimeSampler {
     voices: Vec<SampleVoice>,
     next_order: u64,
     overrides: SampleLockOverrides,
+    shaping: CompiledShaping,
+    slices: SliceTable,
+    /// xorshift32 state for `SliceSelect::Random`; reset by panic and by
+    /// installing a new slice table so a restarted pattern repeats exactly.
+    rng: u32,
+}
+
+/// Playable range for one voice, resolved before the voice starts.
+#[derive(Debug, Clone, Copy)]
+struct VoiceRegion {
+    start: usize,
+    end: usize,
+    loop_start: usize,
+    loop_end: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -816,6 +953,11 @@ pub struct SampleLockOverrides {
     pub gain: f32,
     /// Forces playback direction when set.
     pub reverse: Option<bool>,
+    /// One-based slice to play instead of the note-selected one.
+    pub slice: Option<u8>,
+    /// Filter cutoff in Hz; also switches the filter on (low-pass when the
+    /// configured filter mode is off).
+    pub filter_cutoff: Option<f32>,
 }
 
 impl Default for SampleLockOverrides {
@@ -824,14 +966,19 @@ impl Default for SampleLockOverrides {
             pitch_semitones: 0.0,
             gain: 1.0,
             reverse: None,
+            slice: None,
+            filter_cutoff: None,
         }
     }
 }
 
 impl RealtimeSampler {
     pub fn new(playback: CompiledSamplePlayback) -> Self {
-        let voices = vec![SampleVoice::default(); playback.voices()];
+        let voices = vec![SampleVoice::new(playback.output_sample_rate); playback.voices()];
         Self {
+            shaping: playback.extras.shaping,
+            slices: playback.extras.slices,
+            rng: initial_rng(playback.extras.slices.seed()),
             playback,
             voices,
             next_order: 1,
@@ -839,14 +986,100 @@ impl RealtimeSampler {
         }
     }
 
+    pub fn shaping(&self) -> &CompiledShaping {
+        &self.shaping
+    }
+
+    pub fn slices(&self) -> &SliceTable {
+        &self.slices
+    }
+
+    /// Installs new shaping. Sounding voices glide to the new filter, drive
+    /// and transient values over 5 ms; their envelope mode is kept.
+    pub fn set_shaping(&mut self, shaping: CompiledShaping) {
+        if shaping.sample_rate != self.shaping.sample_rate {
+            return;
+        }
+        let smooth = shaping.smoothing_frames();
+        for voice in &mut self.voices {
+            if voice.is_active() {
+                voice.shape.retarget(&shaping, smooth);
+                voice.shaped = voice.shape.is_active();
+                if let (true, Some(params)) = (voice.use_adsr, shaping.envelope) {
+                    voice.adsr.update_params(params);
+                }
+            }
+        }
+        self.shaping = shaping;
+    }
+
+    /// Installs a new slice table for subsequent notes. Sounding voices keep
+    /// the region they copied at note-on, so nothing is cut or invalidated.
+    pub fn set_slices(&mut self, slices: SliceTable) {
+        self.rng = initial_rng(slices.seed());
+        self.slices = slices;
+    }
+
+    fn next_random(&mut self) -> u32 {
+        let mut x = self.rng;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.rng = x;
+        x
+    }
+
+    /// Chooses the region for a note-on: a slice lock wins, then the
+    /// assignment mode. `None` means the note is silent (note outside the
+    /// slice-mapped range, or its slice lies outside the sample region).
+    fn resolve_region(&mut self, note: u8) -> Option<VoiceRegion> {
+        let whole = VoiceRegion {
+            start: self.playback.start_frame,
+            end: self.playback.end_frame,
+            loop_start: self.playback.loop_start,
+            loop_end: self.playback.loop_end,
+        };
+        let count = self.slices.len();
+        let index = match self.overrides.slice {
+            Some(lock) if usize::from(lock) <= count && lock > 0 => Some(usize::from(lock) - 1),
+            _ => match self.slices.select() {
+                SliceSelect::None => None,
+                _ if count == 0 => None,
+                SliceSelect::Note => {
+                    let offset = usize::from(note.checked_sub(self.slices.base_note())?);
+                    if offset >= count {
+                        return None;
+                    }
+                    Some(offset)
+                }
+                SliceSelect::Random => Some(self.next_random() as usize % count),
+            },
+        };
+        let Some(index) = index else {
+            return Some(whole);
+        };
+        let (start, end) = self.playback.slice_frames(&self.slices, index)?;
+        Some(VoiceRegion {
+            start,
+            end,
+            loop_start: start,
+            loop_end: end,
+        })
+    }
+
     /// Set lock overrides for subsequently triggered voices. Sounding voices
     /// keep the values they started with. Non-finite values are ignored.
     pub fn set_lock_overrides(&mut self, overrides: SampleLockOverrides) {
-        if overrides.pitch_semitones.is_finite() && overrides.gain.is_finite() {
+        if overrides.pitch_semitones.is_finite()
+            && overrides.gain.is_finite()
+            && overrides.filter_cutoff.is_none_or(f32::is_finite)
+        {
             self.overrides = SampleLockOverrides {
                 pitch_semitones: overrides.pitch_semitones.clamp(-48.0, 48.0),
                 gain: overrides.gain.clamp(0.0, 2.0),
                 reverse: overrides.reverse,
+                slice: overrides.slice,
+                filter_cutoff: overrides.filter_cutoff.map(|hz| hz.clamp(20.0, 20_000.0)),
             };
         }
     }
@@ -863,6 +1096,9 @@ impl RealtimeSampler {
         for voice in &mut self.voices {
             voice.stop();
         }
+        self.shaping = playback.extras.shaping;
+        self.slices = playback.extras.slices;
+        self.rng = initial_rng(playback.extras.slices.seed());
         std::mem::replace(&mut self.playback, playback)
     }
 
@@ -880,6 +1116,7 @@ impl RealtimeSampler {
 
     pub fn handle(&mut self, command: EngineCommand) {
         match command {
+            EngineCommand::ModWheel { .. } => {}
             EngineCommand::NoteOn {
                 channel,
                 note,
@@ -888,6 +1125,9 @@ impl RealtimeSampler {
                 if !velocity.is_finite() || velocity <= 0.0 || note > 127 {
                     return;
                 }
+                let Some(region) = self.resolve_region(note) else {
+                    return;
+                };
                 let slot = self.choose_slot();
                 let order = self.next_order;
                 self.next_order = self.next_order.wrapping_add(1).max(1);
@@ -900,6 +1140,8 @@ impl RealtimeSampler {
                         order,
                     },
                     self.overrides,
+                    region,
+                    &self.shaping,
                 );
             }
             EngineCommand::NoteOff { channel, note } => {
@@ -923,6 +1165,7 @@ impl RealtimeSampler {
                 for voice in &mut self.voices {
                     voice.stop();
                 }
+                self.rng = initial_rng(self.slices.seed());
             }
         }
     }
@@ -960,6 +1203,10 @@ impl RealtimeSampler {
         // removed here.
         (finite_or_zero(left), finite_or_zero(right))
     }
+}
+
+fn initial_rng(seed: u32) -> u32 {
+    seed.wrapping_mul(2_654_435_761).max(1)
 }
 
 fn finite_or_zero(value: f32) -> f32 {

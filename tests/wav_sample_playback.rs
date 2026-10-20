@@ -588,6 +588,7 @@ fn project(tracks: Vec<TrackDefinition>) -> MultiTrackProject {
         scenes: Vec::new(),
         chains: Vec::new(),
         midi_mappings: Vec::new(),
+        effect_macros: Vec::new(),
     }
 }
 

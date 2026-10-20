@@ -223,6 +223,7 @@ fn multitrack_project_round_trip_preserves_tracks_and_schema() {
         scenes: Vec::new(),
         chains: Vec::new(),
         midi_mappings: Vec::new(),
+        effect_macros: Vec::new(),
     };
 
     project.save_atomic(&path).unwrap();

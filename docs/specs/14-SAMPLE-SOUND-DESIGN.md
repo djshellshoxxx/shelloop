@@ -1,6 +1,6 @@
 # Spec 14 — Sample shaping: transient, filter, envelope and slice playback
 
-Status: proposed, not implemented. Scope: sample tracks, resampling path and their saved projects.
+Status: implemented (see the implementation notes at the end of this document). Scope: sample tracks, resampling path and their saved projects.
 
 ## Goal
 Make one-shot/looped samples more expressive for drums, breaks, bass fragments and texture design while retaining deterministic sequencing.
@@ -30,3 +30,15 @@ Legacy playback parity; 44.1/48/96 kHz envelopes; all slices bounded in forward/
 3. Control/TUI editing and examples.
 4. Optional automated slice markers offline.
 5. Host plugin support only after parity and regression gates.
+
+## Implementation notes
+
+Implemented in `src/sample_shaping/` (`slices`, `shaping`, `command`) and integrated into `src/sample.rs`. Tests: `tests/sample_shaping.rs`, `tests/example_projects.rs`, `tests/realtime_allocations.rs`.
+
+* **Order**: transient shaper → drive → filter → envelope/gain. Neutral stages are skipped, so default settings are bit-identical to the legacy path.
+* **Slices**: normalised positions in project files; a voice copies its frame region at note-on, so replacing the table never disturbs sounding voices. A new table applies to notes started after the message is processed; it is **not** deferred to a musical boundary.
+* **Selection**: `note` (silent outside the mapped range), seeded `random` (rewinds on panic) or the `sample.slice` step lock; a lock beyond the slice count plays the whole region.
+* **Envelope**: the ADSR replaces the legacy attack/release fades only when configured. In `one_shot` mode note-off is still ignored.
+* **Cutoff lock**: `sample.filter_cutoff` also switches the filter on (low-pass) for that step when the configured mode is `off`.
+* **Detection**: `detect_slices` is a library function (the controller does not hold decoded audio); there is no `slice detect` command yet.
+* **Out of scope as specified**: tempo-relative pitch mode and time-stretch. The CLAP/VST3 plugin has no sample engine, so this feature is standalone only.

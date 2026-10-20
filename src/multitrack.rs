@@ -62,6 +62,10 @@ pub struct MultiTrackProject {
     pub chains: Vec<SceneChain>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub midi_mappings: Vec<crate::midi_learn::MidiMapping>,
+    /// Spec 15 performance macros (two per effect chain) with optional
+    /// per-scene recall values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effect_macros: Vec<crate::EffectMacro>,
 }
 
 impl MultiTrackProject {
@@ -79,7 +83,33 @@ impl MultiTrackProject {
             scenes: Vec::new(),
             chains: Vec::new(),
             midi_mappings: Vec::new(),
+            effect_macros: Vec::new(),
         }
+    }
+
+    /// Effect kind at `slot` of the chain at `location`, if it exists.
+    pub fn effect_kind_at(
+        &self,
+        location: EffectLocation,
+        slot: u8,
+    ) -> Option<crate::effects::EffectKind> {
+        let slot = usize::from(slot);
+        match location {
+            EffectLocation::Track(track) => self
+                .tracks
+                .iter()
+                .find(|definition| definition.id == track)?
+                .inserts
+                .get(slot),
+            EffectLocation::Send(bus) => self
+                .effects
+                .send_buses
+                .get(usize::from(bus))?
+                .effects
+                .get(slot),
+            EffectLocation::Master => self.effects.master.get(slot),
+        }
+        .map(|effect| effect.kind)
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -113,6 +143,11 @@ impl MultiTrackProject {
         for mapping in &self.midi_mappings {
             mapping.validate()?;
         }
+        crate::validate_effect_macros(
+            &self.effect_macros,
+            &|location, slot| self.effect_kind_at(location, slot),
+            &self.scenes,
+        )?;
         Ok(())
     }
 
@@ -440,7 +475,7 @@ pub struct SampleContext<'a> {
 #[derive(Debug, Clone)]
 enum TrackInstrument {
     Synth(RealtimeSynth),
-    Sample(RealtimeSampler),
+    Sample(Box<RealtimeSampler>),
 }
 
 impl TrackInstrument {
@@ -549,11 +584,10 @@ impl RealtimeTrack {
                 let patch = definition
                     .synth_patch
                     .unwrap_or_else(|| SynthPatch::legacy(Oscillator::Saw));
-                TrackInstrument::Synth(RealtimeSynth::new_with_patch(
-                    sample_rate as f32,
-                    patch,
-                    polyphony,
-                )?)
+                let mut synth =
+                    RealtimeSynth::new_with_patch(sample_rate as f32, patch, polyphony)?;
+                synth.set_tempo(bpm);
+                TrackInstrument::Synth(synth)
             }
             (TrackKind::Sample, Some(settings)) => {
                 let base_dir = samples.map_or(Path::new("."), |samples| samples.base_dir);
@@ -572,7 +606,7 @@ impl RealtimeTrack {
                     })?;
                 let playback = CompiledSamplePlayback::new(asset, settings, sample_rate)
                     .map_err(|error| format!("sample track {}: {error}", definition.id.0))?;
-                TrackInstrument::Sample(RealtimeSampler::new(playback))
+                TrackInstrument::Sample(Box::new(RealtimeSampler::new(playback)))
             }
             (kind, _) => {
                 return Err(format!(
@@ -786,6 +820,11 @@ impl RealtimeTrack {
             reverse: self
                 .locked_value(LockTarget::Sample(SampleParamId::Reverse))
                 .map(|value| value >= 0.5),
+            slice: self
+                .locked_value(LockTarget::Sample(SampleParamId::Slice))
+                .map(|value| value.round().clamp(0.0, 128.0) as u8)
+                .filter(|slice| *slice > 0),
+            filter_cutoff: self.locked_value(LockTarget::Sample(SampleParamId::FilterCutoff)),
         };
         if let TrackInstrument::Sample(sampler) = &mut self.instrument {
             sampler.set_lock_overrides(overrides);
@@ -865,8 +904,19 @@ impl RealtimeTrack {
         }
 
         let gain = self.gain.next_value();
-        let pan = self.pan.next_value();
-        let send_levels = [self.sends[0].next_value(), self.sends[1].next_value()];
+        let mut pan = self.pan.next_value();
+        let mut send_levels = [self.sends[0].next_value(), self.sends[1].next_value()];
+        // Spec 13 Pan / EffectWet destinations act on the previous sample's
+        // averaged voice offsets (zero unless a route targets them).
+        if let TrackInstrument::Synth(synth) = &self.instrument {
+            let (mod_pan, mod_wet) = synth.modulation_pan_and_wet();
+            if mod_pan != 0.0 {
+                pan = (pan + mod_pan).clamp(-1.0, 1.0);
+            }
+            if mod_wet != 0.0 {
+                send_levels = send_levels.map(|level| (level + mod_wet).clamp(0.0, 1.0));
+            }
+        }
         let strip = ChannelStrip {
             gain,
             pan,
@@ -948,6 +998,8 @@ struct SceneEntry {
 struct CompiledScene {
     id: SceneId,
     entries: Vec<SceneEntry>,
+    /// Effect macro recall applied when the scene launches.
+    effect_writes: Vec<crate::SceneRecall>,
 }
 
 #[derive(Debug, Clone)]
@@ -1159,7 +1211,24 @@ impl MultiTrackEngine {
         }
         engine.send_buses = buses;
         engine.set_scenes(&project.scenes, &project.chains)?;
+        engine.set_effect_macros(project);
         Ok(engine)
+    }
+
+    /// Resolves each scene's effect-macro recall. Control-side only.
+    pub fn set_effect_macros(&mut self, project: &MultiTrackProject) {
+        let recalls = crate::compile_scene_recalls(
+            &project.effect_macros,
+            &project.scenes,
+            &|location, slot| project.effect_kind_at(location, slot),
+        );
+        for scene in &mut self.scenes {
+            scene.effect_writes = recalls
+                .iter()
+                .find(|(id, _)| *id == scene.id)
+                .map(|(_, writes)| writes.clone())
+                .unwrap_or_default();
+        }
     }
 
     /// Compile scenes and chains against the engine's tracks. Control-side
@@ -1197,6 +1266,7 @@ impl MultiTrackEngine {
             compiled.push(CompiledScene {
                 id: scene.id,
                 entries,
+                effect_writes: Vec::new(),
             });
         }
         let mut compiled_chains = Vec::with_capacity(chains.len());
@@ -1381,6 +1451,11 @@ impl MultiTrackEngine {
             }
         }
         self.active_scene = Some(scene.id);
+        // Macro recall goes through the normal smoothed parameter path.
+        for index in 0..self.scenes[scene_index].effect_writes.len() {
+            let (location, slot, param, value) = self.scenes[scene_index].effect_writes[index];
+            let _ = self.set_effect_param(location, slot, param, value);
+        }
     }
 
     /// Queue a scene at `apply_at_frame`. A manual launch stops a running
@@ -1826,6 +1901,28 @@ impl MultiTrackEngine {
         match &mut track.instrument {
             TrackInstrument::Sample(sampler) => Ok(sampler.replace_playback(playback)),
             TrackInstrument::Synth(_) => Err((EngineError::WrongTrackKind, playback)),
+        }
+    }
+
+    /// Installs shaping and a slice table on a sample track. Sounding voices
+    /// glide to the new shaping and keep their slice region; new notes use
+    /// the new table. Allocation-free.
+    pub fn apply_sample_config(
+        &mut self,
+        id: TrackId,
+        shaping: crate::CompiledShaping,
+        slices: crate::SliceTable,
+    ) -> Result<(), EngineError> {
+        let Some(track) = self.tracks.iter_mut().find(|track| track.id == id) else {
+            return Err(EngineError::TrackNotFound(id.0));
+        };
+        match &mut track.instrument {
+            TrackInstrument::Sample(sampler) => {
+                sampler.set_shaping(shaping);
+                sampler.set_slices(slices);
+                Ok(())
+            }
+            TrackInstrument::Synth(_) => Err(EngineError::WrongTrackKind),
         }
     }
 

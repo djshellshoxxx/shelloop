@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to create or update (for example v1.0.0-rc.1)"
+        description: "Release tag to create or update (for example v1.1.0-rc.1)"
         required: true
       prerelease:
         description: "Mark as a pre-release"

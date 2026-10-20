@@ -1,6 +1,6 @@
 # Spec 13 — Modulation matrix and performance macros
 
-Status: proposed, not implemented. Target: standalone engine plus CLAP/VST3 where applicable.
+Status: implemented (see the implementation notes at the end of this document). Target: standalone engine plus CLAP/VST3 where applicable.
 
 ## Goal
 Add expressive, tempo-aware modulation without breaking the v1 projects or allocating on the real-time thread. Support sound design for evolving pads, bass movement, and rhythmic effects.
@@ -29,3 +29,14 @@ Expose stable command IDs for LFO rates/waves, route source/destination/depth, a
 
 ## Delivery
 Implement engine and unit tests first, then control commands/TUI, then CLAP state/automation, then examples and docs. Preserve stable IDs and introduce migration tests before integration.
+
+## Implementation notes
+
+Implemented in `src/modulation/` (`model`, `compile`, `runtime`, plus `command` for the `mod` text commands). Tests live in `tests/modulation.rs` and `tests/realtime_allocations.rs` rather than an in-module `tests` directory.
+
+* **Evaluation**: base value → active step lock → summed modulation → final clamp. Offsets update every 16 samples and are linearly interpolated, which doubles as the smoothing stage; routes may add a one-pole `smoothing_ms`. LFOs are evaluated at the control rate (≈0.33 ms at 48 kHz).
+* **Destinations**: tuning, pulse width, filter cutoff/resonance and amplitude act per voice. `pan` and `effect_wet` are track-level: the engine averages the sounding voices' offsets and the track strip adds them to its pan and send levels (one sample late).
+* **Orphans**: unknown source/destination names fail validation on load rather than being preserved as disabled routes; nothing is ever silently retargeted.
+* **Tempo**: tempo-synced LFOs use the project BPM given at engine construction.
+* **Plugin**: CLAP parameters 15–22 expose LFO 1, five fixed depths and a brightness macro; the VST3 wrapper inherits them. A full 8-route editor is a standalone feature.
+* **Not verified**: DAW automation and VST3 validator runs on real hosts (CI covers factory loading only).

@@ -89,6 +89,10 @@ pub enum SampleParamId {
     Gain,
     /// 0 = configured direction, 1 = reversed.
     Reverse,
+    /// One-based slice to play (0 = use the note/assignment mode).
+    Slice,
+    /// Sample filter cutoff in Hz; switches the filter on for the step.
+    FilterCutoff,
 }
 
 /// Effect insert/send/master slot index.
@@ -180,6 +184,14 @@ pub fn sample_param_descriptor(param: SampleParamId) -> ParamDescriptor {
         SampleParamId::Pitch => ("pitch", -48.0, 48.0, 0.0, ParamCurve::Linear),
         SampleParamId::Gain => ("gain", 0.0, 2.0, 1.0, ParamCurve::Linear),
         SampleParamId::Reverse => ("reverse", 0.0, 1.0, 0.0, ParamCurve::Discrete),
+        SampleParamId::Slice => ("slice", 0.0, 128.0, 0.0, ParamCurve::Discrete),
+        SampleParamId::FilterCutoff => (
+            "filter_cutoff",
+            20.0,
+            20_000.0,
+            20_000.0,
+            ParamCurve::Logarithmic,
+        ),
     };
     ParamDescriptor {
         name,
@@ -229,6 +241,14 @@ pub fn synth_param_descriptor(param: SynthParamId) -> ParamDescriptor {
             true,
         ),
         P::OutputGain => ("output_gain", 0.0, 2.0, 1.0, ParamCurve::Linear, true),
+        P::Macro1 => ("macro1", 0.0, 1.0, 0.0, ParamCurve::Linear, true),
+        P::Macro2 => ("macro2", 0.0, 1.0, 0.0, ParamCurve::Linear, true),
+        P::Lfo1Rate => ("lfo1_rate", 0.01, 50.0, 1.0, ParamCurve::Logarithmic, true),
+        P::Lfo2Rate => ("lfo2_rate", 0.01, 50.0, 1.0, ParamCurve::Logarithmic, true),
+        P::Lfo1Wave => ("lfo1_wave", 0.0, 4.0, 0.0, ParamCurve::Discrete, true),
+        P::Lfo2Wave => ("lfo2_wave", 0.0, 4.0, 0.0, ParamCurve::Discrete, true),
+        P::Lfo1Sync => ("lfo1_sync", 0.0, 11.0, 0.0, ParamCurve::Discrete, true),
+        P::Lfo2Sync => ("lfo2_sync", 0.0, 11.0, 0.0, ParamCurve::Discrete, true),
     };
     ParamDescriptor {
         name,

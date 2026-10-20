@@ -176,6 +176,9 @@ impl Processor {
                     channel,
                     enabled: b >= 64,
                 }),
+                1 => self.synth.handle(EngineCommand::ModWheel {
+                    value: f32::from(b) / 127.0,
+                }),
                 120 | 123 => self.panic(),
                 _ => {}
             },
