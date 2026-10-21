@@ -9,6 +9,10 @@
 #   cmake -S vst3 -B vst3/build -DCMAKE_BUILD_TYPE=Release
 #   cmake --build vst3/build --config Release
 cmake_minimum_required(VERSION 3.21)
+if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+  # clap-wrapper compares this against 10.15 and errors out when it is empty.
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
+endif()
 project(shelloop_vst3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
