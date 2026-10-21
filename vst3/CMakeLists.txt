@@ -27,6 +27,15 @@ FetchContent_Declare(clap-wrapper
   GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(clap-wrapper)
 
+# clap-wrapper builds its own sources with -Werror. Newer GCC (15.x on the
+# ubuntu-latest runner) reports a false-positive -Wstringop-overflow in its
+# vendored sha1.cpp, which stops the build. Downgrade only that one warning,
+# and only for the vendored wrapper's interface options; SHELLOOP's own
+# warning flags are unchanged.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND TARGET clap-wrapper-compile-options)
+  target_compile_options(clap-wrapper-compile-options INTERFACE -Wno-error=stringop-overflow)
+endif()
+
 # clap-wrapper forces the static MSVC runtime (/MT) for the targets it creates
 # itself, while this module and the Rust plugin use the DLL runtime (/MD), as
 # the CLAP build does. Mixing them fails to link, so put every wrapper-owned
