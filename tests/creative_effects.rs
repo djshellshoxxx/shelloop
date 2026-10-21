@@ -381,6 +381,7 @@ fn creative_effects_chain_inside_a_rack_without_allocating_budget_surprises() {
         EffectKind::Filter,
         EffectKind::Chorus,
         EffectKind::BeatRepeat,
+        EffectKind::BitCrusher,
     ] {
         config.master.push(EffectConfig::new(kind));
     }

@@ -173,6 +173,7 @@ fn modulation_and_effects_do_not_allocate() {
         EffectKind::Filter,
         EffectKind::Chorus,
         EffectKind::BeatRepeat,
+        EffectKind::BitCrusher,
     ] {
         let mut fx = Effect::new(&EffectConfig::new(kind), 48_000, 120.0).unwrap();
         let active = shelloop::find_effect_param(
