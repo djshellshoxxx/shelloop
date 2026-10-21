@@ -9,6 +9,7 @@ pub mod effect_macros;
 pub mod effects;
 pub mod engine;
 pub mod envelope;
+pub mod euclid;
 pub mod filter;
 pub mod fx_creative;
 pub mod keyboard;

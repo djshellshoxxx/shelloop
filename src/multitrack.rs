@@ -529,6 +529,9 @@ struct RealtimeTrack {
     soloed: bool,
     smoothing_frames: u32,
     pending_pattern: Option<PendingRevision>,
+    /// Spec 14: a new slice map waiting for its musical boundary on this
+    /// track's clock. One slot; the newest queued map wins.
+    pending_slices: Option<(u64, crate::SliceTable)>,
     inserts: EffectRack,
     locks: [ActiveLock; MAX_LOCKS_PER_STEP],
     lock_len: usize,
@@ -663,6 +666,7 @@ impl RealtimeTrack {
             soloed: definition.soloed,
             smoothing_frames,
             pending_pattern: None,
+            pending_slices: None,
             inserts,
             locks: [NO_LOCK; MAX_LOCKS_PER_STEP],
             lock_len: 0,
@@ -868,6 +872,30 @@ impl RealtimeTrack {
         self.set_locks(&buffer[..len]);
     }
 
+    /// Commit a queued slice map immediately (its boundary belonged to a
+    /// timeline that a restart just discarded).
+    fn commit_pending_slices_now(&mut self) {
+        if let Some((_, slices)) = self.pending_slices.take() {
+            if let TrackInstrument::Sample(sampler) = &mut self.instrument {
+                sampler.set_slices(slices);
+            }
+        }
+    }
+
+    /// Commit a queued slice map once this track's clock reaches its frame.
+    fn apply_pending_slices(&mut self) {
+        let Some((apply_at, slices)) = self.pending_slices else {
+            return;
+        };
+        if apply_at > self.sequencer.position_frame() {
+            return;
+        }
+        self.pending_slices = None;
+        if let TrackInstrument::Sample(sampler) = &mut self.instrument {
+            sampler.set_slices(slices);
+        }
+    }
+
     fn apply_pending_revision(&mut self) {
         let Some(pending) = self.pending_pattern else {
             return;
@@ -892,6 +920,7 @@ impl RealtimeTrack {
         commands: &mut Vec<EngineCommand>,
     ) -> ((f32, f32), [f32; MAX_SEND_BUSES]) {
         self.apply_pending_revision();
+        self.apply_pending_slices();
 
         let mut boundary = None;
         self.sequencer
@@ -1907,23 +1936,42 @@ impl MultiTrackEngine {
     /// Installs shaping and a slice table on a sample track. Sounding voices
     /// glide to the new shaping and keep their slice region; new notes use
     /// the new table. Allocation-free.
+    /// Apply a sample-track edit (spec 14). Shaping takes effect at once.
+    /// The slice map is committed at `apply_at_frame` on the track's clock,
+    /// or immediately when the track's transport is stopped, because a
+    /// stopped clock would otherwise never reach the boundary.
     pub fn apply_sample_config(
         &mut self,
         id: TrackId,
         shaping: crate::CompiledShaping,
         slices: crate::SliceTable,
+        apply_at_frame: u64,
     ) -> Result<(), EngineError> {
         let Some(track) = self.tracks.iter_mut().find(|track| track.id == id) else {
             return Err(EngineError::TrackNotFound(id.0));
         };
-        match &mut track.instrument {
-            TrackInstrument::Sample(sampler) => {
-                sampler.set_shaping(shaping);
-                sampler.set_slices(slices);
-                Ok(())
-            }
-            TrackInstrument::Synth(_) => Err(EngineError::WrongTrackKind),
+        let TrackInstrument::Sample(sampler) = &mut track.instrument else {
+            return Err(EngineError::WrongTrackKind);
+        };
+        sampler.set_shaping(shaping);
+        if track.sequencer.is_playing() {
+            track.pending_slices = Some((apply_at_frame, slices));
+        } else {
+            track.pending_slices = None;
+            sampler.set_slices(slices);
         }
+        Ok(())
+    }
+
+    /// Slice count of a sample track's live table (`None` for other tracks).
+    pub fn track_slice_count(&self, id: TrackId) -> Option<usize> {
+        self.tracks
+            .iter()
+            .find(|track| track.id == id)
+            .and_then(|track| match &track.instrument {
+                TrackInstrument::Sample(sampler) => Some(sampler.slices().len()),
+                TrackInstrument::Synth(_) => None,
+            })
     }
 
     pub fn is_playing(&self) -> bool {
@@ -1957,6 +2005,7 @@ impl MultiTrackEngine {
             track.instrument.handle(EngineCommand::Panic);
             track.set_locks(&[]);
             track.commit_pending_now();
+            track.commit_pending_slices_now();
             track.sequencer.restart();
         }
         self.pending_scene = None;

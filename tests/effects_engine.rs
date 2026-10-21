@@ -5,13 +5,14 @@ use shelloop::{
     MAX_SEND_BUSES, MAX_SEND_EFFECTS, MAX_TRACK_INSERTS,
 };
 
-const KINDS: [EffectKind; 6] = [
+const KINDS: [EffectKind; 7] = [
     EffectKind::Saturation,
     EffectKind::Delay,
     EffectKind::Reverb,
     EffectKind::Filter,
     EffectKind::Chorus,
     EffectKind::BeatRepeat,
+    EffectKind::BitCrusher,
 ];
 
 fn param(kind: EffectKind, name: &str) -> EffectParamId {

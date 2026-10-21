@@ -903,6 +903,7 @@ pub const COMMAND_WORDS: &[&str] = &[
     "length",
     "swing",
     "rotate",
+    "euclid",
     "undo",
     "redo",
     "synth",

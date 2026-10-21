@@ -783,3 +783,196 @@ fn controller_edits_reach_the_engine_persist_and_undo() {
         assert!(l.is_finite() && r.is_finite());
     }
 }
+
+fn write_hits_wav(path: &std::path::Path) {
+    let rate = 48_000u32;
+    let mut writer = hound::WavWriter::create(
+        path,
+        hound::WavSpec {
+            channels: 1,
+            sample_rate: rate,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        },
+    )
+    .unwrap();
+    let mut frames = vec![0.0f32; rate as usize];
+    for hit in [0.0f64, 0.25, 0.5, 0.75] {
+        let start = (hit * f64::from(rate)) as usize + 100;
+        for i in 0..2_000 {
+            frames[start + i] = (-(i as f32) / 400.0).exp() * (i as f32 * 0.3).sin();
+        }
+    }
+    for value in frames {
+        writer.write_sample(value).unwrap();
+    }
+    writer.finalize().unwrap();
+}
+
+#[test]
+fn slice_detect_parses_with_defaults_and_bounds() {
+    use shelloop::{parse_sample_command, SampleCommand};
+    assert_eq!(
+        parse_sample_command("slice detect").unwrap(),
+        SampleCommand::SliceDetect {
+            count: 16,
+            sensitivity: 0.5
+        }
+    );
+    assert_eq!(
+        parse_sample_command("slice detect 8 0.25").unwrap(),
+        SampleCommand::SliceDetect {
+            count: 8,
+            sensitivity: 0.25
+        }
+    );
+    for bad in [
+        "slice detect 0",
+        "slice detect 2.5",
+        "slice detect 4 1.5",
+        "slice detect 4 nan",
+        "slice detect -1",
+    ] {
+        assert!(parse_sample_command(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn controller_slice_detect_is_undoable_and_reports_missing_files() {
+    let dir = tempfile::tempdir().unwrap();
+    write_hits_wav(&dir.path().join("hits.wav"));
+    let pattern = Pattern::new("p", 1, 0.0, 0, vec![None, None, None, None]).unwrap();
+    let mut track = TrackDefinition::new(TrackId(1), "drums", TrackKind::Sample, pattern.clone());
+    track.sample = Some(SampleSettings::new("hits.wav", SampleMode::OneShot));
+    let mut missing = TrackDefinition::new(TrackId(2), "gone", TrackKind::Sample, pattern);
+    missing.sample = Some(SampleSettings::new("missing.wav", SampleMode::OneShot));
+    let engine_project = MultiTrackProject::new(3, 120.0, 4, vec![track.clone()]);
+    let project = MultiTrackProject::new(3, 120.0, 4, vec![track, missing]);
+    let (sender, receiver) = bounded(8);
+    let mut controller =
+        SessionController::new(project, Some(dir.path().join("p.json")), 48_000, sender).unwrap();
+    let (garbage, _) = bounded(4);
+    let mut bank = SampleAssetBank::new(usize::MAX);
+    bank.load_file(dir.path().join("hits.wav")).unwrap();
+    let ctx = SampleContext {
+        assets: &bank,
+        base_dir: dir.path(),
+    };
+    let mut engine = MultiTrackEngine::from_project(48_000, 4, &engine_project, Some(ctx)).unwrap();
+    macro_rules! run {
+        ($line:expr) => {{
+            let result = controller.execute($line, engine.position_frame());
+            while let Ok(message) = receiver.try_recv() {
+                apply_audio_message(&mut engine, message, &garbage);
+            }
+            result
+        }};
+    }
+    run!("slice clear").unwrap();
+    let message = run!("slice detect 8 0.6").unwrap();
+    assert!(message.contains("detected"), "{message}");
+    let detected = controller.project().tracks[0]
+        .sample
+        .as_ref()
+        .unwrap()
+        .slices
+        .regions
+        .len();
+    assert!((2..=8).contains(&detected), "found {detected} slices");
+    run!("sample undo").unwrap();
+    assert!(
+        controller.project().tracks[0]
+            .sample
+            .as_ref()
+            .unwrap()
+            .slices
+            .regions
+            .is_empty(),
+        "undo restores the previous (cleared) slice list"
+    );
+    run!("track 2").unwrap();
+    assert!(run!("slice detect 4").is_err(), "file missing on track 2");
+}
+
+#[test]
+fn slice_maps_commit_on_the_next_bar_while_playing_and_immediately_when_paused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (project, bank) = drum_project(dir.path());
+    let ctx = SampleContext {
+        assets: &bank,
+        base_dir: dir.path(),
+    };
+    let mut engine = MultiTrackEngine::from_project(48_000, 4, &project, Some(ctx)).unwrap();
+    let (sender, receiver) = bounded(8);
+    let mut controller = SessionController::new(project, None, 48_000, sender).unwrap();
+    let (garbage, _) = bounded(4);
+    macro_rules! run {
+        ($line:expr) => {{
+            let result = controller.execute($line, engine.position_frame());
+            while let Ok(message) = receiver.try_recv() {
+                apply_audio_message(&mut engine, message, &garbage);
+            }
+            result
+        }};
+    }
+    let id = TrackId(1);
+    assert_eq!(engine.track_slice_count(id), Some(4));
+    // Playing at 120 BPM in 4/4: a bar is 96 000 frames.
+    for _ in 0..1_000 {
+        engine.next_stereo_frame();
+    }
+    run!("slice auto 2").unwrap();
+    assert_eq!(
+        engine.track_slice_count(id),
+        Some(4),
+        "the old map stays live until the bar"
+    );
+    for _ in 0..(96_000 - 1_000) {
+        engine.next_stereo_frame();
+    }
+    assert_eq!(engine.track_slice_count(id), Some(4), "one frame early");
+    engine.next_stereo_frame();
+    assert_eq!(engine.track_slice_count(id), Some(2), "commits on the bar");
+
+    // Paused: the clock cannot reach a boundary, so the edit lands at once.
+    run!("pause").unwrap();
+    run!("slice auto 3").unwrap();
+    assert_eq!(engine.track_slice_count(id), Some(3));
+}
+
+#[test]
+fn queued_slice_map_commits_at_once_when_the_clock_restarts() {
+    // A restart discards the timeline the edit was quantised against, so a
+    // pending slice map must not wait for a frame the restarted clock would
+    // reach only after a full bar.
+    let dir = tempfile::tempdir().unwrap();
+    let (project, bank) = drum_project(dir.path());
+    let ctx = SampleContext {
+        assets: &bank,
+        base_dir: dir.path(),
+    };
+    let mut engine = MultiTrackEngine::from_project(48_000, 4, &project, Some(ctx)).unwrap();
+    let (sender, receiver) = bounded(8);
+    let mut controller = SessionController::new(project, None, 48_000, sender).unwrap();
+    let (garbage, _) = bounded(4);
+    macro_rules! run {
+        ($line:expr) => {{
+            let result = controller.execute($line, engine.position_frame());
+            while let Ok(message) = receiver.try_recv() {
+                apply_audio_message(&mut engine, message, &garbage);
+            }
+            result
+        }};
+    }
+    for _ in 0..1_000 {
+        engine.next_stereo_frame();
+    }
+    run!("slice auto 2").unwrap();
+    assert_eq!(engine.track_slice_count(TrackId(1)), Some(4));
+    run!("restart").unwrap();
+    assert_eq!(
+        engine.track_slice_count(TrackId(1)),
+        Some(2),
+        "restart commits the pending map"
+    );
+}

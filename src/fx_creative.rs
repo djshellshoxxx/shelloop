@@ -1,5 +1,5 @@
 //! Spec 15 — creative effects: tempo-synced multimode filter, stereo
-//! chorus/flanger and beat repeat.
+//! chorus/flanger and beat repeat. Spec 17 adds the bitcrusher.
 //!
 //! Each state type is owned by [`crate::effects::Effect`] (enum dispatch) and
 //! follows the same contract as the v1 effects: every buffer is allocated in
@@ -552,6 +552,73 @@ impl BeatRepeatFx {
         (
             input[0] * (1.0 - amount) + wet[0] * amount,
             input[1] * (1.0 - amount) + wet[1] * amount,
+        )
+    }
+}
+
+// -------------------------------------------------------------- bitcrusher
+
+pub(crate) mod bcr {
+    pub const BITS: usize = 0;
+    pub const DOWNSAMPLE: usize = 1;
+    pub const MIX: usize = 2;
+}
+
+/// Spec 17: sample-and-hold rate reduction and signed bit-depth quantiser.
+/// No buffers: the held frame is two `f32` values.
+#[derive(Debug, Clone)]
+pub(crate) struct BitCrushFx {
+    /// Quantiser levels per unit: `2^(bits-1)`.
+    levels: f32,
+    /// Hold length in frames (>= 1).
+    hold: u32,
+    counter: u32,
+    held: [f32; 2],
+    mix: SmoothedParam,
+}
+
+impl BitCrushFx {
+    pub(crate) fn new() -> Self {
+        Self {
+            levels: 128.0,
+            hold: 1,
+            counter: 0,
+            held: [0.0; 2],
+            mix: SmoothedParam::new(1.0),
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.counter = 0;
+        self.held = [0.0; 2];
+    }
+
+    pub(crate) fn apply(&mut self, index: usize, value: f32, smooth: u32) {
+        match index {
+            bcr::BITS => self.levels = 2f32.powf(value.round().clamp(1.0, 16.0) - 1.0),
+            bcr::DOWNSAMPLE => self.hold = value.round().clamp(1.0, 32.0) as u32,
+            bcr::MIX => self.mix.set_target(value, smooth),
+            _ => {}
+        }
+    }
+
+    pub(crate) fn process(&mut self, left: f32, right: f32) -> (f32, f32) {
+        let mix = self.mix.next_value().clamp(0.0, 1.0);
+        if self.counter == 0 {
+            let levels = self.levels;
+            self.held = [
+                (left * levels).round() / levels,
+                (right * levels).round() / levels,
+            ];
+        }
+        self.counter += 1;
+        if self.counter >= self.hold {
+            self.counter = 0;
+        }
+        let wet = self.held;
+        (
+            left * (1.0 - mix) + finite_or_zero(wet[0]) * mix,
+            right * (1.0 - mix) + finite_or_zero(wet[1]) * mix,
         )
     }
 }
