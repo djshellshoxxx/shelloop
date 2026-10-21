@@ -4,7 +4,8 @@ Rust toolchain (stable). Linux real-time audio needs ALSA headers (`libasound2-d
 
 ```sh
 cargo build
-cargo test --all-targets                 # core: 460 tests pass across the workspace on this snapshot
+cargo test --workspace      # default features: 460 passed, 0 failed on this snapshot
+cargo test --all-targets     # default features: 431 passed, 0 failed on this snapshot
 cargo build --release --features realtime-audio,midi,terminal-ui
 cargo test --all-targets --features realtime-audio,midi,terminal-ui
 ```
