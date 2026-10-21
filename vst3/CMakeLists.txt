@@ -27,7 +27,7 @@ FetchContent_Declare(clap-wrapper
   GIT_SHALLOW TRUE)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
   # Newer GCC emits new warnings (stringop-overflow, dangling-reference) in clap-wrapper vendored code that its -Werror turns into failures.
-  string(APPEND CMAKE_CXX_FLAGS " -Wno-error")
+  string(APPEND CMAKE_CXX_FLAGS " -Wno-error=stringop-overflow -Wno-error=dangling-reference -Wno-error=array-bounds -Wno-error=maybe-uninitialized -Wno-error=deprecated-declarations -Wno-error=restrict")
 endif()
 FetchContent_MakeAvailable(clap-wrapper)
 
