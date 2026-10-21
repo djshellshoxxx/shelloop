@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(scale.snap(61), 60); // C# between C and D: tie goes down
         assert_eq!(scale.snap(66), 65); // F# between F and G: down
         assert_eq!(scale.snap(60), 60);
-        assert_eq!(scale.snap(127), 127 - 1); // G9 is out of range for G; 126 is F#
+        assert_eq!(scale.snap(127), 127); // G9 is in C major
     }
 
     #[test]

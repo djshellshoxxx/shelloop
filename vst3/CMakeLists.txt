@@ -26,8 +26,8 @@ FetchContent_Declare(clap-wrapper
   GIT_TAG v0.9.1
   GIT_SHALLOW TRUE)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-  # Newer GCC flags a false positive in clap-wrapper's vendored sha1.cpp under -Werror.
-  string(APPEND CMAKE_CXX_FLAGS " -Wno-error=stringop-overflow")
+  # Newer GCC emits new warnings (stringop-overflow, dangling-reference) in clap-wrapper vendored code that its -Werror turns into failures.
+  string(APPEND CMAKE_CXX_FLAGS " -Wno-error")
 endif()
 FetchContent_MakeAvailable(clap-wrapper)
 
