@@ -38,6 +38,9 @@ All fifteen specifications (`docs/specs/01`–`15`) are implemented. The twelve 
 - Modulation matrix (spec 13): 2 LFOs (sine, triangle, saw, square, seeded sample-and-hold; Hz or tempo divisions), 2 macros, mod wheel, envelopes, velocity and key tracking routed through up to 8 routes per synth patch
 - Sample shaping and slices (spec 14): per-track low-/high-pass filter, drive, ADSR amplitude envelope, zero-latency transient shaper, up to 128 slices selected by note, seeded random or step lock, offline transient detection
 - Creative effects (spec 15): tempo-synced multimode filter, stereo chorus/flanger and quantized beat repeat, usable as inserts, sends or master effects, with two performance macros per effect chain and per-scene recall
+- Euclidean rhythms (spec 16): `euclid <hits> [rotation]` rewrites the selected pattern as one undoable, pattern-quantised edit
+- Bitcrusher (spec 17): bit-depth and sample-rate reduction as an effect kind
+- Slice detection (spec 14): `slice detect`, with slice maps committed on the bar
 - CLAP instrument plugin: polyphonic synth with 23 automatable parameters (including LFO/mod-wheel/macro modulation), host-synced sequencer and saved state
 - Windows/Linux all-feature compile, test, strict Clippy and optimized-release CI gates
 - Tag-triggered release workflow publishing the Windows `.exe`, Linux build and CLAP plugins with SHA-256 checksums
@@ -116,6 +119,7 @@ step 5 micro +120
 length 15
 swing 0.12
 rotate right 1
+euclid 5 2
 undo
 redo
 ```
@@ -799,13 +803,14 @@ Commands (selected sample track; every edit is validated as a unit, applies to n
 
 ```text
 slice auto 8 | slice add 0.0 0.25 | slice delete 3 | slice clear | slice list
+slice detect 16 0.5   (offline transient detection of the track's WAV; defaults 16 and 0.5)
 slice assign note 36 | slice assign random 99 | slice assign none
 sample filter lowpass 900 0.3 | sample filter off
 sample drive 6 | sample envelope 0.01 0.1 0.6 0.3 | sample envelope off
 sample transient 0.5 -0.25 | sample undo
 ```
 
-Offline slice detection is available to tooling as `shelloop::detect_slices` (deterministic transient detection that returns contiguous, validated slices).
+Slice maps (from `slice` commands, `slice detect` and undo) take effect on the next bar of the project grid; a stopped track or a restart applies them at once. Offline detection is also available to tooling as `shelloop::detect_slices`.
 
 ### Creative effects (spec 15)
 
@@ -816,6 +821,7 @@ Use these `kind`s in a track `inserts` list, a send bus or `master`. Parameters 
 | `filter` | `mode` 0 LP / 1 BP / 2 HP, `cutoff`, `resonance` (≤0.95), `env_amount` (envelope follower, −1…1), `sync` (0 off, 1–6 tempo divisions for a cutoff sweep), `depth`, `mix` |
 | `chorus` | `mode` 0 chorus / 1 flanger, `rate_hz`, `sync`, `depth`, `feedback` (−0.9…0.9), `width` (stereo LFO phase), `mix` |
 | `beat_repeat` | `division` (0 ¼, 1 ⅛, 2 1/16, 3 1/32, 4 ⅛ triplet), `repeats` (0 = hold), `reverse`, `gate` (seeded probability of muting a repeat), `mix`, `active`, `seed` |
+| `bitcrusher` | `bits` 1–16 (signed quantiser depth, 16 nearly transparent), `downsample` 1–32 (sample-and-hold frames), `mix`. No buffers, no latency (spec 17) |
 
 Performance macros: every effect chain (a track's inserts, a send bus, the master chain) has two macro knobs that drive one effect parameter each across its whole range, using the parameter's own response curve. Assign and move them live, and store per-scene positions in the project file; they are recalled through the normal smoothed parameter path when the scene launches.
 
