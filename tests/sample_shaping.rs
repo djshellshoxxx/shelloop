@@ -939,3 +939,40 @@ fn slice_maps_commit_on_the_next_bar_while_playing_and_immediately_when_paused()
     run!("slice auto 3").unwrap();
     assert_eq!(engine.track_slice_count(id), Some(3));
 }
+
+#[test]
+fn queued_slice_map_commits_at_once_when_the_clock_restarts() {
+    // A restart discards the timeline the edit was quantised against, so a
+    // pending slice map must not wait for a frame the restarted clock would
+    // reach only after a full bar.
+    let dir = tempfile::tempdir().unwrap();
+    let (project, bank) = drum_project(dir.path());
+    let ctx = SampleContext {
+        assets: &bank,
+        base_dir: dir.path(),
+    };
+    let mut engine = MultiTrackEngine::from_project(48_000, 4, &project, Some(ctx)).unwrap();
+    let (sender, receiver) = bounded(8);
+    let mut controller = SessionController::new(project, None, 48_000, sender).unwrap();
+    let (garbage, _) = bounded(4);
+    macro_rules! run {
+        ($line:expr) => {{
+            let result = controller.execute($line, engine.position_frame());
+            while let Ok(message) = receiver.try_recv() {
+                apply_audio_message(&mut engine, message, &garbage);
+            }
+            result
+        }};
+    }
+    for _ in 0..1_000 {
+        engine.next_stereo_frame();
+    }
+    run!("slice auto 2").unwrap();
+    assert_eq!(engine.track_slice_count(TrackId(1)), Some(4));
+    run!("restart").unwrap();
+    assert_eq!(
+        engine.track_slice_count(TrackId(1)),
+        Some(2),
+        "restart commits the pending map"
+    );
+}

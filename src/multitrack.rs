@@ -872,6 +872,16 @@ impl RealtimeTrack {
         self.set_locks(&buffer[..len]);
     }
 
+    /// Commit a queued slice map immediately (its boundary belonged to a
+    /// timeline that a restart just discarded).
+    fn commit_pending_slices_now(&mut self) {
+        if let Some((_, slices)) = self.pending_slices.take() {
+            if let TrackInstrument::Sample(sampler) = &mut self.instrument {
+                sampler.set_slices(slices);
+            }
+        }
+    }
+
     /// Commit a queued slice map once this track's clock reaches its frame.
     fn apply_pending_slices(&mut self) {
         let Some((apply_at, slices)) = self.pending_slices else {
@@ -1995,6 +2005,7 @@ impl MultiTrackEngine {
             track.instrument.handle(EngineCommand::Panic);
             track.set_locks(&[]);
             track.commit_pending_now();
+            track.commit_pending_slices_now();
             track.sequencer.restart();
         }
         self.pending_scene = None;
