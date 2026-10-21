@@ -617,6 +617,80 @@ Automated Windows CI proves that the all-feature code compiles, tests, passes st
 
 `--record <FILE>` records the protected mono master mix. Resampling and the black box capture stereo.
 
+## macOS: install and build
+
+Shelloop runs natively on Apple silicon and Intel Macs (macOS 11 or later). Real-time audio uses CoreAudio and MIDI uses CoreMIDI, so no extra audio packages are needed; installing the Xcode Command Line Tools is enough for building.
+
+Physical audio-interface and MIDI-controller behavior on macOS is not yet validated on hardware. CI builds and tests the standalone app, CLAP and VST3 on Apple silicon and Intel runners.
+
+### Option A: use the prebuilt macOS release
+
+Download from the Releases page (VERSION is the release tag):
+
+```text
+shelloop-VERSION-macos-arm64.tar.gz         standalone binary + example projects + shelloop.clap (Apple silicon)
+shelloop-VERSION-macos-x86_64.tar.gz        the same bundle for Intel Macs
+shelloop-clap-VERSION-macos-arm64.tar.gz    CLAP plugin only (use macos-x86_64 on Intel)
+shelloop-vst3-VERSION-macos-arm64.tar.gz    VST3 plugin only (use macos-x86_64 on Intel)
+```
+
+Check the download against its checksum file, then unpack it:
+
+```sh
+shasum -a 256 -c shelloop-VERSION-macos-arm64.tar.gz.sha256
+tar -xzf shelloop-VERSION-macos-arm64.tar.gz
+./shelloop-VERSION-macos-arm64/shelloop --list-devices
+```
+
+**Gatekeeper blocks the beta build.** The binaries and plugin bundles are ad-hoc signed (`codesign -s -`) but not notarized, so macOS quarantines files downloaded from the internet. Remove the quarantine attribute once after unpacking (adjust the paths to where you put the files):
+
+```sh
+xattr -dr com.apple.quarantine ./shelloop-VERSION-macos-arm64
+```
+
+The ad-hoc signature only proves the bundle is intact; it does not identify a publisher. Only run builds you downloaded from this repository's Releases page.
+
+Install the plugins into the per-user folders and rescan in your host:
+
+```sh
+mkdir -p ~/Library/Audio/Plug-Ins/CLAP ~/Library/Audio/Plug-Ins/VST3
+cp -R shelloop-clap-VERSION-macos-arm64/shelloop.clap ~/Library/Audio/Plug-Ins/CLAP/
+cp -R shelloop-vst3-VERSION-macos-arm64/SHELLOOP.vst3 ~/Library/Audio/Plug-Ins/VST3/
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/shelloop.clap ~/Library/Audio/Plug-Ins/VST3/SHELLOOP.vst3
+```
+
+### Option B: build the current version from source
+
+```sh
+xcode-select --install                  # once, if the Command Line Tools are missing
+# Install Rust from https://rustup.rs (stable toolchain)
+git clone https://github.com/djshellshoxxx/shelloop.git
+cd shelloop
+cargo test --workspace --all-targets --features realtime-audio,midi,terminal-ui
+cargo build --release --features realtime-audio,midi,terminal-ui
+./target/release/shelloop --list-devices
+./target/release/shelloop --no-midi --pattern ./patterns/example-bassline.json --bpm 138
+```
+
+To build the CLAP plugin as a macOS bundle (see `clap-plugin/README.md`):
+
+```sh
+cargo build --release -p shelloop-clap
+mkdir -p shelloop.clap/Contents/MacOS
+cp target/release/libshelloop_clap.dylib shelloop.clap/Contents/MacOS/shelloop
+# Write shelloop.clap/Contents/Info.plist (CFBundleExecutable = shelloop,
+# CFBundlePackageType = BNDL); see clap-plugin/README.md for the file.
+codesign --force --sign - shelloop.clap
+```
+
+To build the VST3 plugin, install CMake (`brew install cmake`) and run:
+
+```sh
+python3 scripts/build_vst3.py vst3-out
+```
+
+The result is `vst3-out/SHELLOOP.vst3`. Apply the same `xattr -dr com.apple.quarantine` step to any plugin you copy from a download.
+
 ## Pattern JSON
 
 Patterns are validated before the audio stream starts. Each step is either `null` or an object with note, velocity, gate, probability, ratchets and signed microtiming in sample frames. Example:
@@ -649,7 +723,7 @@ Upper: Q 2 W 3 E R 5 T 6 Y 7 U
 
 ## Build
 
-Install a current stable Rust toolchain. Linux builds with real-time audio require ALSA development headers.
+Install a current stable Rust toolchain. Linux builds with real-time audio require ALSA development headers. macOS needs only the Xcode Command Line Tools (see [macOS: install and build](#macos-install-and-build)).
 
 Core-only build and tests:
 
@@ -838,11 +912,11 @@ Beat repeat captures continuously, arms when `active` becomes 1, and starts only
 
 `clap-plugin/` builds SHELLOOP's synthesizer and step sequencer as a CLAP instrument. Eight appended parameters (ids 15–22) expose LFO 1 (rate, wave) and its depth to cutoff, pitch, pulse width and amplitude, the mod wheel (CC 1) to cutoff, and a brightness macro; the original ids 0–14 are unchanged and older saved states load with the new parameters at their neutral defaults. Release downloads include `shelloop.clap`; copy it to `~/.clap/` on Linux or `C:\Program Files\Common Files\CLAP\` on Windows and rescan plugins in your DAW. See `clap-plugin/README.md` for its parameters and build instructions.
 
-The same instrument is also released as a **VST3** (`SHELLOOP.vst3`, Windows and Linux): copy it to `C:\Program Files\Common Files\VST3\` on Windows or `~/.vst3/` on Linux. See `vst3/README.md`.
+On macOS, copy `shelloop.clap` to `~/Library/Audio/Plug-Ins/CLAP/` and rescan; the release bundles are ad-hoc signed, so remove the quarantine attribute with `xattr -dr com.apple.quarantine` first. The same instrument is also released as a **VST3** (`SHELLOOP.vst3`, Windows, Linux and macOS): copy it to `C:\Program Files\Common Files\VST3\` on Windows, `~/.vst3/` on Linux or `~/Library/Audio/Plug-Ins/VST3/` on macOS. See `vst3/README.md`.
 
 ## Release pipeline
 
-Pushing a `v*` tag (or running the Release workflow manually with a tag) tests the workspace on Windows and Linux, builds the standalone application and the CLAP plugin, verifies the packaged archives, and publishes a GitHub release with SHA-256 checksum files. Pre-release tags (containing `-`) are marked as pre-releases.
+Pushing a `v*` tag (or running the Release workflow manually with a tag) tests the workspace on Windows, Linux and macOS (Apple silicon and Intel), builds the standalone application, the CLAP plugin and the VST3 plugin, verifies the packaged archives, and publishes a GitHub release with SHA-256 checksum files. Pre-release tags (containing `-`) are marked as pre-releases.
 
 ## Status
 

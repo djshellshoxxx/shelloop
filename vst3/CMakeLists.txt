@@ -63,6 +63,14 @@ if(WIN32)
   target_link_libraries(shelloop_vst3 PRIVATE
     "${RUST_STATICLIB}" ws2_32 userenv ntdll bcrypt advapi32 kernel32 shell32 ole32 oleaut32 dbghelp)
   target_link_options(shelloop_vst3 PRIVATE "/EXPORT:clap_entry,DATA" "/INCLUDE:clap_entry")
+elseif(APPLE)
+  # ld64: keep every object of the archive, export `clap_entry`, and link the
+  # system frameworks the Rust standard library and its audio/MIDI deps use.
+  target_link_libraries(shelloop_vst3 PRIVATE
+    "-Wl,-force_load,${RUST_STATICLIB}"
+    "-framework CoreFoundation" "-framework CoreAudio" "-framework CoreMIDI"
+    "-framework AudioToolbox" "-framework Security" iconv)
+  target_link_options(shelloop_vst3 PRIVATE "-Wl,-exported_symbol,_clap_entry")
 else()
   # Keep every object of the archive and export `clap_entry` dynamically.
   target_link_libraries(shelloop_vst3 PRIVATE
