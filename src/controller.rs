@@ -861,6 +861,16 @@ impl SessionController {
             crate::SampleCommand::SliceList => {
                 return Ok(crate::sample_shaping::command::describe_slices(&slices))
             }
+            crate::SampleCommand::SliceDetect { count, sensitivity } => {
+                // Control thread only: decode the track's file and run the
+                // offline detector. The audio thread gets just the table.
+                let path = self.track_sample_path(track)?;
+                let decoded = crate::decode_wav_file(&path, crate::DEFAULT_SAMPLE_MEMORY_BUDGET)?;
+                slices.regions =
+                    crate::detect_slices(&decoded.frames, decoded.sample_rate, count, sensitivity)?;
+                slices.validate()?;
+                format!("detected {} slice(s)", slices.regions.len())
+            }
             crate::SampleCommand::Undo => {
                 let index = self
                     .sample_history
@@ -899,6 +909,17 @@ impl SessionController {
         }
         self.dirty = true;
         Ok(format!("track {}: {message}", track.0))
+    }
+
+    /// Absolute or project-relative path of a sample track's source file.
+    fn track_sample_path(&self, track: TrackId) -> Result<PathBuf, String> {
+        self.project
+            .tracks
+            .iter()
+            .find(|definition| definition.id == track)
+            .and_then(|definition| definition.sample.as_ref())
+            .map(|settings| settings.resolve_path(&self.project_dir()))
+            .ok_or_else(|| "sample track has no sample settings".to_owned())
     }
 
     fn mod_command(&mut self, line: &str) -> Result<String, String> {

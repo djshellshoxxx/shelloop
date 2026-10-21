@@ -40,5 +40,6 @@ Implemented in `src/sample_shaping/` (`slices`, `shaping`, `command`) and integr
 * **Selection**: `note` (silent outside the mapped range), seeded `random` (rewinds on panic) or the `sample.slice` step lock; a lock beyond the slice count plays the whole region.
 * **Envelope**: the ADSR replaces the legacy attack/release fades only when configured. In `one_shot` mode note-off is still ignored.
 * **Cutoff lock**: `sample.filter_cutoff` also switches the filter on (low-pass) for that step when the configured mode is `off`.
-* **Detection**: `detect_slices` is a library function (the controller does not hold decoded audio); there is no `slice detect` command yet.
+* **Detection**: `slice detect [count] [sensitivity]` (added 2026-10-21, spec 14 delivery step 4) decodes the selected track's WAV on the control thread with `decode_wav_file` under the sample memory budget, runs `detect_slices` and replaces the slice list as one undoable `sample undo` transaction. Defaults: 16 slices, sensitivity 0.5. The audio thread only receives the resulting `SliceTable`.
+* **Open deviation**: the Acceptance text above asks that new slice maps commit at a musical boundary. The current implementation applies them immediately to notes started after the message (see Slices above). Quantised commit is tracked in `docs/OPEN-ITEMS.md` and is not claimed as complete.
 * **Out of scope as specified**: tempo-relative pitch mode and time-stretch. The CLAP/VST3 plugin has no sample engine, so this feature is standalone only.
