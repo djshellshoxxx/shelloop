@@ -25,11 +25,16 @@ FetchContent_Declare(clap-wrapper
   GIT_REPOSITORY https://github.com/free-audio/clap-wrapper.git
   GIT_TAG v0.9.1
   GIT_SHALLOW TRUE)
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-  # Newer GCC emits new warnings (stringop-overflow, dangling-reference) in clap-wrapper vendored code that its -Werror turns into failures.
-  string(APPEND CMAKE_CXX_FLAGS " -Wno-error=stringop-overflow -Wno-error=dangling-reference -Wno-error=array-bounds -Wno-error=maybe-uninitialized -Wno-error=deprecated-declarations -Wno-error=restrict")
-endif()
 FetchContent_MakeAvailable(clap-wrapper)
+# clap-wrapper builds its own sources with -Werror; newer compilers emit new
+# warnings in its vendored code (fmt, sha1), so drop -Werror from its options.
+if(TARGET clap-wrapper-compile-options)
+  get_target_property(_cw_opts clap-wrapper-compile-options INTERFACE_COMPILE_OPTIONS)
+  if(_cw_opts)
+    list(REMOVE_ITEM _cw_opts "-Werror")
+    set_target_properties(clap-wrapper-compile-options PROPERTIES INTERFACE_COMPILE_OPTIONS "${_cw_opts}")
+  endif()
+endif()
 
 # clap-wrapper forces the static MSVC runtime (/MT) for the targets it creates
 # itself, while this module and the Rust plugin use the DLL runtime (/MD), as
