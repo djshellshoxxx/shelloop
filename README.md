@@ -949,3 +949,7 @@ problem file and exits before opening the audio device. Decoded audio is
 limited to 512 MiB per project; the budget is checked against the WAV header
 before decoding, so an oversized file is refused without filling memory.
 `synth ...` live edit commands apply to synth tracks only.
+
+## Wiki
+
+Wiki source pages are in [docs/wiki/](docs/wiki/Home.md): developer guide, architecture summary and codebase map. The specs in `docs/specs/` and `AGENTS.md` are the authority.
