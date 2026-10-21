@@ -39,6 +39,57 @@ fn allocations_during(f: impl FnOnce()) -> usize {
 fn warmed_renders_do_not_allocate() {
     sample_shaping_does_not_allocate();
     modulation_and_effects_do_not_allocate();
+    metronome_and_count_in_do_not_allocate();
+}
+
+fn metronome_and_count_in_do_not_allocate() {
+    use shelloop::{
+        MultiTrackEngine, MultiTrackProject, Pattern, PatternStep, TrackDefinition, TrackId,
+        TrackKind,
+    };
+    let step = PatternStep {
+        note: 48,
+        velocity: 0.8,
+        gate: 0.5,
+        probability: 1.0,
+        ratchets: 1,
+        microtiming_frames: 0,
+    };
+    let pattern = Pattern::new("p", 1, 0.0, 0, vec![Some(step), None, None, None]).unwrap();
+    let project = MultiTrackProject::new(
+        5,
+        120.0,
+        4,
+        vec![TrackDefinition::new(
+            TrackId(1),
+            "bass",
+            TrackKind::Synth,
+            pattern,
+        )],
+    );
+    let mut engine = MultiTrackEngine::from_project(48_000, 4, &project, None).unwrap();
+    engine.set_playing_all(false);
+    engine.set_metronome(true, 0.5).unwrap();
+    engine.start_count_in(1).unwrap();
+    for _ in 0..1_000 {
+        engine.next_stereo_frame();
+    }
+    // One bar of count-in (96_000 frames at 120 BPM) followed by playback.
+    let allocations = allocations_during(|| {
+        for _ in 0..200_000 {
+            std::hint::black_box(engine.next_stereo_frame());
+        }
+    });
+    assert_eq!(allocations, 0, "metronome and count-in must not allocate");
+    assert!(engine.is_playing());
+    // A live tempo change (tap tempo) is applied on the audio thread too.
+    let retime_allocations = allocations_during(|| {
+        engine.retime(150.0).unwrap();
+        for _ in 0..4_800 {
+            std::hint::black_box(engine.next_stereo_frame());
+        }
+    });
+    assert_eq!(retime_allocations, 0, "retime must not allocate");
 }
 
 fn sample_shaping_does_not_allocate() {

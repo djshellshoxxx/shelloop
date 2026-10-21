@@ -1442,8 +1442,8 @@ impl MultiTrackEngine {
         }
         self.master_rack.set_tempo(bpm);
         self.bpm = bpm;
-        self.frames_per_bar = f64::from(self.sample_rate) * 60.0 / bpm
-            * f64::from(crate::scenes::CHAIN_BEATS_PER_BAR);
+        // `frames_per_bar` is deliberately unchanged: scene and chain bar
+        // boundaries keep their length until the next restart.
         Ok(())
     }
 
