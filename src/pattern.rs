@@ -1,9 +1,9 @@
+use crate::music::humanize::{splitmix64, Humanize};
+use crate::music::ratio::{ratio_fires, StepRatio};
 use crate::params::{
     sample_param_descriptor, synth_param_descriptor, track_param_descriptor, EffectParamId,
     EffectSlotId, SampleParamId, TrackParamId,
 };
-use crate::music::humanize::Humanize;
-use crate::music::ratio::{ratio_fires, StepRatio};
 use crate::variation::InvariantProfile;
 use crate::SynthParamId;
 use serde::{Deserialize, Serialize};
@@ -219,7 +219,9 @@ impl Pattern {
         for chord in &self.chords {
             let index = usize::from(chord.step);
             if index >= self.steps.len() {
-                return Err(format!("chord references step {index} beyond pattern length"));
+                return Err(format!(
+                    "chord references step {index} beyond pattern length"
+                ));
             }
             let Some(step) = self.steps[index] else {
                 return Err(format!("step {index} has a chord but no note"));
@@ -536,7 +538,12 @@ impl PatternScheduler {
     /// `at_frame` stays under it. Earlier steps are never re-emitted.
     pub fn retimed(&self, bpm: f64, at_frame: u64) -> Result<Self, String> {
         let origin_step = self.step_position(at_frame);
-        let mut next = Self::new(self.sample_rate, bpm, self.steps_per_beat, self.project_seed)?;
+        let mut next = Self::new(
+            self.sample_rate,
+            bpm,
+            self.steps_per_beat,
+            self.project_seed,
+        )?;
         next.origin_frame = at_frame;
         next.origin_step = origin_step;
         Ok(next)
@@ -550,8 +557,19 @@ impl PatternScheduler {
         key ^ salt
     }
 
-    fn humanize_timing(&self, seed: u64, humanize: Humanize, loop_index: u64, step_index: usize) -> i64 {
-        humanize.timing_offset(self.humanize_key(seed, loop_index, step_index, HUMANIZE_TIMING_SALT))
+    fn humanize_timing(
+        &self,
+        seed: u64,
+        humanize: Humanize,
+        loop_index: u64,
+        step_index: usize,
+    ) -> i64 {
+        humanize.timing_offset(self.humanize_key(
+            seed,
+            loop_index,
+            step_index,
+            HUMANIZE_TIMING_SALT,
+        ))
     }
 
     pub fn schedule_block(
@@ -629,7 +647,8 @@ impl PatternScheduler {
         let block_end = block_start_frame.saturating_add(block_frames as u64);
         let margin = loop_margin(pattern.steps, pattern.humanize, loop_frames);
         let length = pattern.steps.len() as f64;
-        let estimated_first = (self.step_position(block_start_frame) / length).floor() as i64 - margin;
+        let estimated_first =
+            (self.step_position(block_start_frame) / length).floor() as i64 - margin;
         let estimated_last = (self.step_position(block_end) / length).floor() as i64 + margin;
         let first_loop = estimated_first.max(0) as u64;
         let last_loop = estimated_last.max(0) as u64;
@@ -653,7 +672,8 @@ impl PatternScheduler {
                 } else {
                     0
                 };
-                let human_frames = self.humanize_timing(pattern.seed, pattern.humanize, loop_index, step_index);
+                let human_frames =
+                    self.humanize_timing(pattern.seed, pattern.humanize, loop_index, step_index);
                 let step_start = base_frame
                     + swing_frames
                     + step.microtiming_frames as i128
@@ -661,7 +681,12 @@ impl PatternScheduler {
                 let velocity = if pattern.humanize.velocity == 0.0 {
                     step.velocity
                 } else {
-                    let key = self.humanize_key(pattern.seed, loop_index, step_index, HUMANIZE_VELOCITY_SALT);
+                    let key = self.humanize_key(
+                        pattern.seed,
+                        loop_index,
+                        step_index,
+                        HUMANIZE_VELOCITY_SALT,
+                    );
                     (step.velocity + pattern.humanize.velocity_delta(key)).clamp(0.0, 1.0)
                 };
                 let ratchet_spacing = frames_per_step / step.ratchets as f64;
@@ -731,8 +756,8 @@ impl PatternScheduler {
         let block_end = block_start_frame.saturating_add(u64::from(block_frames));
         let margin = loop_margin(steps, pattern.humanize, loop_frames);
         let length = steps.len() as f64;
-        let first_loop =
-            ((self.step_position(block_start_frame) / length).floor() as i64 - margin).max(0) as u64;
+        let first_loop = ((self.step_position(block_start_frame) / length).floor() as i64 - margin)
+            .max(0) as u64;
         let last_loop =
             ((self.step_position(block_end) / length).floor() as i64 + margin).max(0) as u64;
         'loops: for loop_index in first_loop..=last_loop {
@@ -747,7 +772,9 @@ impl PatternScheduler {
                     0
                 };
                 let micro = step.map_or(0, |step| step.microtiming_frames as i128);
-                let human = self.humanize_timing(pattern.seed, pattern.humanize, loop_index, step_index) as i128;
+                let human =
+                    self.humanize_timing(pattern.seed, pattern.humanize, loop_index, step_index)
+                        as i128;
                 let absolute = base + swing + micro + human;
                 if absolute < 0 {
                     continue;

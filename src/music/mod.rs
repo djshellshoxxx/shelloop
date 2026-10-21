@@ -10,6 +10,7 @@
 
 pub mod arp;
 pub mod chord;
+pub mod command;
 pub mod edit;
 pub mod euclid;
 pub mod humanize;
@@ -19,6 +20,7 @@ pub mod tap;
 
 pub use arp::{ArpMode, Arpeggio, MAX_ARP_OCTAVES};
 pub use chord::{chord_notes, ChordQuality, MAX_CHORD_NOTES};
+pub use command::{parse_music_command, MusicCommand};
 pub use edit::{apply_arp, apply_chord, apply_euclid, quantize_notes, transpose_pattern};
 pub use euclid::{euclidean, MAX_EUCLID_STEPS};
 pub use humanize::{Humanize, MAX_HUMANIZE_TIMING_FRAMES, MAX_HUMANIZE_VELOCITY};

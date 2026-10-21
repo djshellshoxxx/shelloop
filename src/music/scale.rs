@@ -144,7 +144,9 @@ impl Scale {
     }
 }
 
-const NOTE_NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const NOTE_NAMES: [&str; 12] = [
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+];
 
 /// Parse a pitch class: `0..=11` or a note name without octave (`C`, `F#`,
 /// `Bb`).
@@ -159,7 +161,9 @@ pub fn parse_pitch_class(text: &str) -> Result<u8, String> {
     let (letter, rest) = split_letter(text)?;
     let (accidental, rest) = split_accidental(rest);
     if !rest.is_empty() {
-        return Err(format!("invalid pitch class: {text} (use C, F#, Bb or 0..11)"));
+        return Err(format!(
+            "invalid pitch class: {text} (use C, F#, Bb or 0..11)"
+        ));
     }
     Ok((letter + accidental).rem_euclid(12) as u8)
 }
@@ -211,6 +215,11 @@ fn split_accidental(text: &str) -> (i32, &str) {
     } else {
         (0, text)
     }
+}
+
+/// Name of a pitch class (0 = C), without octave.
+pub fn pitch_class_name(pitch_class: u8) -> &'static str {
+    NOTE_NAMES[usize::from(pitch_class % 12)]
 }
 
 /// Display name for a MIDI note (`C4` = 60).
@@ -269,7 +278,8 @@ mod tests {
         assert_eq!(parse_note("A4").unwrap(), 69);
         assert_eq!(parse_note("Bb3").unwrap(), 58);
         assert_eq!(parse_note("C-1").unwrap(), 0);
-        assert!(parse_note("G9").is_err());
+        assert!(parse_note("G#9").is_err()); // 128
+        assert_eq!(parse_note("G9").unwrap(), 127);
         assert!(parse_note("128").is_err());
         assert_eq!(note_name(60), "C4");
     }
