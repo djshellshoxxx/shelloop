@@ -25,6 +25,10 @@ FetchContent_Declare(clap-wrapper
   GIT_REPOSITORY https://github.com/free-audio/clap-wrapper.git
   GIT_TAG v0.9.1
   GIT_SHALLOW TRUE)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+  # Newer GCC flags a false positive in clap-wrapper's vendored sha1.cpp under -Werror.
+  string(APPEND CMAKE_CXX_FLAGS " -Wno-error=stringop-overflow")
+endif()
 FetchContent_MakeAvailable(clap-wrapper)
 
 # clap-wrapper forces the static MSVC runtime (/MT) for the targets it creates
