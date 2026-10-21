@@ -893,3 +893,49 @@ fn controller_slice_detect_is_undoable_and_reports_missing_files() {
     run!("track 2").unwrap();
     assert!(run!("slice detect 4").is_err(), "file missing on track 2");
 }
+
+#[test]
+fn slice_maps_commit_on_the_next_bar_while_playing_and_immediately_when_paused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (project, bank) = drum_project(dir.path());
+    let ctx = SampleContext {
+        assets: &bank,
+        base_dir: dir.path(),
+    };
+    let mut engine = MultiTrackEngine::from_project(48_000, 4, &project, Some(ctx)).unwrap();
+    let (sender, receiver) = bounded(8);
+    let mut controller = SessionController::new(project, None, 48_000, sender).unwrap();
+    let (garbage, _) = bounded(4);
+    macro_rules! run {
+        ($line:expr) => {{
+            let result = controller.execute($line, engine.position_frame());
+            while let Ok(message) = receiver.try_recv() {
+                apply_audio_message(&mut engine, message, &garbage);
+            }
+            result
+        }};
+    }
+    let id = TrackId(1);
+    assert_eq!(engine.track_slice_count(id), Some(4));
+    // Playing at 120 BPM in 4/4: a bar is 96 000 frames.
+    for _ in 0..1_000 {
+        engine.next_stereo_frame();
+    }
+    run!("slice auto 2").unwrap();
+    assert_eq!(
+        engine.track_slice_count(id),
+        Some(4),
+        "the old map stays live until the bar"
+    );
+    for _ in 0..(96_000 - 1_000) {
+        engine.next_stereo_frame();
+    }
+    assert_eq!(engine.track_slice_count(id), Some(4), "one frame early");
+    engine.next_stereo_frame();
+    assert_eq!(engine.track_slice_count(id), Some(2), "commits on the bar");
+
+    // Paused: the clock cannot reach a boundary, so the edit lands at once.
+    run!("pause").unwrap();
+    run!("slice auto 3").unwrap();
+    assert_eq!(engine.track_slice_count(id), Some(3));
+}
