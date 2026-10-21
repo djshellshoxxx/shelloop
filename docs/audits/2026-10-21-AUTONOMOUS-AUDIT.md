@@ -20,3 +20,23 @@ Scope: changes made on this branch (slice detect, bar-boundary slice commits, Eu
 * `cargo test` (default features): 450 tests passing on Linux, after the final change.
 * Full-feature tests and strict clippy: see the build report in PR #13; re-run recorded there.
 * Not verified: DAW hosts, audio quality, latency, Windows/macOS behaviour (CI only), CPU cost of the new code (not measured).
+
+## Build status (Linux, local, 2026-10-21, head after the restart fix)
+
+| Build | Command | Result |
+|---|---|---|
+| Default tests | `cargo test` | 450 passed, 0 failed |
+| Full-feature tests | `cargo test --workspace --all-targets --features realtime-audio,midi,terminal-ui` | 489 passed, 0 failed |
+| Strict clippy, default | `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| Strict clippy, features | same with `--features realtime-audio,midi,terminal-ui` | pass |
+| Format | `cargo fmt --all -- --check` | pass |
+| Release runtime | `cargo build --release --features realtime-audio,midi,terminal-ui` | pass |
+| CLAP plugin | `cargo build --release -p shelloop-clap` | pass |
+| VST3 | `python3 scripts/build_vst3.py` | pass with GCC 13.3; factory verified (`verify_vst3.py`). Fails on CI GCC 15.2 in clap-wrapper, see below |
+| Linux packages | packaged as in `release.yml`, `scripts/verify_release.py` | pass; checksums verified from `dist/` (gitignored) |
+
+Windows and macOS were not built locally. The repo's CI covers Windows (features, VST3, release). The project does not define a macOS build job in CI, so no macOS build exists to report.
+
+## CI finding (pre-existing)
+
+`VST3 (ubuntu-latest)` fails on `main` at 0c319da and on this branch. Root cause in the job log: clap-wrapper v0.9.1 (fetched by CMake) fails to compile `sha1.cpp` under GCC 15.2 with `-Werror=stringop-overflow`. This branch does not change the VST3 build. Reported on PR #13. Options are recorded in that comment.
