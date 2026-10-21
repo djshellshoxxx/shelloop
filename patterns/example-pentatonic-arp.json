@@ -1,0 +1,84 @@
+{
+  "name": "Example Pentatonic Arp",
+  "seed": 31337,
+  "swing": 0.0,
+  "channel": 2,
+  "steps": [
+    {
+      "note": 57,
+      "velocity": 0.85,
+      "gate": 0.4,
+      "probability": 1.0,
+      "ratchets": 1,
+      "microtiming_frames": 0
+    },
+    null,
+    {
+      "note": 60,
+      "velocity": 0.83,
+      "gate": 0.4,
+      "probability": 1.0,
+      "ratchets": 1,
+      "microtiming_frames": 0
+    },
+    null,
+    {
+      "note": 62,
+      "velocity": 0.81,
+      "gate": 0.4,
+      "probability": 1.0,
+      "ratchets": 1,
+      "microtiming_frames": 0
+    },
+    null,
+    {
+      "note": 64,
+      "velocity": 0.79,
+      "gate": 0.4,
+      "probability": 1.0,
+      "ratchets": 1,
+      "microtiming_frames": 0
+    },
+    null,
+    {
+      "note": 67,
+      "velocity": 0.85,
+      "gate": 0.4,
+      "probability": 1.0,
+      "ratchets": 1,
+      "microtiming_frames": 0
+    },
+    null,
+    {
+      "note": 69,
+      "velocity": 0.83,
+      "gate": 0.4,
+      "probability": 1.0,
+      "ratchets": 1,
+      "microtiming_frames": 0
+    },
+    null,
+    {
+      "note": 67,
+      "velocity": 0.81,
+      "gate": 0.4,
+      "probability": 1.0,
+      "ratchets": 1,
+      "microtiming_frames": 0
+    },
+    null,
+    {
+      "note": 64,
+      "velocity": 0.79,
+      "gate": 0.4,
+      "probability": 1.0,
+      "ratchets": 1,
+      "microtiming_frames": 0
+    },
+    null
+  ],
+  "humanize": {
+    "timing_frames": 60,
+    "velocity": 0.05
+  }
+}

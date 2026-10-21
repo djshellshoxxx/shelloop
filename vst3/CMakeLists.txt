@@ -9,7 +9,17 @@
 #   cmake -S vst3 -B vst3/build -DCMAKE_BUILD_TYPE=Release
 #   cmake --build vst3/build --config Release
 cmake_minimum_required(VERSION 3.21)
+if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+  # clap-wrapper compares this against 10.15 and errors out when it is empty.
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
+endif()
 project(shelloop_vst3 LANGUAGES C CXX)
+if(APPLE)
+  # clap-wrapper enables these inside a subdirectory, which leaves this
+  # directory's targets without the Objective-C(++) compile rules.
+  enable_language(OBJC)
+  enable_language(OBJCXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -26,6 +36,15 @@ FetchContent_Declare(clap-wrapper
   GIT_TAG v0.9.1
   GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(clap-wrapper)
+# clap-wrapper builds its own sources with -Werror; newer compilers emit new
+# warnings in its vendored code (fmt, sha1), so drop -Werror from its options.
+if(TARGET clap-wrapper-compile-options)
+  get_target_property(_cw_opts clap-wrapper-compile-options INTERFACE_COMPILE_OPTIONS)
+  if(_cw_opts)
+    list(REMOVE_ITEM _cw_opts "-Werror")
+    set_target_properties(clap-wrapper-compile-options PROPERTIES INTERFACE_COMPILE_OPTIONS "${_cw_opts}")
+  endif()
+endif()
 
 # clap-wrapper forces the static MSVC runtime (/MT) for the targets it creates
 # itself, while this module and the Rust plugin use the DLL runtime (/MD), as
@@ -63,6 +82,14 @@ if(WIN32)
   target_link_libraries(shelloop_vst3 PRIVATE
     "${RUST_STATICLIB}" ws2_32 userenv ntdll bcrypt advapi32 kernel32 shell32 ole32 oleaut32 dbghelp)
   target_link_options(shelloop_vst3 PRIVATE "/EXPORT:clap_entry,DATA" "/INCLUDE:clap_entry")
+elseif(APPLE)
+  # ld64: keep every object of the archive, export `clap_entry`, and link the
+  # system frameworks the Rust standard library and its audio/MIDI deps use.
+  target_link_libraries(shelloop_vst3 PRIVATE
+    "-Wl,-force_load,${RUST_STATICLIB}"
+    "-framework CoreFoundation" "-framework CoreAudio" "-framework CoreMIDI"
+    "-framework AudioToolbox" "-framework Security" iconv)
+  target_link_options(shelloop_vst3 PRIVATE "-Wl,-exported_symbol,_clap_entry")
 else()
   # Keep every object of the archive and export `clap_entry` dynamically.
   target_link_libraries(shelloop_vst3 PRIVATE
