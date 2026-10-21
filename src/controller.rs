@@ -714,7 +714,7 @@ impl SessionController {
             return Ok(String::new());
         };
         match head {
-            "track" | "step" | "length" | "swing" | "rotate" | "undo" | "redo" => {
+            "track" | "step" | "length" | "swing" | "rotate" | "euclid" | "undo" | "redo" => {
                 self.pattern_edit(line, current_frame)
             }
             "pattern" => self.pattern_command(&line[head.len()..]),

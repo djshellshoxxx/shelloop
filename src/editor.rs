@@ -88,6 +88,27 @@ impl PatternEditor {
         self.commit(candidate)
     }
 
+    /// Replaces the rhythm with a Euclidean pattern of the current length
+    /// (spec 16). Kept hits keep their data, new hits take `default_step`,
+    /// and removed hits become empty. Locks stay attached to their steps.
+    pub fn apply_euclidean(
+        &mut self,
+        hits: usize,
+        rotation: usize,
+        default_step: PatternStep,
+    ) -> Result<u64, String> {
+        let mask = crate::euclid::euclidean_mask(hits, self.pattern.steps.len(), rotation)?;
+        let mut candidate = self.pattern.clone();
+        for (slot, hit) in candidate.steps.iter_mut().zip(mask) {
+            *slot = match (hit, *slot) {
+                (true, Some(step)) => Some(step),
+                (true, None) => Some(default_step),
+                (false, _) => None,
+            };
+        }
+        self.commit(candidate)
+    }
+
     pub fn set_length(&mut self, len: usize) -> Result<u64, String> {
         if !(1..=MAX_EDITOR_PATTERN_STEPS).contains(&len) {
             return Err(format!(
