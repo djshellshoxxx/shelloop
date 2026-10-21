@@ -148,7 +148,9 @@ pub fn apply_arp(
     let mut next = pattern.clone();
     for index in start..len {
         let offset = index - start;
-        next.steps[index] = (offset % rate == 0).then(|| new_step(arpeggio.note_at(offset / rate)));
+        next.steps[index] = offset
+            .is_multiple_of(rate)
+            .then(|| new_step(arpeggio.note_at(offset / rate)));
     }
     prune(&mut next);
     next.validate()?;

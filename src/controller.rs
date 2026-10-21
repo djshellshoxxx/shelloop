@@ -15,7 +15,6 @@ use crate::params::{
     MASTER_GAIN,
 };
 use crate::scenes::{resolve_chain, resolve_scene, ChainId, PatternId, SceneId};
-use crate::{Pattern, PatternEditCommand, StepEdit};
 use crate::variation::{
     apply_lock_command, format_locks, format_proposal, parse_variation_command, VariationCommand,
     VariationRequest, VariationSession,
@@ -29,6 +28,7 @@ use crate::{
     SynthParamValue, SynthPatch, TrackCommand, TrackId, TrackKind, TrackParamId,
     MAX_LOCKS_PER_STEP, MAX_REALTIME_TRACKS,
 };
+use crate::{Pattern, PatternEditCommand, StepEdit};
 use crossbeam_channel::{Sender, TrySendError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -880,12 +880,17 @@ impl SessionController {
                     return Err("set a scale first, e.g. scale C major".into());
                 }
                 self.scale_snap = on;
-                Ok(format!("note input snapping {}", if on { "on" } else { "off" }))
+                Ok(format!(
+                    "note input snapping {}",
+                    if on { "on" } else { "off" }
+                ))
             }
             MusicCommand::ScaleSet { root, kind } => {
                 self.scale = Some(Scale::new(root, kind)?);
                 self.scale_snap = true;
-                Ok(format!("scale set to pitch class {root} {kind}; note input snaps"))
+                Ok(format!(
+                    "scale set to pitch class {root} {kind}; note input snaps"
+                ))
             }
             MusicCommand::ScaleApply => {
                 let scale = self.scale.ok_or("set a scale first, e.g. scale C major")?;
@@ -1027,10 +1032,7 @@ impl SessionController {
             },
             MusicCommand::Metronome { enabled, gain } => {
                 self.send(AudioMessage::Metronome { enabled, gain })?;
-                Ok(format!(
-                    "metronome {}",
-                    if enabled { "on" } else { "off" }
-                ))
+                Ok(format!("metronome {}", if enabled { "on" } else { "off" }))
             }
             MusicCommand::CountIn(bars) => {
                 self.count_in_bars = bars;
@@ -2151,10 +2153,7 @@ impl SessionController {
     /// the interval has elapsed. The project file itself is untouched.
     fn run_autosave_if_due(&mut self) -> Option<String> {
         let path = self.project_path.clone();
-        if !self
-            .autosave
-            .due(self.now_ms, self.dirty, path.is_some())
-        {
+        if !self.autosave.due(self.now_ms, self.dirty, path.is_some()) {
             return None;
         }
         let path = crate::autosave::autosave_path(path.as_ref()?);

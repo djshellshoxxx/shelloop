@@ -176,18 +176,17 @@ mod tests {
     #[test]
     fn count_in_length_and_end_flag() {
         let mut count_in = CountIn::new(1, 4, 100.0).unwrap();
+        // One bar of four beats at 100 frames per beat.
         let mut ticks = 0_u64;
-        let mut ended_at = None;
-        loop {
+        let last_beat = loop {
             let (beat, ended) = count_in.tick();
             ticks += 1;
             if ended {
-                ended_at = Some(ticks);
-                assert_eq!(beat, 3, "last frame is in the last beat");
-                break;
+                break beat;
             }
-        }
-        assert_eq!(ended_at, Some(400));
+        };
+        assert_eq!(ticks, 400);
+        assert_eq!(last_beat, 3, "the final frame is in the last beat");
         assert!(CountIn::new(0, 4, 100.0).is_err());
         assert!(CountIn::new(5, 4, 100.0).is_err());
     }

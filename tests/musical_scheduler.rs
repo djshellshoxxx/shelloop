@@ -1,7 +1,9 @@
 //! Scheduler behaviour for chords, ratio conditions, humanize and live
 //! retime. Pure data: no audio device.
 
-use shelloop::{CompiledPattern, Humanize, Pattern, PatternScheduler, PatternStep, StepChord, StepRatio};
+use shelloop::{
+    CompiledPattern, Humanize, Pattern, PatternScheduler, PatternStep, StepChord, StepRatio,
+};
 
 const RATE: u32 = 48_000;
 
@@ -67,8 +69,15 @@ fn chord_notes_sound_on_the_same_frame_as_the_step() {
 #[test]
 fn compiled_and_editable_paths_agree_for_musical_data() {
     let mut source = pattern(vec![step(60), None, step(62), step(64)]);
-    source.chords.push(StepChord { step: 0, notes: vec![67] });
-    source.ratios.push(StepRatio { step: 2, play: 1, of: 2 });
+    source.chords.push(StepChord {
+        step: 0,
+        notes: vec![67],
+    });
+    source.ratios.push(StepRatio {
+        step: 2,
+        play: 1,
+        of: 2,
+    });
     source.humanize = Humanize {
         timing_frames: 240,
         velocity: 0.2,
@@ -87,7 +96,11 @@ fn compiled_and_editable_paths_agree_for_musical_data() {
 #[test]
 fn ratio_one_of_two_plays_every_other_loop() {
     let mut source = pattern(vec![step(60), None, None, None]);
-    source.ratios.push(StepRatio { step: 0, play: 1, of: 2 });
+    source.ratios.push(StepRatio {
+        step: 0,
+        play: 1,
+        of: 2,
+    });
     let schedule = scheduler(120.0);
     // One loop is four steps of 0.125 s at 120 BPM with 4 steps per beat: 24_000 frames.
     let loop_frames = u64::from(RATE) / 2;
