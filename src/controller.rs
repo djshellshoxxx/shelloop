@@ -735,6 +735,7 @@ impl SessionController {
             "pattern" => self.pattern_command(&line[head.len()..]),
             "patterns" => Ok(self.describe_patterns()),
             "synth" => self.synth_command(line),
+            "preset" => self.preset_command(line),
             "mod" => self.mod_command(line),
             "sample" | "slice" => self.sample_command(line, current_frame),
             "gain" | "pan" | "mute" | "solo" | "send" | "master" => self.mixer_command(line),
@@ -966,6 +967,43 @@ impl SessionController {
         }
         self.dirty = true;
         Ok(format!("track {}: {message}", track.0))
+    }
+
+    fn preset_command(&mut self, line: &str) -> Result<String, String> {
+        let words: Vec<_> = line.split_whitespace().collect();
+        let store = crate::presets::PresetStore::new(self.project_dir().join("presets"));
+        match words.as_slice() {
+            ["preset", "list"] => Ok(format!("presets: {}", store.list()?.join(" "))),
+            ["preset", "directory"] => Ok(store.directory().display().to_string()),
+            ["preset", "save", name] => {
+                let patch = *self.synth_patch_mut(self.selected_track())?;
+                store.save(name, patch, self.sample_rate as f32)?;
+                Ok(format!("saved preset {name}"))
+            }
+            ["preset", "load", name] => {
+                let track = self.selected_track();
+                // Check kind before I/O and change the control snapshot only
+                // after the bounded audio queue accepts the prepared patch.
+                self.synth_patch_mut(track)?;
+                let patch = store.load(name, self.sample_rate as f32)?;
+                let compiled = CompiledSynthPatch::new(self.sample_rate as f32, patch)?;
+                self.send(AudioMessage::SynthPatch {
+                    track,
+                    patch: compiled,
+                })?;
+                *self.synth_patch_mut(track)? = patch;
+                if let Some(definition) = self.project.tracks.iter_mut().find(|t| t.id == track) {
+                    definition.synth_patch = Some(patch);
+                }
+                self.dirty = true;
+                Ok(format!("loaded preset {name}"))
+            }
+            ["preset", "delete", name] => {
+                store.delete(name)?;
+                Ok(format!("deleted preset {name}"))
+            }
+            _ => Err("preset list|directory|save NAME|load NAME|delete NAME".into()),
+        }
     }
 
     fn synth_command(&mut self, line: &str) -> Result<String, String> {
@@ -2280,4 +2318,4 @@ pub fn inspector_synth_params() -> impl Iterator<Item = SynthParamId> {
     .filter_map(parse_synth_param)
 }
 
-pub const HELP_TEXT: &str = "commands: track N | step N toggle|note|vel|gate|prob|ratchet|micro | length N | swing X | rotate left|right N | undo | redo | pattern ID | patterns | synth PARAM VALUE | gain|pan X | mute|solo [on|off] | send a|b X | master X | fx list | fx track|send_a|send_b|master SLOT PARAM VALUE|bypass on|off | scene launch NAME [bar|beat|step|now] | scene next|prev | chain start NAME | chain stop|pause|resume | lock TARGET VALUE | unlock TARGET | locks | learn TARGET | learn confirm [replace|add|cancel] | learn cancel | mappings | mapping ID range|invert|pickup|button ... | unlearn ID | variation lock ...|preview|accept|reject | resample arm master|track [ID] [bars N|seconds S] | resample stop [bar] | resample cancel|normalize on|off|destination asset|new-track|replace | blackbox status|save [PATH]|clear | play | restart | panic | save [PATH]";
+pub const HELP_TEXT: &str = "commands: track N | step N toggle|note|vel|gate|prob|ratchet|micro | length N | swing X | rotate left|right N | undo | redo | pattern ID | patterns | synth PARAM VALUE | preset list|directory|save NAME|load NAME|delete NAME | gain|pan X | mute|solo [on|off] | send a|b X | master X | fx list | fx track|send_a|send_b|master SLOT PARAM VALUE|bypass on|off | scene launch NAME [bar|beat|step|now] | scene next|prev | chain start NAME | chain stop|pause|resume | lock TARGET VALUE | unlock TARGET | locks | learn TARGET | learn confirm [replace|add|cancel] | learn cancel | mappings | mapping ID range|invert|pickup|button ... | unlearn ID | variation lock ...|preview|accept|reject | resample arm master|track [ID] [bars N|seconds S] | resample stop [bar] | resample cancel|normalize on|off|destination asset|new-track|replace | blackbox status|save [PATH]|clear | play | restart | panic | save [PATH]";

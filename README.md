@@ -968,3 +968,13 @@ approval in System Settings. The optional PC-speaker probe is unsupported on
 macOS; CoreAudio output and CoreMIDI use the normal audio/MIDI backends.
 
 See [release procedure](docs/RELEASING.md) and [open acceptance items](docs/OPEN-ITEMS.md).
+
+### Named synth presets
+
+Use `preset save WarmPad`, `preset list`, `preset load WarmPad` and
+`preset delete WarmPad` in the project command prompt/TUI. `preset directory`
+shows the `presets/` directory beside the current project. Presets capture the
+selected synth's current patch and modulation routes; `save` also persists them
+in the project. Names accept letters, digits, underscores and hyphens (64 max).
+Saving refuses to overwrite an existing name; invalid files and full audio
+queues leave the current patch unchanged. File I/O stays on the control thread.

@@ -23,6 +23,7 @@ pub mod params;
 pub mod pattern;
 pub mod pc_speaker;
 pub mod performance;
+pub mod presets;
 pub mod project;
 pub mod quantize;
 pub mod recording;

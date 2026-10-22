@@ -9,9 +9,9 @@ Traceability register for work that is not complete. Each row names the requirem
 | OI-03 | Spec 14 | CLAP/VST3 sample-track parity | Open, out of scope as specified | Requires a shared sample engine in the plugin |
 | OI-04 | Spec 14 | Tempo-relative pitch / time-stretch | Out of scope as specified | Not planned |
 | OI-05 | Spec 15 | Beat-repeat grid aligned to transport | Done 2026-10-22 | Absolute-frame context reaches track, send and master racks; `beat_repeat_uses_transport_grid_when_inserted_after_playback_started` covers late insertion, pause and seek. Legacy process APIs remain compatible. |
-| OI-06 | Spec 03 | Preset directory management, saving live control snapshots | Open | Not started |
-| OI-07 | Spec 04 | "Mark track unavailable" load mode | Open, decision | Currently fail-before-activation only; needs a product decision |
-| OI-08 | Spec 13 | Full 8-route modulation editor in the TUI/CLAP | Open (standalone feature) | Route editing exists as `mod` text commands |
+| OI-06 | Spec 03 | Preset directory management, saving live control snapshots | Done 2026-10-22 | `PresetStore` versioned atomic files; controller preset/load/save snapshot and queue-rejection tests |
+| OI-07 | Spec 04 | Sample load mode | Resolved: fail-before-activation | Spec permits refusal or unavailable tracks. Every asset error is reported together; active bank/session remains intact. No silent partial playback. Regression in `wav_sample_playback`. |
+| OI-08 | Spec 13 | Full 8-route TUI editor and conservative CLAP subset | Done / supported scope | All eight routes edit through TUI `mod` commands and appear with destination ranges in the inspector; ninth route rejected. CLAP keeps the stable subset explicitly allowed by spec13. Controller end-to-end regression. |
 | OI-09 | Spec 15 | Creative effects: DAW smoke and listening tests | External | Real DAW hosts, USB interface |
 | OI-10 | Spec 13, 15 | VST3 validator runs, DAW automation | External | `scripts/verify_vst3.py` on real hosts |
 | OI-11 | HARDWARE-ACCEPTANCE.md | Audio device, MIDI, latency, dropout, unplug tests | External, NOT RUN | Physical hardware |

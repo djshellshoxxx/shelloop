@@ -210,3 +210,102 @@ fn save_writes_a_loadable_project() {
     let loaded = MultiTrackProject::load(&path).unwrap();
     assert!(loaded.tracks[0].pattern.steps[2].is_some());
 }
+
+#[test]
+fn named_presets_capture_live_edits_and_load_only_after_queue_acceptance() {
+    let directory = tempfile::tempdir().unwrap();
+    let project_path = directory.path().join("song.json");
+    let mut rig = Rig::new();
+    rig.run(&format!("save {}", project_path.display()))
+        .unwrap();
+    rig.run("synth output_gain 0.42").unwrap();
+    rig.run("mod add lfo1 filter_cutoff 0.5 25").unwrap();
+    rig.run("preset save WarmPad").unwrap();
+    assert!(rig.run("preset list").unwrap().contains("WarmPad"));
+    assert!(rig.run("preset save WarmPad").is_err());
+    rig.run("synth output_gain 0.8").unwrap();
+    rig.run("mod clear").unwrap();
+    rig.run("preset load WarmPad").unwrap();
+    assert_eq!(
+        rig.controller.project().tracks[0]
+            .synth_patch
+            .unwrap()
+            .output_gain,
+        0.42
+    );
+    assert_eq!(
+        rig.engine
+            .track_base_synth_patch(TrackId(1))
+            .unwrap()
+            .output_gain,
+        0.42
+    );
+    rig.run("save").unwrap();
+    assert_eq!(
+        MultiTrackProject::load(project_path).unwrap().tracks[0]
+            .synth_patch
+            .unwrap()
+            .output_gain,
+        0.42
+    );
+    assert_eq!(
+        rig.controller.project().tracks[0]
+            .synth_patch
+            .unwrap()
+            .modulation
+            .routes()
+            .len(),
+        1
+    );
+    let (sender, _receiver) = bounded(0);
+    let mut blocked = SessionController::new(
+        project(),
+        Some(directory.path().join("blocked.json")),
+        RATE,
+        sender,
+    )
+    .unwrap();
+    assert!(blocked.execute("preset load WarmPad", 0).is_err());
+    assert_eq!(blocked.project().tracks[0].synth_patch, None);
+    rig.run("preset delete WarmPad").unwrap();
+    assert!(rig.run("preset load WarmPad").is_err());
+    assert!(rig.run("preset save ../outside").is_err());
+}
+
+#[test]
+fn all_eight_modulation_routes_are_editable_and_visible_in_the_tui() {
+    let mut rig = Rig::new();
+    for _ in 0..8 {
+        rig.run("mod add macro1 filter_cutoff -0.1").unwrap();
+    }
+    assert!(rig.run("mod add macro1 filter_cutoff -0.1").is_err());
+    let mut ui = shelloop::workstation::UiState::new(true);
+    let snapshot = shelloop::workstation::build_snapshot(
+        &rig.controller,
+        &Default::default(),
+        &mut ui,
+        &Default::default(),
+    );
+    let routes: Vec<_> = snapshot
+        .inspector
+        .rows
+        .iter()
+        .filter(|(name, _)| name.starts_with("mod "))
+        .collect();
+    assert_eq!(routes.len(), 8);
+    assert!(routes
+        .iter()
+        .all(|(_, value)| value.contains("FilterCutoff") && value.contains("Hz")));
+    rig.run("mod set 8 velocity amplitude 0.2").unwrap();
+    rig.run("mod off 8").unwrap();
+    rig.run("mod remove 1").unwrap();
+    assert_eq!(
+        rig.controller.project().tracks[0]
+            .synth_patch
+            .unwrap()
+            .modulation
+            .routes()
+            .len(),
+        7
+    );
+}
