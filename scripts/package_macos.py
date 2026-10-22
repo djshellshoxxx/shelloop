@@ -2,6 +2,7 @@
 import hashlib
 from pathlib import Path
 import plistlib
+from platform import machine
 import shutil
 import sys
 import tarfile
@@ -26,6 +27,8 @@ def package(tag, platform, root=Path('.')):
         raise ValueError('expected a native macOS platform name')
     if not tag.startswith('v') or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-' for c in tag):
         raise ValueError('invalid release tag')
+    if sys.platform != 'darwin' or machine() != platform.removeprefix('macos-'):
+        raise ValueError('package platform must match the native macOS runner architecture')
     dist = root / 'dist'
     dist.mkdir(exist_ok=True)
     names = [f'shelloop-{tag}-{platform}', f'shelloop-clap-{tag}-{platform}',

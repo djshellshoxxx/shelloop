@@ -29,6 +29,9 @@ downloads clap-wrapper, the CLAP headers and the VST3 SDK):
 python scripts/build_vst3.py vst3-out
 ```
 
+**macOS:** copy the whole `SHELLOOP.vst3` bundle to
+`~/Library/Audio/Plug-Ins/VST3/`. Choose the native arm64 or x86_64 download.
+
 The result is `vst3-out/SHELLOOP.vst3`. The script builds the Rust plugin,
 runs CMake on `vst3/CMakeLists.txt`, and loads the finished module the way a
 host does to check its factory (`scripts/verify_vst3.py`).

@@ -1,8 +1,8 @@
 # SHELLOOP
 
-SHELLOOP is a terminal-only real-time music instrument: a live step sequencer plus a playable synthesizer designed for Windows and Linux.
+SHELLOOP is a terminal-only real-time music instrument: a live step sequencer plus a playable synthesizer designed for Windows, Linux and macOS.
 
-All fifteen specifications (`docs/specs/01`–`15`) are implemented. The twelve v1 specs are: multitrack engine, live pattern editing, synth/filter/ADSR, WAV samples, scenes and chains, MIDI learn, effects, a full-screen terminal UI, per-step parameter locks, resampling, a retrospective performance black box and invariant-locked pattern variation. SHELLOOP also ships as a **CLAP instrument plugin** (`clap-plugin/`). Release builds are published on the GitHub Releases page as a Windows `.exe`, a Linux binary and CLAP plugins for both. The sound-design expansion adds a modulation matrix with macros (spec 13), sample shaping and slices (spec 14) and creative effects (spec 15), described below. Physical audio-hardware latency and MIDI-controller validation is tracked separately in `docs/HARDWARE-ACCEPTANCE.md`.
+All fifteen specifications (`docs/specs/01`–`15`) are implemented. The twelve v1 specs are: multitrack engine, live pattern editing, synth/filter/ADSR, WAV samples, scenes and chains, MIDI learn, effects, a full-screen terminal UI, per-step parameter locks, resampling, a retrospective performance black box and invariant-locked pattern variation. SHELLOOP also ships as a **CLAP instrument plugin** (`clap-plugin/`). Release builds are published on the GitHub Releases page as a Windows `.exe`, Linux and native macOS binaries, plus CLAP and VST3 plugins. macOS releases include separate Apple Silicon and Intel archives. The sound-design expansion adds a modulation matrix with macros (spec 13), sample shaping and slices (spec 14) and creative effects (spec 15), described below. Physical audio-hardware latency and MIDI-controller validation is tracked separately in `docs/HARDWARE-ACCEPTANCE.md`.
 
 ## Implemented
 
@@ -42,7 +42,7 @@ All fifteen specifications (`docs/specs/01`–`15`) are implemented. The twelve 
 - Bitcrusher (spec 17): bit-depth and sample-rate reduction as an effect kind
 - Slice detection (spec 14): `slice detect`, with slice maps committed on the bar
 - CLAP instrument plugin: polyphonic synth with 23 automatable parameters (including LFO/mod-wheel/macro modulation), host-synced sequencer and saved state
-- Windows/Linux all-feature compile, test, strict Clippy and optimized-release CI gates
+- Windows/Linux/macOS all-feature compile, test, strict Clippy and optimized-release CI gates
 - Tag-triggered release workflow publishing the Windows `.exe`, Linux build and CLAP plugins with SHA-256 checksums
 
 ## Command line
@@ -955,3 +955,16 @@ problem file and exits before opening the audio device. Decoded audio is
 limited to 512 MiB per project; the budget is checked against the WAV header
 before decoding, so an oversized file is refused without filling memory.
 `synth ...` live edit commands apply to synth tracks only.
+
+## Native macOS releases
+
+Download the `macos-arm64` archive for Apple Silicon or `macos-x86_64` for Intel.
+The CLAP download contains a `shelloop.clap` bundle; copy the whole bundle to
+`~/Library/Audio/Plug-Ins/CLAP/`. Copy the whole `SHELLOOP.vst3` bundle to
+`~/Library/Audio/Plug-Ins/VST3/`. Rescan plugins in your host.
+
+macOS bundles are ad-hoc signed, not notarized. Gatekeeper may require explicit
+approval in System Settings. The optional PC-speaker probe is unsupported on
+macOS; CoreAudio output and CoreMIDI use the normal audio/MIDI backends.
+
+See [release procedure](docs/RELEASING.md) and [open acceptance items](docs/OPEN-ITEMS.md).

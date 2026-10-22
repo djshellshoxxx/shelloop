@@ -59,6 +59,10 @@ cp target/release/libshelloop_clap.so ~/.clap/shelloop.clap
 Copy-Item target\release\shelloop_clap.dll "C:\Program Files\Common Files\CLAP\shelloop.clap"
 ```
 
+**macOS:** copy the entire `shelloop.clap` bundle from the native release archive
+into `~/Library/Audio/Plug-Ins/CLAP/`. A renamed `.dylib` alone is not a macOS
+plugin bundle. The bundle contains its executable and `Contents/Info.plist`.
+
 Then rescan plugins in your host.
 
 ## Test
