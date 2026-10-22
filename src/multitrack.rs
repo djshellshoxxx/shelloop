@@ -1933,14 +1933,31 @@ impl MultiTrackEngine {
         }
     }
 
-    /// Installs shaping and a slice table on a sample track. Sounding voices
-    /// glide to the new shaping and keep their slice region; new notes use
-    /// the new table. Allocation-free.
+    /// Immediately installs a sample configuration, preserving the original
+    /// public API. Sounding voices retain their copied slice region.
+    pub fn apply_sample_config(
+        &mut self,
+        id: TrackId,
+        shaping: crate::CompiledShaping,
+        slices: crate::SliceTable,
+    ) -> Result<(), EngineError> {
+        let Some(track) = self.tracks.iter_mut().find(|track| track.id == id) else {
+            return Err(EngineError::TrackNotFound(id.0));
+        };
+        let TrackInstrument::Sample(sampler) = &mut track.instrument else {
+            return Err(EngineError::WrongTrackKind);
+        };
+        track.pending_slices = None;
+        sampler.set_shaping(shaping);
+        sampler.set_slices(slices);
+        Ok(())
+    }
+
     /// Apply a sample-track edit (spec 14). Shaping takes effect at once.
     /// The slice map is committed at `apply_at_frame` on the track's clock,
     /// or immediately when the track's transport is stopped, because a
     /// stopped clock would otherwise never reach the boundary.
-    pub fn apply_sample_config(
+    pub fn schedule_sample_config(
         &mut self,
         id: TrackId,
         shaping: crate::CompiledShaping,

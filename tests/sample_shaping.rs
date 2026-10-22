@@ -4,11 +4,11 @@ use crossbeam_channel::bounded;
 use shelloop::params::sample_param_descriptor;
 use shelloop::{
     apply_audio_message, apply_sample_command, detect_slices, equal_slices, parse_sample_command,
-    CompiledSamplePlayback, EngineCommand, MultiTrackEngine, MultiTrackProject, Pattern,
-    PatternStep, RealtimeSampler, SampleAsset, SampleAssetBank, SampleAssetId, SampleContext,
-    SampleEnvelope, SampleFilterMode, SampleLockOverrides, SampleMode, SampleParamId,
-    SampleSettings, SampleShaping, SessionController, SliceDef, SliceSelect, SliceSettings,
-    StereoFrame, TrackDefinition, TrackId, TrackKind, MAX_SLICES,
+    CompiledSamplePlayback, CompiledShaping, EngineCommand, MultiTrackEngine, MultiTrackProject,
+    Pattern, PatternStep, RealtimeSampler, SampleAsset, SampleAssetBank, SampleAssetId,
+    SampleContext, SampleEnvelope, SampleFilterMode, SampleLockOverrides, SampleMode,
+    SampleParamId, SampleSettings, SampleShaping, SessionController, SliceDef, SliceSelect,
+    SliceSettings, SliceTable, StereoFrame, TrackDefinition, TrackId, TrackKind, MAX_SLICES,
 };
 use std::path::PathBuf;
 
@@ -975,4 +975,37 @@ fn queued_slice_map_commits_at_once_when_the_clock_restarts() {
         Some(2),
         "restart commits the pending map"
     );
+}
+
+#[test]
+fn immediate_sample_configuration_api_remains_compatible() {
+    let dir = tempfile::tempdir().unwrap();
+    let (project, bank) = drum_project(dir.path());
+    let context = SampleContext {
+        assets: &bank,
+        base_dir: dir.path(),
+    };
+    let mut engine = MultiTrackEngine::from_project(48_000, 4, &project, Some(context)).unwrap();
+    let shaping = CompiledShaping::compile(&SampleShaping::default(), 48_000).unwrap();
+    let mut settings = SliceSettings {
+        regions: equal_slices(2).unwrap(),
+        ..SliceSettings::default()
+    };
+    let slices = SliceTable::compile(&settings).unwrap();
+    engine
+        .apply_sample_config(TrackId(1), shaping, slices)
+        .unwrap();
+    assert_eq!(engine.track_slice_count(TrackId(1)), Some(2));
+    settings.regions = equal_slices(3).unwrap();
+    let (garbage, _) = bounded(4);
+    apply_audio_message(
+        &mut engine,
+        shelloop::AudioMessage::SampleConfig {
+            track: TrackId(1),
+            shaping,
+            slices: SliceTable::compile(&settings).unwrap(),
+        },
+        &garbage,
+    );
+    assert_eq!(engine.track_slice_count(TrackId(1)), Some(3));
 }

@@ -79,8 +79,13 @@ pub enum AudioMessage {
     Panic,
     AddTrack(PreparedTrack),
     /// Live sample shaping and slice map for a sample track (spec 14).
-    /// Spec 14: shaping applies at once; the slice map at `apply_at_frame`.
     SampleConfig {
+        track: TrackId,
+        shaping: crate::CompiledShaping,
+        slices: crate::SliceTable,
+    },
+    /// Shaping applies at once; the slice map at `apply_at_frame`.
+    ScheduledSampleConfig {
         track: TrackId,
         shaping: crate::CompiledShaping,
         slices: crate::SliceTable,
@@ -168,9 +173,16 @@ pub fn apply_audio_message(
             track,
             shaping,
             slices,
+        } => {
+            let _ = engine.apply_sample_config(track, shaping, slices);
+        }
+        AudioMessage::ScheduledSampleConfig {
+            track,
+            shaping,
+            slices,
             apply_at_frame,
         } => {
-            let _ = engine.apply_sample_config(track, shaping, slices, apply_at_frame);
+            let _ = engine.schedule_sample_config(track, shaping, slices, apply_at_frame);
         }
         AudioMessage::ReplaceSample { track, playback } => {
             match engine.replace_sample(track, playback) {
@@ -897,7 +909,7 @@ impl SessionController {
             u32::from(self.project.steps_per_beat),
             crate::QuantizeBoundary::Bar { beats_per_bar: 4 },
         )?;
-        self.send(AudioMessage::SampleConfig {
+        self.send(AudioMessage::ScheduledSampleConfig {
             track,
             shaping: compiled,
             slices: table,
