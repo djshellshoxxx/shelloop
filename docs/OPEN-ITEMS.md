@@ -8,7 +8,7 @@ Traceability register for work that is not complete. Each row names the requirem
 | OI-02 | Spec 14 | `slice detect` command | Done 2026-10-21 | `tests/sample_shaping.rs::slice_detect_*`, `controller_slice_detect_*` |
 | OI-03 | Spec 14 | CLAP/VST3 sample-track parity | Open, out of scope as specified | Requires a shared sample engine in the plugin |
 | OI-04 | Spec 14 | Tempo-relative pitch / time-stretch | Out of scope as specified | Not planned |
-| OI-05 | Spec 15 | Beat-repeat grid aligned to transport | Open (known gap) | Effects have no transport position. Needs a per-block transport context in `EffectRack::process`. Design decision required (touches every effect's process path). |
+| OI-05 | Spec 15 | Beat-repeat grid aligned to transport | Done 2026-10-22 | Absolute-frame context reaches track, send and master racks; `beat_repeat_uses_transport_grid_when_inserted_after_playback_started` covers late insertion, pause and seek. Legacy process APIs remain compatible. |
 | OI-06 | Spec 03 | Preset directory management, saving live control snapshots | Open | Not started |
 | OI-07 | Spec 04 | "Mark track unavailable" load mode | Open, decision | Currently fail-before-activation only; needs a product decision |
 | OI-08 | Spec 13 | Full 8-route modulation editor in the TUI/CLAP | Open (standalone feature) | Route editing exists as `mod` text commands |

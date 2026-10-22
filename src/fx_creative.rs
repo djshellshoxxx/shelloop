@@ -341,9 +341,8 @@ pub(crate) fn beat_repeat_max_frames(sample_rate: u32) -> usize {
 /// Quantized beat repeat / stutter.
 ///
 /// The input is continuously written into a ring buffer. When `active` rises
-/// the effect arms and, at the next slice boundary on its grid (frame
-/// counter since the last reset) *and only once a full slice has been
-/// captured*, snapshots the last slice into the hold buffer and loops it.
+/// the effect arms and, at the next transport slice boundary (or its local
+/// grid for legacy callers) *and only once a full slice has been captured*, snapshots the last slice into the hold buffer and loops it.
 /// Playback therefore never reads uninitialised or stale audio. `reset`
 /// (stop, panic, project switch) clears every buffer and the capture count.
 #[derive(Debug, Clone)]
@@ -353,6 +352,7 @@ pub(crate) struct BeatRepeatFx {
     ring_write: usize,
     filled: usize,
     frame: u64,
+    last_transport_frame: Option<u64>,
     sample_rate: f32,
     bpm: f64,
     division: f32,
@@ -384,6 +384,7 @@ impl BeatRepeatFx {
             ring_write: 0,
             filled: 0,
             frame: 0,
+            last_transport_frame: None,
             sample_rate: rate,
             bpm,
             division: 1.0,
@@ -415,6 +416,7 @@ impl BeatRepeatFx {
         self.ring_write = 0;
         self.filled = 0;
         self.frame = 0;
+        self.last_transport_frame = None;
         self.armed = self.active;
         self.playing = false;
         self.pos = 0;
@@ -500,13 +502,51 @@ impl BeatRepeatFx {
         self.engage.set_target(1.0, self.engage_frames);
     }
 
+    /// Use the project grid rather than time since this effect was inserted.
+    /// Pauses and seeks invalidate capture without clearing/allocating buffers:
+    /// `filled` prevents any stale data from being read on reactivation.
+    pub(crate) fn process_with_transport(
+        &mut self,
+        left: f32,
+        right: f32,
+        frame: u64,
+        playing: bool,
+    ) -> (f32, f32) {
+        let discontinuity = self
+            .last_transport_frame
+            .is_some_and(|previous| previous.checked_add(1) != Some(frame));
+        self.last_transport_frame = Some(frame);
+        if !playing || discontinuity {
+            self.filled = 0;
+            self.playing = false;
+            self.armed = self.active;
+            self.pos = 0;
+            self.engage.set_target(0.0, 0);
+        }
+        self.frame = frame;
+        if !playing {
+            return (left, right);
+        }
+        // Round each absolute musical boundary, rather than multiplying a
+        // rounded slice duration (which accumulates drift at fractional BPM).
+        let period =
+            repeat_division_beats(self.division) * 60.0 / self.bpm * f64::from(self.sample_rate);
+        let boundary = ((frame as f64 / period).round() * period).round() as u64;
+        self.process_on_boundary(left, right, boundary == frame)
+    }
+
     pub(crate) fn process(&mut self, left: f32, right: f32) -> (f32, f32) {
+        self.process_on_boundary(
+            left,
+            right,
+            self.frame.is_multiple_of(self.slice_len as u64),
+        )
+    }
+
+    fn process_on_boundary(&mut self, left: f32, right: f32, boundary: bool) -> (f32, f32) {
         let mix = self.mix.next_value().clamp(0.0, 1.0);
 
-        if self.armed
-            && self.frame.is_multiple_of(self.slice_len as u64)
-            && self.filled >= self.slice_len
-        {
+        if self.armed && boundary && self.filled >= self.slice_len {
             self.start_playback();
         }
 

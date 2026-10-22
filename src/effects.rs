@@ -506,6 +506,27 @@ impl Effect {
     }
 
     pub fn process(&mut self, left: f32, right: f32) -> (f32, f32) {
+        self.process_context(left, right, None)
+    }
+
+    /// Render one frame using an absolute transport grid. The original
+    /// `process` API retains its free-running behavior for standalone callers.
+    pub fn process_with_transport(
+        &mut self,
+        left: f32,
+        right: f32,
+        frame: u64,
+        playing: bool,
+    ) -> (f32, f32) {
+        self.process_context(left, right, Some((frame, playing)))
+    }
+
+    fn process_context(
+        &mut self,
+        left: f32,
+        right: f32,
+        transport: Option<(u64, bool)>,
+    ) -> (f32, f32) {
         let (left, right) = (sanitize(left), sanitize(right));
         let gain = self.bypass_gain.next_value();
         if self.bypassed && gain <= 0.0 {
@@ -517,7 +538,10 @@ impl Effect {
             EffectState::Reverb(state) => state.process(left, right),
             EffectState::Filter(state) => state.process(left, right),
             EffectState::Chorus(state) => state.process(left, right),
-            EffectState::BeatRepeat(state) => state.process(left, right),
+            EffectState::BeatRepeat(state) => match transport {
+                Some((frame, playing)) => state.process_with_transport(left, right, frame, playing),
+                None => state.process(left, right),
+            },
             EffectState::BitCrusher(state) => state.process(left, right),
         };
         (
@@ -1115,6 +1139,21 @@ impl EffectRack {
         self.effects
             .iter_mut()
             .fold((left, right), |(l, r), effect| effect.process(l, r))
+    }
+
+    /// Render a serial rack with one shared absolute transport position.
+    pub fn process_with_transport(
+        &mut self,
+        left: f32,
+        right: f32,
+        frame: u64,
+        playing: bool,
+    ) -> (f32, f32) {
+        self.effects
+            .iter_mut()
+            .fold((left, right), |(l, r), effect| {
+                effect.process_with_transport(l, r, frame, playing)
+            })
     }
 
     pub fn set_param(&mut self, slot: EffectSlotId, param: EffectParamId, value: f32) -> bool {

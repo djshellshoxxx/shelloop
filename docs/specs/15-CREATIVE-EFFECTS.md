@@ -32,7 +32,7 @@ Implemented in `src/fx_creative.rs` (DSP) and `src/effect_macros.rs` (macros), w
 
 * **Filter**: state-variable LP/BP/HP with envelope-follower modulation and a tempo-synced sine sweep; resonance ≤ 0.95.
 * **Chorus/flanger**: bounded stereo delay (35 ms), linear interpolation, per-channel LFO phase via `width`, feedback clamped to ±0.9.
-* **Beat repeat**: fixed buffers for one beat at 20 BPM; engages only at a slice boundary after a full slice is captured; `reset` clears everything. The boundary grid counts frames since the effect's last reset (effects have no transport position), so it is aligned to the host/project grid only when started together with it.
+* **Beat repeat**: fixed buffers for one beat at 20 BPM; engages only at a slice boundary after a full slice is captured; `reset` clears everything. The standalone engine supplies the absolute project frame to insert, send and master racks, so effects added during playback engage on the project subdivision grid. Pauses and transport discontinuities discard capture and require a complete fresh slice before reengagement. Legacy `Effect::process` callers retain their local grid; `process_with_transport` is additive.
 * **Macros**: two per effect chain with per-scene recall via the engine's smoothed parameter path. Spec 13 macros remain separate synth-patch macros; both can be MIDI-learned/locked through their underlying parameters.
 * **Memory**: counted in `required_memory_bytes` against the existing 64 MiB effects budget.
 * **Not verified**: DAW smoke tests and listening tests.

@@ -393,3 +393,52 @@ fn creative_effects_chain_inside_a_rack_without_allocating_budget_surprises() {
         assert!(l.is_finite() && r.is_finite());
     }
 }
+
+#[test]
+fn beat_repeat_uses_transport_grid_when_inserted_after_playback_started() {
+    let mut fx = repeat_fx(&[("active", 1.0)]);
+    // Insert at frame 500. A full 2000-frame slice is not available at the
+    // first boundary (2000), so engagement must wait until transport 4000.
+    for frame in 500..4_000_u64 {
+        let input = ramp(frame as usize);
+        let output = fx.process_with_transport(input, input, frame, true).0;
+        assert_eq!(output, input, "engaged off the project grid at {frame}");
+    }
+    for frame in 4_000..5_000_u64 {
+        let input = ramp(frame as usize);
+        let output = fx.process_with_transport(input, input, frame, true).0;
+        if frame >= 4_100 {
+            assert!((output - ramp((frame - 2_000) as usize)).abs() < 1e-5);
+        }
+    }
+    // A stopped clock cannot retrigger or replay its previous capture.
+    for _ in 0..3_000 {
+        assert_eq!(
+            fx.process_with_transport(0.25, -0.25, 5_000, false),
+            (0.25, -0.25)
+        );
+    }
+    // A seek discards old audio and must capture a complete fresh slice.
+    for frame in 17_500..20_000_u64 {
+        assert_eq!(
+            fx.process_with_transport(0.125, 0.125, frame, true),
+            (0.125, 0.125)
+        );
+    }
+}
+
+#[test]
+fn beat_repeat_fractional_grid_does_not_accumulate_rounded_slice_drift() {
+    let mut fx = build(EffectKind::BeatRepeat, &[("active", 1.0)], SR, 123.0);
+    // 1/8 at 123 BPM is 1951.2195... frames. Insert at frame 3000:
+    // the first full capture engages at round(3 * period) = 5854,
+    // never at 3 * round(period) = 5853.
+    for frame in 3_000..5_854_u64 {
+        let input = ramp(frame as usize);
+        assert_eq!(
+            fx.process_with_transport(input, input, frame, true).0,
+            input,
+            "rounded per-slice duration drifted from transport at {frame}"
+        );
+    }
+}

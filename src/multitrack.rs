@@ -919,6 +919,8 @@ impl RealtimeTrack {
         any_soloed: bool,
         commands: &mut Vec<EngineCommand>,
     ) -> ((f32, f32), [f32; MAX_SEND_BUSES]) {
+        let transport_frame = self.sequencer.position_frame();
+        let transport_playing = self.sequencer.is_playing();
         self.apply_pending_revision();
         self.apply_pending_slices();
 
@@ -964,7 +966,12 @@ impl RealtimeTrack {
                         (0.0, 0.0)
                     }
                 } else {
-                    let (left, right) = self.inserts.process(mono, mono);
+                    let (left, right) = self.inserts.process_with_transport(
+                        mono,
+                        mono,
+                        transport_frame,
+                        transport_playing,
+                    );
                     if audible {
                         strip.process_stereo(left, right)
                     } else {
@@ -975,7 +982,12 @@ impl RealtimeTrack {
             TrackInstrument::Sample(sampler) => {
                 let (mut left, mut right) = sampler.next_stereo_frame();
                 if !self.inserts.is_empty() {
-                    (left, right) = self.inserts.process(left, right);
+                    (left, right) = self.inserts.process_with_transport(
+                        left,
+                        right,
+                        transport_frame,
+                        transport_playing,
+                    );
                 }
                 if audible {
                     strip.process_stereo(left, right)
@@ -1392,6 +1404,8 @@ impl MultiTrackEngine {
 
     pub fn next_stereo_frame(&mut self) -> (f32, f32) {
         self.advance_scene_clock();
+        let transport_frame = self.position_frame();
+        let transport_playing = self.is_playing();
         let any_soloed = self.tracks.iter().any(|track| track.soloed);
         let mut left = 0.0_f32;
         let mut right = 0.0_f32;
@@ -1409,12 +1423,22 @@ impl MultiTrackEngine {
         }
 
         for (bus, (send_left, send_right)) in self.send_buses.iter_mut().zip(send_inputs) {
-            let (wet_left, wet_right) = bus.rack.process(send_left, send_right);
+            let (wet_left, wet_right) = bus.rack.process_with_transport(
+                send_left,
+                send_right,
+                transport_frame,
+                transport_playing,
+            );
             left += wet_left * bus.return_gain;
             right += wet_right * bus.return_gain;
         }
         if !self.master_rack.is_empty() {
-            (left, right) = self.master_rack.process(left, right);
+            (left, right) = self.master_rack.process_with_transport(
+                left,
+                right,
+                transport_frame,
+                transport_playing,
+            );
         }
         let master_gain = self.master_gain.next_value();
         let output = (

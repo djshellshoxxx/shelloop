@@ -413,3 +413,48 @@ fn example_synth_patches_load_and_render_at_common_device_rates() {
         assert!(energy > 1.0);
     }
 }
+
+#[test]
+fn late_added_track_repeat_uses_the_shared_project_clock() {
+    use shelloop::{find_effect_param, EffectConfig, EffectKind, PreparedTrack};
+    let mut clock = synth_track(1, "clock", 60, 1);
+    clock.muted = true;
+    let mut wet = MultiTrackEngine::new(8_000, 120.0, 4, 99, 4, vec![clock.clone()]).unwrap();
+    let mut dry = MultiTrackEngine::new(8_000, 120.0, 4, 99, 4, vec![clock]).unwrap();
+    for _ in 0..500 {
+        assert_eq!(wet.next_stereo_frame(), dry.next_stereo_frame());
+    }
+    let mut track = synth_track(2, "late", 67, 1);
+    // Keep both engines on the stereo-insert mixer path; an empty rack uses
+    // the legacy mono pan law, which has a different centre gain.
+    track
+        .inserts
+        .push(EffectConfig::new(EffectKind::BeatRepeat));
+    let mut repeated = track.clone();
+    let mut repeat = EffectConfig::new(EffectKind::BeatRepeat);
+    repeat
+        .set_param_value(
+            find_effect_param(EffectKind::BeatRepeat, "active").unwrap(),
+            1.0,
+        )
+        .unwrap();
+    repeated.inserts[0] = repeat;
+    wet.add_track(PreparedTrack::new(8_000, 120.0, 4, 99, 4, repeated, None).unwrap())
+        .unwrap();
+    dry.add_track(PreparedTrack::new(8_000, 120.0, 4, 99, 4, track, None).unwrap())
+        .unwrap();
+    // A 2000-frame capture inserted at 500 must wait for the global 4000
+    // boundary, not the effect-local boundary at project frame 2500.
+    for frame in 500..4_000 {
+        assert_eq!(
+            wet.next_stereo_frame(),
+            dry.next_stereo_frame(),
+            "late insert engaged outside the project grid at {frame}"
+        );
+    }
+    let mut changed = false;
+    for _ in 4_000..5_000 {
+        changed |= wet.next_stereo_frame() != dry.next_stereo_frame();
+    }
+    assert!(changed, "the repeat must engage after the project boundary");
+}
