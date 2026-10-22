@@ -1,6 +1,7 @@
 """Refuse release artifacts unless both crate versions and HEAD match the tag."""
 from pathlib import Path
 import subprocess
+import os
 import sys
 import tomllib
 
@@ -19,4 +20,4 @@ def check(tag, root=Path('.')):
 
 
 if __name__ == '__main__':
-    check(sys.argv[1])
+    check(sys.argv[1] if len(sys.argv) > 1 else os.environ["TAG"])

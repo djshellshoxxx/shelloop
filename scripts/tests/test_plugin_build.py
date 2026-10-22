@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import plistlib
+import subprocess
 import unittest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -49,6 +50,34 @@ class MacPackageTests(unittest.TestCase):
             self.assertEqual(binary.read_bytes(), library.read_bytes())
             self.assertEqual(info['CFBundleIdentifier'], 'com.circuitdriftlabs.shelloop')
             self.assertEqual(info['CFBundleVersion'], '1.1.0')
+
+
+class ReleaseProvenanceTests(unittest.TestCase):
+    def test_tag_version_and_commit_must_all_match(self):
+        spec = importlib.util.spec_from_file_location('check_release_tag', SCRIPTS / 'check_release_tag.py')
+        checker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'clap-plugin').mkdir()
+            for name in ('Cargo.toml', 'clap-plugin/Cargo.toml'):
+                (root / name).write_text('[package]\nversion = "1.1.0-rc.1"\n')
+            def git(*args):
+                subprocess.run(['git', *args], cwd=root, check=True, capture_output=True)
+            git('init')
+            git('add', '.')
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                'commit', '-m', 'candidate')
+            git('tag', 'v1.1.0-rc.1')
+            checker.check('v1.1.0-rc.1', root)
+            with self.assertRaisesRegex(ValueError, 'does not match'):
+                checker.check('v1.1.0', root)
+            (root / 'later.txt').write_text('different source')
+            git('add', '.')
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                'commit', '-m', 'later')
+            with self.assertRaisesRegex(ValueError, 'does not match the existing tag'):
+                checker.check('v1.1.0-rc.1', root)
 
 
 if __name__ == '__main__':
