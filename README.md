@@ -1,8 +1,8 @@
 # SHELLOOP
 
-SHELLOOP is a terminal-only real-time music instrument: a live step sequencer plus a playable synthesizer designed for Windows and Linux.
+SHELLOOP is a terminal-only real-time music instrument: a live step sequencer plus a playable synthesizer designed for Windows, Linux and macOS.
 
-All fifteen specifications (`docs/specs/01`–`15`) are implemented. The twelve v1 specs are: multitrack engine, live pattern editing, synth/filter/ADSR, WAV samples, scenes and chains, MIDI learn, effects, a full-screen terminal UI, per-step parameter locks, resampling, a retrospective performance black box and invariant-locked pattern variation. SHELLOOP also ships as a **CLAP instrument plugin** (`clap-plugin/`). Release builds are published on the GitHub Releases page as a Windows `.exe`, a Linux binary and CLAP plugins for both. The sound-design expansion adds a modulation matrix with macros (spec 13), sample shaping and slices (spec 14) and creative effects (spec 15), described below. Physical audio-hardware latency and MIDI-controller validation is tracked separately in `docs/HARDWARE-ACCEPTANCE.md`.
+All fifteen specifications (`docs/specs/01`–`15`) are implemented. The twelve v1 specs are: multitrack engine, live pattern editing, synth/filter/ADSR, WAV samples, scenes and chains, MIDI learn, effects, a full-screen terminal UI, per-step parameter locks, resampling, a retrospective performance black box and invariant-locked pattern variation. SHELLOOP also ships as a **CLAP instrument plugin** (`clap-plugin/`). Release builds are published on the GitHub Releases page as a Windows `.exe`, Linux and native macOS binaries, plus CLAP and VST3 plugins. macOS releases include separate Apple Silicon and Intel archives. The sound-design expansion adds a modulation matrix with macros (spec 13), sample shaping and slices (spec 14) and creative effects (spec 15), described below. Physical audio-hardware latency and MIDI-controller validation is tracked separately in `docs/HARDWARE-ACCEPTANCE.md`.
 
 ## Implemented
 
@@ -38,8 +38,11 @@ All fifteen specifications (`docs/specs/01`–`15`) are implemented. The twelve 
 - Modulation matrix (spec 13): 2 LFOs (sine, triangle, saw, square, seeded sample-and-hold; Hz or tempo divisions), 2 macros, mod wheel, envelopes, velocity and key tracking routed through up to 8 routes per synth patch
 - Sample shaping and slices (spec 14): per-track low-/high-pass filter, drive, ADSR amplitude envelope, zero-latency transient shaper, up to 128 slices selected by note, seeded random or step lock, offline transient detection
 - Creative effects (spec 15): tempo-synced multimode filter, stereo chorus/flanger and quantized beat repeat, usable as inserts, sends or master effects, with two performance macros per effect chain and per-scene recall
+- Euclidean rhythms (spec 16): `euclid <hits> [rotation]` rewrites the selected pattern as one undoable, pattern-quantised edit
+- Bitcrusher (spec 17): bit-depth and sample-rate reduction as an effect kind
+- Slice detection (spec 14): `slice detect`, with slice maps committed on the bar
 - CLAP instrument plugin: polyphonic synth with 23 automatable parameters (including LFO/mod-wheel/macro modulation), host-synced sequencer and saved state
-- Windows/Linux all-feature compile, test, strict Clippy and optimized-release CI gates
+- Windows/Linux/macOS all-feature compile, test, strict Clippy and optimized-release CI gates
 - Tag-triggered release workflow publishing the Windows `.exe`, Linux build and CLAP plugins with SHA-256 checksums
 
 ## Command line
@@ -116,6 +119,7 @@ step 5 micro +120
 length 15
 swing 0.12
 rotate right 1
+euclid 5 2
 undo
 redo
 ```
@@ -799,13 +803,14 @@ Commands (selected sample track; every edit is validated as a unit, applies to n
 
 ```text
 slice auto 8 | slice add 0.0 0.25 | slice delete 3 | slice clear | slice list
+slice detect 16 0.5   (offline transient detection of the track's WAV; defaults 16 and 0.5)
 slice assign note 36 | slice assign random 99 | slice assign none
 sample filter lowpass 900 0.3 | sample filter off
 sample drive 6 | sample envelope 0.01 0.1 0.6 0.3 | sample envelope off
 sample transient 0.5 -0.25 | sample undo
 ```
 
-Offline slice detection is available to tooling as `shelloop::detect_slices` (deterministic transient detection that returns contiguous, validated slices).
+Slice maps (from `slice` commands, `slice detect` and undo) take effect on the next bar of the project grid; a stopped track or a restart applies them at once. Offline detection is also available to tooling as `shelloop::detect_slices`.
 
 ### Creative effects (spec 15)
 
@@ -816,6 +821,7 @@ Use these `kind`s in a track `inserts` list, a send bus or `master`. Parameters 
 | `filter` | `mode` 0 LP / 1 BP / 2 HP, `cutoff`, `resonance` (≤0.95), `env_amount` (envelope follower, −1…1), `sync` (0 off, 1–6 tempo divisions for a cutoff sweep), `depth`, `mix` |
 | `chorus` | `mode` 0 chorus / 1 flanger, `rate_hz`, `sync`, `depth`, `feedback` (−0.9…0.9), `width` (stereo LFO phase), `mix` |
 | `beat_repeat` | `division` (0 ¼, 1 ⅛, 2 1/16, 3 1/32, 4 ⅛ triplet), `repeats` (0 = hold), `reverse`, `gate` (seeded probability of muting a repeat), `mix`, `active`, `seed` |
+| `bitcrusher` | `bits` 1–16 (signed quantiser depth, 16 nearly transparent), `downsample` 1–32 (sample-and-hold frames), `mix`. No buffers, no latency (spec 17) |
 
 Performance macros: every effect chain (a track's inserts, a send bus, the master chain) has two macro knobs that drive one effect parameter each across its whole range, using the parameter's own response curve. Assign and move them live, and store per-scene positions in the project file; they are recalled through the normal smoothed parameter path when the scene launches.
 
@@ -949,3 +955,26 @@ problem file and exits before opening the audio device. Decoded audio is
 limited to 512 MiB per project; the budget is checked against the WAV header
 before decoding, so an oversized file is refused without filling memory.
 `synth ...` live edit commands apply to synth tracks only.
+
+## Native macOS releases
+
+Download the `macos-arm64` archive for Apple Silicon or `macos-x86_64` for Intel.
+The CLAP download contains a `shelloop.clap` bundle; copy the whole bundle to
+`~/Library/Audio/Plug-Ins/CLAP/`. Copy the whole `SHELLOOP.vst3` bundle to
+`~/Library/Audio/Plug-Ins/VST3/`. Rescan plugins in your host.
+
+macOS bundles are ad-hoc signed, not notarized. Gatekeeper may require explicit
+approval in System Settings. The optional PC-speaker probe is unsupported on
+macOS; CoreAudio output and CoreMIDI use the normal audio/MIDI backends.
+
+See [release procedure](docs/RELEASING.md) and [open acceptance items](docs/OPEN-ITEMS.md).
+
+### Named synth presets
+
+Use `preset save WarmPad`, `preset list`, `preset load WarmPad` and
+`preset delete WarmPad` in the project command prompt/TUI. `preset directory`
+shows the `presets/` directory beside the current project. Presets capture the
+selected synth's current patch and modulation routes; `save` also persists them
+in the project. Names accept letters, digits, underscores and hyphens (64 max).
+Saving refuses to overwrite an existing name; invalid files and full audio
+queues leave the current patch unchanged. File I/O stays on the control thread.

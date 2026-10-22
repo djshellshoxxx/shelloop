@@ -142,9 +142,11 @@ finish at their original duration and sustain edits apply immediately. Newly
 triggered/stolen voices start at the latest patch targets. Oscillator and filter
 mode switches are immediate and still need subjective click QA.
 
-Remaining work: preset directory management, saving live control snapshots,
-physical audio/CPU QA, and integration with later MIDI-learn/TUI/parameter-lock
-specs. Automated checks do not close the hardware acceptance gate.
+Named preset storage and live snapshot saving are implemented in `presets.rs`
+and the controller (`preset list/directory/save/load/delete`). Files are versioned
+and validated before audio handoff; existing names are never overwritten.
+Project saves capture live patch/modulation edits. Later MIDI-learn/TUI/parameter-lock
+integration is implemented in their respective specs. Remaining: physical audio/CPU QA. Automated checks do not close the hardware acceptance gate.
 
 Linux stable Rust passed formatting, 140 default tests, 141 all-feature tests,
 strict Clippy for both configurations, and the optimized all-feature build.

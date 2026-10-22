@@ -149,7 +149,14 @@ pub fn route_range_text(patch: &crate::SynthPatch, route: &super::model::ModRout
         route.source,
         ModSource::Lfo1 | ModSource::Lfo2 | ModSource::KeyTrack
     );
-    let span = |scale: f32| (if bipolar { -scale } else { 0.0_f32.min(scale) }, scale);
+    let span = |scale: f32| {
+        if bipolar {
+            (-scale, scale)
+        } else {
+            let signed = scale * route.amount.signum();
+            (signed.min(0.0), signed.max(0.0))
+        }
+    };
     match route.dest {
         ModDest::Tuning => format!("+-{:.1} st", 12.0 * depth),
         ModDest::PulseWidth => {

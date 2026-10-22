@@ -7,21 +7,31 @@ use shelloop::{
     ModSource, Oscillator, RealtimeSynth, SynthPatch,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Counting;
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    static MEASURING: Cell<bool> = const { Cell::new(false) };
+}
+
+fn count_allocation() {
+    if MEASURING.try_with(Cell::get).unwrap_or(false) {
+        ALLOCATIONS.fetch_add(1, Ordering::SeqCst);
+    }
+}
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::SeqCst);
+        count_allocation();
         System.alloc(layout)
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         System.dealloc(ptr, layout)
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::SeqCst);
+        count_allocation();
         System.realloc(ptr, layout, new_size)
     }
 }
@@ -30,15 +40,93 @@ unsafe impl GlobalAlloc for Counting {
 static ALLOCATOR: Counting = Counting;
 
 fn allocations_during(f: impl FnOnce()) -> usize {
+    struct Measurement(bool);
+    impl Drop for Measurement {
+        fn drop(&mut self) {
+            MEASURING.with(|flag| flag.set(self.0));
+        }
+    }
+    let guard = Measurement(MEASURING.with(|flag| flag.replace(true)));
     let before = ALLOCATIONS.load(Ordering::SeqCst);
     f();
-    ALLOCATIONS.load(Ordering::SeqCst) - before
+    let count = ALLOCATIONS.load(Ordering::SeqCst) - before;
+    drop(guard);
+    count
 }
 
 #[test]
 fn warmed_renders_do_not_allocate() {
+    allocation_probe_is_scoped_to_the_render_thread();
+    tempo_handoff_does_not_allocate();
     sample_shaping_does_not_allocate();
     modulation_and_effects_do_not_allocate();
+}
+
+fn allocation_probe_is_scoped_to_the_render_thread() {
+    use std::sync::{atomic::AtomicBool, Arc};
+    assert!(
+        allocations_during(|| {
+            std::hint::black_box(Box::new([0_u8; 1_024]));
+        }) >= 1,
+        "the probe must detect allocations on the measured thread"
+    );
+    let start = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
+    let (worker_start, worker_done) = (start.clone(), done.clone());
+    let worker = std::thread::spawn(move || {
+        while !worker_start.load(Ordering::SeqCst) {
+            std::hint::spin_loop();
+        }
+        std::hint::black_box(Box::new([0_u8; 1_024]));
+        worker_done.store(true, Ordering::SeqCst);
+    });
+    let count = allocations_during(|| {
+        start.store(true, Ordering::SeqCst);
+        while !done.load(Ordering::SeqCst) {
+            std::hint::spin_loop();
+        }
+    });
+    worker.join().unwrap();
+    assert_eq!(
+        count, 0,
+        "unrelated control/harness thread allocations must not pollute the audio probe"
+    );
+}
+
+fn tempo_handoff_does_not_allocate() {
+    use shelloop::{
+        apply_audio_message, AudioMessage, EffectKind, MultiTrackEngine, MultiTrackProject,
+        Pattern, PatternStep, TrackDefinition, TrackId, TrackKind,
+    };
+    let step = PatternStep {
+        note: 60,
+        velocity: 1.0,
+        gate: 1.0,
+        probability: 1.0,
+        ratchets: 1,
+        microtiming_frames: 0,
+    };
+    let pattern = Pattern::new("clock", 1, 0.0, 0, vec![Some(step)]).unwrap();
+    let mut track = TrackDefinition::new(TrackId(1), "clock", TrackKind::Synth, pattern);
+    track
+        .inserts
+        .push(EffectConfig::new(EffectKind::BeatRepeat));
+    let project = MultiTrackProject::new(1, 120.0, 4, vec![track]);
+    let mut engine = MultiTrackEngine::from_project(48_000, 4, &project, None).unwrap();
+    for _ in 0..100 {
+        engine.next_stereo_frame();
+    }
+    let (garbage, _) = crossbeam_channel::bounded(1);
+    assert_eq!(
+        allocations_during(|| {
+            for bpm in [123.5, 91.7, 240.1, f64::NAN] {
+                apply_audio_message(&mut engine, AudioMessage::Tempo { bpm }, &garbage);
+                std::hint::black_box(engine.next_stereo_frame());
+            }
+        }),
+        0,
+        "actual tempo messages and invalid rejection must not allocate"
+    );
 }
 
 fn sample_shaping_does_not_allocate() {
@@ -173,6 +261,7 @@ fn modulation_and_effects_do_not_allocate() {
         EffectKind::Filter,
         EffectKind::Chorus,
         EffectKind::BeatRepeat,
+        EffectKind::BitCrusher,
     ] {
         let mut fx = Effect::new(&EffectConfig::new(kind), 48_000, 120.0).unwrap();
         let active = shelloop::find_effect_param(
@@ -192,9 +281,12 @@ fn modulation_and_effects_do_not_allocate() {
                 fx.set_param(active, 1.0);
                 fx.set_tempo(140.0);
                 for n in 0..60_000 {
-                    std::hint::black_box(
-                        fx.process((n as f32 * 0.01).sin(), (n as f32 * 0.02).cos()),
-                    );
+                    std::hint::black_box(fx.process_with_transport(
+                        (n as f32 * 0.01).sin(),
+                        (n as f32 * 0.02).cos(),
+                        n,
+                        true,
+                    ));
                 }
                 fx.set_bypassed(true);
                 for n in 0..2_000 {

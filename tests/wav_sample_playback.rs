@@ -756,3 +756,31 @@ fn bundled_sample_project_loads_and_renders() {
     }
     assert!(peak > 0.3 && peak < 1.0, "peak {peak}");
 }
+
+#[test]
+fn project_load_reports_every_missing_asset_and_preserves_the_active_bank() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = SampleSettings::new("missing-one.wav", SampleMode::OneShot);
+    let second = SampleSettings::new("missing-two.wav", SampleMode::OneShot);
+    let mut active = SampleAssetBank::new(1_024);
+    active
+        .insert_decoded(
+            "active.wav",
+            DecodedWav {
+                sample_rate: 48_000,
+                channels: 1,
+                frames: vec![StereoFrame::new(0.25, 0.25)],
+            },
+        )
+        .unwrap();
+    let old_bytes = active.used_bytes();
+    let error = SampleAssetBank::load_all([&first, &second], directory.path(), 1_024).unwrap_err();
+    assert!(error.contains("missing-one.wav") && error.contains("missing-two.wav"));
+    assert!(error.contains("2 sample file(s)"));
+    assert_eq!(active.len(), 1);
+    assert_eq!(active.used_bytes(), old_bytes);
+    assert_eq!(
+        active.get(SampleAssetId(0)).unwrap().frames[0],
+        StereoFrame::new(0.25, 0.25)
+    );
+}

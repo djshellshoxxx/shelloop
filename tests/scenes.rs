@@ -300,3 +300,40 @@ fn bundled_example_projects_load_and_render() {
     }
     assert!(count >= 4);
 }
+
+#[test]
+fn tempo_changes_keep_chain_bar_identity_and_retime_queued_scene_frames() {
+    let mut engine = MultiTrackEngine::from_project(RATE, 4, &project(), None).unwrap();
+    engine.start_chain(ChainId(1), 0).unwrap();
+    for _ in 0..24_000 {
+        engine.next_stereo_frame();
+    }
+    let old = engine.tempo_clock();
+    let old_frame = engine.chain_status().unwrap().next_change_frame;
+    engine.set_tempo(180.5).unwrap();
+    let new = engine.tempo_clock();
+    assert_eq!(
+        engine.chain_status().unwrap().next_change_frame,
+        new.frame_at_beat(old.beat_at_frame(old_frame))
+    );
+    let queued = new
+        .next_boundary(
+            engine.position_frame(),
+            4,
+            shelloop::QuantizeBoundary::Bar { beats_per_bar: 4 },
+        )
+        .unwrap();
+    engine
+        .launch_scene_at(
+            SceneId(3),
+            shelloop::QuantizeBoundary::Bar { beats_per_bar: 4 },
+        )
+        .unwrap();
+    engine.set_tempo(73.25).unwrap();
+    assert_eq!(
+        engine.queued_scene().unwrap().1,
+        engine
+            .tempo_clock()
+            .frame_at_beat(new.beat_at_frame(queued))
+    );
+}

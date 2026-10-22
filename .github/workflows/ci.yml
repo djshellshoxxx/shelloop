@@ -21,12 +21,14 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Test release build helpers
+        run: python3 -m unittest discover -s scripts/tests -v
       - name: Format
         run: cargo fmt --all -- --check
       - name: Test
-        run: cargo test --workspace --all-targets
+        run: cargo test --locked --workspace --all-targets
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Preserve resolved dependency lockfile
         uses: actions/upload-artifact@v4
         with:
@@ -39,7 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -51,22 +53,22 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: Check all optional backends
-        run: cargo check --workspace --all-targets --features realtime-audio,midi,terminal-ui
+        run: cargo check --locked --workspace --all-targets --features realtime-audio,midi,terminal-ui
       - name: Test all optional backends
-        run: cargo test --workspace --all-targets --features realtime-audio,midi,terminal-ui
+        run: cargo test --locked --workspace --all-targets --features realtime-audio,midi,terminal-ui
       - name: Clippy all optional backends
-        run: cargo clippy --workspace --all-targets --features realtime-audio,midi,terminal-ui -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --features realtime-audio,midi,terminal-ui -- -D warnings
       - name: Build optimized runtime
-        run: cargo build --release --features realtime-audio,midi,terminal-ui
+        run: cargo build --locked --release --features realtime-audio,midi,terminal-ui
       - name: Build CLAP plugin
-        run: cargo build --release -p shelloop-clap
+        run: cargo build --locked --release -p shelloop-clap
 
   vst3-build:
     name: VST3 (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7

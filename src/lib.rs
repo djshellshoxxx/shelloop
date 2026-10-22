@@ -9,6 +9,7 @@ pub mod effect_macros;
 pub mod effects;
 pub mod engine;
 pub mod envelope;
+pub mod euclid;
 pub mod filter;
 pub mod fx_creative;
 pub mod keyboard;
@@ -22,6 +23,7 @@ pub mod params;
 pub mod pattern;
 pub mod pc_speaker;
 pub mod performance;
+pub mod presets;
 pub mod project;
 pub mod quantize;
 pub mod recording;
@@ -34,6 +36,7 @@ pub mod scheduler;
 pub mod scope;
 pub mod sequencer;
 pub mod synth;
+pub mod tempo;
 pub mod transport;
 pub mod tui;
 pub mod variation;
@@ -155,6 +158,7 @@ pub use synth::{
     parse_synth_parameter_command, sync_to_index, CompiledSynthPatch, Oscillator, SynthParamId,
     SynthParamValue, SynthPatch, SynthVoice,
 };
+pub use tempo::TempoClock;
 pub use transport::{Transport, TransportState};
 pub use tui::{route_input, TuiLayout, TuiSnapshot, UiAction, UiInput, UiMode};
 pub use variation::{

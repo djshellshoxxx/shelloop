@@ -363,8 +363,7 @@ pub struct LockBoundary {
 
 #[derive(Debug, Clone)]
 pub struct PatternScheduler {
-    sample_rate: u32,
-    bpm: f64,
+    clock: crate::TempoClock,
     steps_per_beat: u32,
     project_seed: u64,
 }
@@ -386,15 +385,22 @@ impl PatternScheduler {
             return Err("steps per beat must be between 1 and 64".into());
         }
         Ok(Self {
-            sample_rate,
-            bpm,
+            clock: crate::TempoClock::new(sample_rate, bpm)?,
             steps_per_beat,
             project_seed,
         })
     }
 
     pub fn frames_per_step(&self) -> f64 {
-        (self.sample_rate as f64 * 60.0) / (self.bpm * self.steps_per_beat as f64)
+        (f64::from(self.clock.sample_rate()) * 60.0)
+            / (self.clock.bpm() * self.steps_per_beat as f64)
+    }
+
+    pub(crate) fn clock(&self) -> crate::TempoClock {
+        self.clock
+    }
+    pub(crate) fn set_clock(&mut self, clock: crate::TempoClock) {
+        self.clock = clock;
     }
 
     pub fn schedule_block(
@@ -467,8 +473,11 @@ impl PatternScheduler {
         let loop_frames = frames_per_step * pattern.steps.len() as f64;
         let block_end = block_start_frame.saturating_add(block_frames as u64);
         let margin = loop_margin(pattern.steps, loop_frames);
-        let estimated_first = (block_start_frame as f64 / loop_frames).floor() as i64 - margin;
-        let estimated_last = (block_end as f64 / loop_frames).floor() as i64 + margin;
+        let estimated_first = ((block_start_frame as f64 - self.clock.origin_frame()) / loop_frames)
+            .floor() as i64
+            - margin;
+        let estimated_last =
+            ((block_end as f64 - self.clock.origin_frame()) / loop_frames).floor() as i64 + margin;
         let first_loop = estimated_first.max(0) as u64;
         let last_loop = estimated_last.max(0) as u64;
 
@@ -482,7 +491,8 @@ impl PatternScheduler {
                 let global_step = loop_index
                     .saturating_mul(pattern.steps.len() as u64)
                     .saturating_add(step_index as u64);
-                let base_frame = (global_step as f64 * frames_per_step).round() as i128;
+                let base_frame = (self.clock.origin_frame() + global_step as f64 * frames_per_step)
+                    .round() as i128;
                 let swing_frames = if step_index % 2 == 1 {
                     (frames_per_step * pattern.swing as f64).round() as i128
                 } else {
@@ -552,15 +562,21 @@ impl PatternScheduler {
         let loop_frames = frames_per_step * steps.len() as f64;
         let block_end = block_start_frame.saturating_add(u64::from(block_frames));
         let margin = loop_margin(steps, loop_frames);
-        let first_loop =
-            ((block_start_frame as f64 / loop_frames).floor() as i64 - margin).max(0) as u64;
-        let last_loop = ((block_end as f64 / loop_frames).floor() as i64 + margin).max(0) as u64;
+        let first_loop = (((block_start_frame as f64 - self.clock.origin_frame()) / loop_frames)
+            .floor() as i64
+            - margin)
+            .max(0) as u64;
+        let last_loop = (((block_end as f64 - self.clock.origin_frame()) / loop_frames).floor()
+            as i64
+            + margin)
+            .max(0) as u64;
         'loops: for loop_index in first_loop..=last_loop {
             for (step_index, step) in steps.iter().enumerate() {
                 let global_step = loop_index
                     .saturating_mul(steps.len() as u64)
                     .saturating_add(step_index as u64);
-                let base = (global_step as f64 * frames_per_step).round() as i128;
+                let base = (self.clock.origin_frame() + global_step as f64 * frames_per_step)
+                    .round() as i128;
                 let swing = if step_index % 2 == 1 {
                     (frames_per_step * pattern.swing as f64).round() as i128
                 } else {
