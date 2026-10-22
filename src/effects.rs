@@ -5,8 +5,8 @@
 //! allocate, lock or panic, and always produce finite output.
 
 use crate::fx_creative::{
-    beat_repeat_max_frames, cho, chorus_buffer_len, flt, BeatRepeatFx, ChorusFx, FilterFx,
-    MAX_FILTER_RESONANCE, MAX_MOD_FEEDBACK,
+    beat_repeat_max_frames, cho, chorus_buffer_len, flt, BeatRepeatFx, BitCrushFx, ChorusFx,
+    FilterFx, MAX_FILTER_RESONANCE, MAX_MOD_FEEDBACK,
 };
 use crate::mixer::SmoothedParam;
 use crate::params::{EffectParamId, EffectSlotId, ParamCurve, ParamDescriptor};
@@ -39,6 +39,7 @@ pub enum EffectKind {
     Filter,
     Chorus,
     BeatRepeat,
+    BitCrusher,
 }
 
 impl EffectKind {
@@ -50,6 +51,7 @@ impl EffectKind {
             Self::Filter => "filter",
             Self::Chorus => "chorus",
             Self::BeatRepeat => "beat_repeat",
+            Self::BitCrusher => "bitcrusher",
         }
     }
 
@@ -61,6 +63,7 @@ impl EffectKind {
             "filter" => Some(Self::Filter),
             "chorus" => Some(Self::Chorus),
             "beat_repeat" => Some(Self::BeatRepeat),
+            "bitcrusher" => Some(Self::BitCrusher),
             _ => None,
         }
     }
@@ -177,6 +180,12 @@ static BEAT_REPEAT_PARAMS: [ParamDescriptor; 7] = [
     param("seed", 0.0, 65_535.0, 1.0, ParamCurve::Discrete),
 ];
 
+static BITCRUSHER_PARAMS: [ParamDescriptor; 3] = [
+    param("bits", 1.0, 16.0, 8.0, ParamCurve::Discrete),
+    param("downsample", 1.0, 32.0, 1.0, ParamCurve::Discrete),
+    param("mix", 0.0, 1.0, 1.0, ParamCurve::Linear),
+];
+
 /// Static descriptor table; index in the slice == `EffectParamId.0`.
 /// Descriptor `name` is the persisted snake_case key.
 pub fn effect_params(kind: EffectKind) -> &'static [ParamDescriptor] {
@@ -187,6 +196,7 @@ pub fn effect_params(kind: EffectKind) -> &'static [ParamDescriptor] {
         EffectKind::Filter => &FILTER_PARAMS,
         EffectKind::Chorus => &CHORUS_PARAMS,
         EffectKind::BeatRepeat => &BEAT_REPEAT_PARAMS,
+        EffectKind::BitCrusher => &BITCRUSHER_PARAMS,
     }
 }
 
@@ -285,6 +295,7 @@ impl EffectConfig {
             EffectKind::Filter => 0,
             EffectKind::Chorus => 2 * chorus_buffer_len(sample_rate),
             EffectKind::BeatRepeat => 4 * beat_repeat_max_frames(sample_rate),
+            EffectKind::BitCrusher => 0,
         };
         samples * std::mem::size_of::<f32>()
     }
@@ -448,6 +459,7 @@ enum EffectState {
     Filter(Box<FilterFx>),
     Chorus(Box<ChorusFx>),
     BeatRepeat(Box<BeatRepeatFx>),
+    BitCrusher(Box<BitCrushFx>),
 }
 
 impl Effect {
@@ -468,6 +480,7 @@ impl Effect {
             EffectKind::Reverb => EffectState::Reverb(Box::new(ReverbState::new(sample_rate))),
             EffectKind::Filter => EffectState::Filter(Box::new(FilterFx::new(rate))),
             EffectKind::Chorus => EffectState::Chorus(Box::new(ChorusFx::new(sample_rate))),
+            EffectKind::BitCrusher => EffectState::BitCrusher(Box::new(BitCrushFx::new())),
             EffectKind::BeatRepeat => EffectState::BeatRepeat(Box::new(BeatRepeatFx::new(
                 sample_rate,
                 sanitize_bpm(bpm).unwrap_or(DEFAULT_BPM),
@@ -505,6 +518,7 @@ impl Effect {
             EffectState::Filter(state) => state.process(left, right),
             EffectState::Chorus(state) => state.process(left, right),
             EffectState::BeatRepeat(state) => state.process(left, right),
+            EffectState::BitCrusher(state) => state.process(left, right),
         };
         (
             finite_or_zero(left * (1.0 - gain) + finite_or_zero(wet_left) * gain),
@@ -575,6 +589,7 @@ impl Effect {
             EffectState::Filter(state) => state.clear(),
             EffectState::Chorus(state) => state.clear(),
             EffectState::BeatRepeat(state) => state.clear(),
+            EffectState::BitCrusher(state) => state.clear(),
         }
         self.bypass_gain
             .set_target(if self.bypassed { 0.0 } else { 1.0 }, 0);
@@ -647,6 +662,7 @@ impl Effect {
                 }
             }
             EffectState::BeatRepeat(state) => state.apply(index, value, smooth),
+            EffectState::BitCrusher(state) => state.apply(index, value, smooth),
         }
     }
 }

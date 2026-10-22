@@ -33,6 +33,20 @@ FetchContent_Declare(clap-wrapper
   GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(clap-wrapper)
 
+# clap-wrapper adds -Werror to its own compile options. Its vendored sources
+# (SHA-1, bundled fmt) trip warnings that newer GCC (15.x on the ubuntu-latest
+# runner) reports as errors, so the dependency build stops. Remove -Werror from
+# the wrapper's interface options only. Warnings still print (-Wall -Wextra).
+# SHELLOOP's own warning flags are not touched.
+if(TARGET clap-wrapper-compile-options)
+  get_target_property(clap_wrapper_options clap-wrapper-compile-options INTERFACE_COMPILE_OPTIONS)
+  if(clap_wrapper_options)
+    list(REMOVE_ITEM clap_wrapper_options "-Werror")
+    set_target_properties(clap-wrapper-compile-options PROPERTIES
+      INTERFACE_COMPILE_OPTIONS "${clap_wrapper_options}")
+  endif()
+endif()
+
 # clap-wrapper forces the static MSVC runtime (/MT) for the targets it creates
 # itself, while this module and the Rust plugin use the DLL runtime (/MD), as
 # the CLAP build does. Mixing them fails to link, so put every wrapper-owned

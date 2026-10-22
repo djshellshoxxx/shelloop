@@ -79,10 +79,12 @@ pub enum AudioMessage {
     Panic,
     AddTrack(PreparedTrack),
     /// Live sample shaping and slice map for a sample track (spec 14).
+    /// Spec 14: shaping applies at once; the slice map at `apply_at_frame`.
     SampleConfig {
         track: TrackId,
         shaping: crate::CompiledShaping,
         slices: crate::SliceTable,
+        apply_at_frame: u64,
     },
     ReplaceSample {
         track: TrackId,
@@ -166,8 +168,9 @@ pub fn apply_audio_message(
             track,
             shaping,
             slices,
+            apply_at_frame,
         } => {
-            let _ = engine.apply_sample_config(track, shaping, slices);
+            let _ = engine.apply_sample_config(track, shaping, slices, apply_at_frame);
         }
         AudioMessage::ReplaceSample { track, playback } => {
             match engine.replace_sample(track, playback) {
@@ -714,14 +717,14 @@ impl SessionController {
             return Ok(String::new());
         };
         match head {
-            "track" | "step" | "length" | "swing" | "rotate" | "undo" | "redo" => {
+            "track" | "step" | "length" | "swing" | "rotate" | "euclid" | "undo" | "redo" => {
                 self.pattern_edit(line, current_frame)
             }
             "pattern" => self.pattern_command(&line[head.len()..]),
             "patterns" => Ok(self.describe_patterns()),
             "synth" => self.synth_command(line),
             "mod" => self.mod_command(line),
-            "sample" | "slice" => self.sample_command(line),
+            "sample" | "slice" => self.sample_command(line, current_frame),
             "gain" | "pan" | "mute" | "solo" | "send" | "master" => self.mixer_command(line),
             "fx" => self.fx_command(line),
             "fxmacro" => self.fxmacro_command(line),
@@ -839,7 +842,7 @@ impl SessionController {
 
     /// `sample ...` / `slice ...` (spec 14). Edits are validated as a unit,
     /// delivered as one bounded message and recorded for `sample undo`.
-    fn sample_command(&mut self, line: &str) -> Result<String, String> {
+    fn sample_command(&mut self, line: &str, current_frame: u64) -> Result<String, String> {
         let command = crate::parse_sample_command(line)?;
         let track = self.selected_track();
         if self.track_kind(track) != Some(TrackKind::Sample) {
@@ -861,6 +864,16 @@ impl SessionController {
             crate::SampleCommand::SliceList => {
                 return Ok(crate::sample_shaping::command::describe_slices(&slices))
             }
+            crate::SampleCommand::SliceDetect { count, sensitivity } => {
+                // Control thread only: decode the track's file and run the
+                // offline detector. The audio thread gets just the table.
+                let path = self.track_sample_path(track)?;
+                let decoded = crate::decode_wav_file(&path, crate::DEFAULT_SAMPLE_MEMORY_BUDGET)?;
+                slices.regions =
+                    crate::detect_slices(&decoded.frames, decoded.sample_rate, count, sensitivity)?;
+                slices.validate()?;
+                format!("detected {} slice(s)", slices.regions.len())
+            }
             crate::SampleCommand::Undo => {
                 let index = self
                     .sample_history
@@ -876,10 +889,19 @@ impl SessionController {
         };
         let compiled = crate::CompiledShaping::compile(&shaping, sample_rate)?;
         let table = crate::SliceTable::compile(&slices)?;
+        // Slice maps commit on the next bar of the project grid (spec 14).
+        let apply_at_frame = crate::next_boundary_frame(
+            current_frame,
+            sample_rate,
+            self.project.bpm,
+            u32::from(self.project.steps_per_beat),
+            crate::QuantizeBoundary::Bar { beats_per_bar: 4 },
+        )?;
         self.send(AudioMessage::SampleConfig {
             track,
             shaping: compiled,
             slices: table,
+            apply_at_frame,
         })?;
         if command != crate::SampleCommand::Undo {
             if self.sample_history.len() >= EDIT_HISTORY_CAPACITY {
@@ -899,6 +921,17 @@ impl SessionController {
         }
         self.dirty = true;
         Ok(format!("track {}: {message}", track.0))
+    }
+
+    /// Absolute or project-relative path of a sample track's source file.
+    fn track_sample_path(&self, track: TrackId) -> Result<PathBuf, String> {
+        self.project
+            .tracks
+            .iter()
+            .find(|definition| definition.id == track)
+            .and_then(|definition| definition.sample.as_ref())
+            .map(|settings| settings.resolve_path(&self.project_dir()))
+            .ok_or_else(|| "sample track has no sample settings".to_owned())
     }
 
     fn mod_command(&mut self, line: &str) -> Result<String, String> {
