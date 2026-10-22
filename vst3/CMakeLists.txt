@@ -9,7 +9,13 @@
 #   cmake -S vst3 -B vst3/build -DCMAKE_BUILD_TYPE=Release
 #   cmake --build vst3/build --config Release
 cmake_minimum_required(VERSION 3.21)
+if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
+endif()
 project(shelloop_vst3 LANGUAGES C CXX)
+if(APPLE)
+  enable_language(OBJC OBJCXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -63,6 +69,13 @@ if(WIN32)
   target_link_libraries(shelloop_vst3 PRIVATE
     "${RUST_STATICLIB}" ws2_32 userenv ntdll bcrypt advapi32 kernel32 shell32 ole32 oleaut32 dbghelp)
   target_link_options(shelloop_vst3 PRIVATE "/EXPORT:clap_entry,DATA" "/INCLUDE:clap_entry")
+elseif(APPLE)
+  # Mach-O uses force_load rather than ELF whole-archive/export-dynamic-symbol.
+  # Keep the Rust CLAP entry visible so the wrapper can discover itself.
+  target_link_libraries(shelloop_vst3 PRIVATE "${RUST_STATICLIB}"
+    "-framework Security" "-framework CoreFoundation")
+  target_link_options(shelloop_vst3 PRIVATE
+    "-Wl,-force_load,${RUST_STATICLIB}")
 else()
   # Keep every object of the archive and export `clap_entry` dynamically.
   target_link_libraries(shelloop_vst3 PRIVATE

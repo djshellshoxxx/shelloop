@@ -31,22 +31,56 @@ jobs:
             os: ubuntu-latest
           - name: windows-x86_64
             os: windows-latest
+          - name: macos-arm64
+            os: macos-15
+          - name: macos-x86_64
+            os: macos-15-intel
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+      - name: Verify release tag and version
+        run: python3 scripts/check_release_tag.py ${{ env.TAG }}
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux audio development headers
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Test build and packaging helpers
+        run: python3 -m unittest discover -s scripts/tests -v
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Strict Clippy
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Test release source
-        run: cargo test --workspace --all-targets --features realtime-audio,midi,terminal-ui
+        run: cargo test --locked --workspace --all-targets --features realtime-audio,midi,terminal-ui
       - name: Build standalone application
-        run: cargo build --release --features realtime-audio,midi,terminal-ui
+        run: cargo build --locked --release --features realtime-audio,midi,terminal-ui
       - name: Build CLAP plugin
-        run: cargo build --release -p shelloop-clap
+        run: cargo build --locked --release -p shelloop-clap
       - name: Build VST3 plugin
         run: python scripts/build_vst3.py vst3-out
+      - name: Package macOS artifacts
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/package_macos.py "$TAG" "${{ matrix.name }}"
+          # Signing is ad-hoc; this is not Apple notarization.
+          for bundle in dist/*/shelloop.clap dist/*/SHELLOOP.vst3; do
+            codesign --force --sign - "$bundle"
+          done
+          # Repack signed bundles and regenerate checksums.
+          for directory in dist/*/; do
+            name=$(basename "$directory")
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+            (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+          done
+          echo "APP_ARCHIVE=dist/shelloop-${TAG}-${{ matrix.name }}.tar.gz" >> "$GITHUB_ENV"
       - name: Package Linux artifacts
         if: runner.os == 'Linux'
         shell: bash
@@ -125,18 +159,20 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          target_commitish: ${{ github.sha }}
           name: SHELLOOP ${{ env.TAG }}
-          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || contains(github.ref_name, '-') }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || contains(env.TAG, '-') }}
           generate_release_notes: true
+          overwrite_files: false
+          fail_on_unmatched_files: true
           body: |
             SHELLOOP terminal step sequencer, synthesizer and performance workstation.
 
             Downloads:
             - **Windows standalone**: `shelloop-${{ env.TAG }}-windows-x86_64.exe` (single executable), or the `.zip` bundle with example projects and the CLAP plugin.
             - **Linux standalone**: `shelloop-${{ env.TAG }}-linux-x86_64.tar.gz` (binary, example projects, CLAP plugin).
+            - **macOS standalone**: native `macos-arm64` and `macos-x86_64` archives include the terminal app, examples and CLAP bundle. macOS builds are ad-hoc signed, not notarized.
             - **CLAP plugin**: `shelloop-clap-${{ env.TAG }}-<platform>` contains `shelloop.clap` for DAWs that load CLAP instruments.
-            - **VST3 plugin**: `shelloop-vst3-${{ env.TAG }}-<platform>` contains `SHELLOOP.vst3` (the same instrument wrapped for VST3 hosts). Copy it to `~/.vst3/` on Linux or `C:\Program Files\Common Files\VST3\` on Windows and rescan.
+            - **VST3 plugin**: `shelloop-vst3-${{ env.TAG }}-<platform>` contains `SHELLOOP.vst3` (the same instrument wrapped for VST3 hosts). Copy it to `~/.vst3/` on Linux or `C:\Program Files\Common Files\VST3\` on Windows, or `~/Library/Audio/Plug-Ins/VST3/` on macOS and rescan.
 
             Verify each download against its `.sha256` file. Builds come from CI; physical audio-hardware latency validation is reported separately (see docs/HARDWARE-ACCEPTANCE.md).
           files: |
