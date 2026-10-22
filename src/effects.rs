@@ -518,14 +518,25 @@ impl Effect {
         frame: u64,
         playing: bool,
     ) -> (f32, f32) {
-        self.process_context(left, right, Some((frame, playing)))
+        self.process_context(left, right, Some((frame, playing, 0.0)))
+    }
+
+    pub fn process_with_clock(
+        &mut self,
+        left: f32,
+        right: f32,
+        frame: u64,
+        playing: bool,
+        origin: f64,
+    ) -> (f32, f32) {
+        self.process_context(left, right, Some((frame, playing, origin)))
     }
 
     fn process_context(
         &mut self,
         left: f32,
         right: f32,
-        transport: Option<(u64, bool)>,
+        transport: Option<(u64, bool, f64)>,
     ) -> (f32, f32) {
         let (left, right) = (sanitize(left), sanitize(right));
         let gain = self.bypass_gain.next_value();
@@ -539,7 +550,9 @@ impl Effect {
             EffectState::Filter(state) => state.process(left, right),
             EffectState::Chorus(state) => state.process(left, right),
             EffectState::BeatRepeat(state) => match transport {
-                Some((frame, playing)) => state.process_with_transport(left, right, frame, playing),
+                Some((frame, playing, origin)) => {
+                    state.process_with_transport(left, right, frame, playing, origin)
+                }
                 None => state.process(left, right),
             },
             EffectState::BitCrusher(state) => state.process(left, right),
@@ -1153,6 +1166,21 @@ impl EffectRack {
             .iter_mut()
             .fold((left, right), |(l, r), effect| {
                 effect.process_with_transport(l, r, frame, playing)
+            })
+    }
+
+    pub fn process_with_clock(
+        &mut self,
+        left: f32,
+        right: f32,
+        frame: u64,
+        playing: bool,
+        origin: f64,
+    ) -> (f32, f32) {
+        self.effects
+            .iter_mut()
+            .fold((left, right), |(l, r), effect| {
+                effect.process_with_clock(l, r, frame, playing, origin)
             })
     }
 

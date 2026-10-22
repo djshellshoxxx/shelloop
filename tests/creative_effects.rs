@@ -442,3 +442,60 @@ fn beat_repeat_fractional_grid_does_not_accumulate_rounded_slice_drift() {
         );
     }
 }
+
+#[test]
+fn shrinking_a_live_reverse_repeat_requires_fresh_capture_without_panicking() {
+    let mut fx = repeat_fx(&[("active", 1.0), ("reverse", 1.0)]);
+    run(&mut fx, 0, 3_100);
+    set(&mut fx, EffectKind::BeatRepeat, "division", 3.0);
+    for n in 3_100..4_100 {
+        let (left, right) = fx.process(ramp(n), ramp(n));
+        assert!(left.is_finite() && right.is_finite());
+    }
+}
+
+#[test]
+fn beat_repeat_follows_a_phase_preserved_tempo_origin() {
+    let mut fx = build(EffectKind::BeatRepeat, &[("active", 1.0)], SR, 240.0);
+    // Tempo240 after preserving beat0.75 at physical frame3000 gives origin1500.
+    for frame in 3_000..4_500_u64 {
+        let input = ramp(frame as usize);
+        assert_eq!(
+            fx.process_with_clock(input, input, frame, true, 1_500.0).0,
+            input
+        );
+    }
+    for frame in 4_500..5_000_u64 {
+        let input = ramp(frame as usize);
+        let output = fx.process_with_clock(input, input, frame, true, 1_500.0).0;
+        if frame >= 4_600 {
+            assert!((output - ramp((frame - 1_000) as usize)).abs() < 1e-5);
+        }
+    }
+}
+
+#[test]
+fn live_repeat_grid_changes_fade_held_audio_before_fresh_capture() {
+    for tempo_change in [false, true] {
+        let mut fx = repeat_fx(&[("active", 1.0)]);
+        for _ in 0..3_100 {
+            fx.process(0.5, 0.5);
+        }
+        assert!((fx.process(-0.5, -0.5).0 - 0.5).abs() < 1e-6);
+        if tempo_change {
+            fx.set_tempo(240.0);
+        } else {
+            set(&mut fx, EffectKind::BeatRepeat, "division", 3.0);
+        }
+        let mut previous = 0.5;
+        for frame in 0..40 {
+            let output = fx.process(-0.5, -0.5).0;
+            assert!(
+                (output - previous).abs() < 0.1,
+                "grid change clicked at {frame}: {previous} -> {output}"
+            );
+            previous = output;
+        }
+        assert!((previous + 0.5).abs() < 1e-6);
+    }
+}

@@ -309,3 +309,112 @@ fn all_eight_modulation_routes_are_editable_and_visible_in_the_tui() {
         7
     );
 }
+
+#[test]
+fn tempo_commands_preserve_phase_and_scene_quantization_and_save_the_live_rate() {
+    let mut rig = Rig::new();
+    rig.render(18_000); // 0.75 beats at 120 BPM.
+    rig.run("tempo 240").unwrap();
+    assert_eq!(rig.engine.bpm(), 240.0);
+    assert_eq!(rig.engine.position_frame(), 18_000);
+    assert_eq!(rig.engine.tempo_clock().beat_at_frame(18_000), 0.75);
+    rig.run("scene launch Drop beat").unwrap();
+    assert_eq!(rig.engine.queued_scene(), Some((SceneId(1), 21_000)));
+    assert!(rig.run("tempo NaN").is_err());
+    assert_eq!(rig.engine.bpm(), 240.0);
+    rig.run("bpm 60").unwrap();
+    assert_eq!(rig.engine.bpm(), 60.0);
+    assert_eq!(rig.controller.project().bpm, 60.0);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("tempo.json");
+    rig.run(&format!("save {}", path.display())).unwrap();
+    assert_eq!(MultiTrackProject::load(path).unwrap().bpm, 60.0);
+    let telemetry = EngineTelemetry::default();
+    telemetry.publish(&rig.engine);
+    rig.controller
+        .synchronize_tempo_clock(telemetry.tempo_clock().unwrap());
+    assert_eq!(rig.controller.tempo_clock(), rig.engine.tempo_clock());
+    let (sender, _receiver) = bounded(0);
+    let mut blocked = SessionController::new(project(), None, RATE, sender).unwrap();
+    assert!(blocked.execute("tempo 90", 123).is_err());
+    assert_eq!(blocked.project().bpm, 120.0);
+}
+
+#[test]
+fn tempo_retimes_queued_pattern_edits_and_pause_resume_keeps_the_anchor() {
+    let mut rig = Rig::new();
+    rig.render(18_000);
+    let old_revision = rig.engine.track_active_revision(TrackId(1)).unwrap();
+    rig.run("length 8").unwrap(); // old pattern boundary at frame 24000.
+    rig.run("tempo 240").unwrap();
+    rig.render(2_999);
+    assert_eq!(
+        rig.engine.track_active_revision(TrackId(1)),
+        Some(old_revision)
+    );
+    rig.render(1);
+    assert_eq!(
+        rig.engine.track_active_revision(TrackId(1)),
+        Some(old_revision)
+    );
+    rig.render(1); // retimed boundary at frame21000.
+    assert!(rig.engine.track_active_revision(TrackId(1)).unwrap() > old_revision);
+    let clock = rig.engine.tempo_clock();
+    let frame = rig.engine.position_frame();
+    rig.run("pause").unwrap();
+    rig.render(100);
+    assert_eq!(rig.engine.position_frame(), frame);
+    assert_eq!(rig.engine.tempo_clock(), clock);
+    rig.run("play").unwrap();
+    rig.render(1);
+    assert_eq!(rig.engine.position_frame(), frame + 1);
+    assert_eq!(rig.engine.tempo_clock(), clock);
+    rig.run("restart").unwrap();
+    assert_eq!(rig.engine.position_frame(), 0);
+    assert_eq!(rig.engine.bpm(), 240.0);
+    assert_eq!(rig.engine.tempo_clock().origin_frame(), 0.0);
+}
+
+#[test]
+fn concurrent_clock_telemetry_never_mixes_tempo_and_origin_publications() {
+    use std::sync::Arc;
+    let mut rig = Rig::new();
+    rig.render(18_000);
+    let first = rig.engine;
+    let mut second = first.clone();
+    second.set_tempo(240.0).unwrap();
+    let allowed = [first.tempo_clock(), second.tempo_clock()];
+    let telemetry = Arc::new(EngineTelemetry::default());
+    telemetry.publish(&first);
+    assert_eq!(telemetry.tempo_clock(), Some(allowed[0]));
+    let writer_telemetry = telemetry.clone();
+    let writer = std::thread::spawn(move || {
+        for _ in 0..20_000 {
+            writer_telemetry.publish(&second);
+            writer_telemetry.publish(&first);
+        }
+    });
+    for _ in 0..40_000 {
+        if let Some(clock) = telemetry.tempo_clock() {
+            assert!(allowed.contains(&clock), "mixed BPM/origin pair: {clock:?}");
+        }
+    }
+    writer.join().unwrap();
+    assert_eq!(telemetry.tempo_clock(), Some(allowed[0]));
+}
+
+#[test]
+fn stale_control_timestamps_cannot_schedule_pattern_edits_off_the_live_grid() {
+    let mut rig = Rig::new();
+    rig.render(18_000);
+    rig.engine.set_tempo(240.0).unwrap();
+    let revision = rig.engine.track_active_revision(TrackId(1)).unwrap();
+    rig.controller.execute("length 8", 0).unwrap();
+    while let Ok(message) = rig.receiver.try_recv() {
+        apply_audio_message(&mut rig.engine, message, &rig.garbage);
+    }
+    rig.render(3_000);
+    assert_eq!(rig.engine.track_active_revision(TrackId(1)), Some(revision));
+    rig.render(1);
+    assert!(rig.engine.track_active_revision(TrackId(1)).unwrap() > revision);
+}

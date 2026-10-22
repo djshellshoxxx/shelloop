@@ -3,8 +3,7 @@ use crate::effects::{
     DEFAULT_EFFECT_MEMORY_BUDGET, MAX_MASTER_INSERTS, MAX_SEND_BUSES, MAX_TRACK_INSERTS,
 };
 use crate::scenes::{
-    bar_at_or_after, bar_frame, validate_scenes, ChainId, PatternId, Scene, SceneChain, SceneId,
-    CHAIN_BEATS_PER_BAR,
+    validate_scenes, ChainId, PatternId, Scene, SceneChain, SceneId, CHAIN_BEATS_PER_BAR,
 };
 use crate::{
     ChannelStrip, CompiledPattern, CompiledPatternRevision, CompiledSamplePlayback,
@@ -918,6 +917,7 @@ impl RealtimeTrack {
         &mut self,
         any_soloed: bool,
         commands: &mut Vec<EngineCommand>,
+        clock: crate::TempoClock,
     ) -> ((f32, f32), [f32; MAX_SEND_BUSES]) {
         let transport_frame = self.sequencer.position_frame();
         let transport_playing = self.sequencer.is_playing();
@@ -966,11 +966,12 @@ impl RealtimeTrack {
                         (0.0, 0.0)
                     }
                 } else {
-                    let (left, right) = self.inserts.process_with_transport(
+                    let (left, right) = self.inserts.process_with_clock(
                         mono,
                         mono,
                         transport_frame,
                         transport_playing,
+                        clock.origin_frame(),
                     );
                     if audible {
                         strip.process_stereo(left, right)
@@ -982,11 +983,12 @@ impl RealtimeTrack {
             TrackInstrument::Sample(sampler) => {
                 let (mut left, mut right) = sampler.next_stereo_frame();
                 if !self.inserts.is_empty() {
-                    (left, right) = self.inserts.process_with_transport(
+                    (left, right) = self.inserts.process_with_clock(
                         left,
                         right,
                         transport_frame,
                         transport_playing,
+                        clock.origin_frame(),
                     );
                 }
                 if audible {
@@ -1096,6 +1098,7 @@ struct SendBus {
 pub struct MultiTrackEngine {
     sample_rate: u32,
     bpm: f64,
+    clock: crate::TempoClock,
     steps_per_beat: u32,
     tracks: Vec<RealtimeTrack>,
     command_buffer: Vec<EngineCommand>,
@@ -1168,6 +1171,7 @@ impl MultiTrackEngine {
         Ok(Self {
             sample_rate,
             bpm,
+            clock: crate::TempoClock::new(sample_rate, bpm)?,
             steps_per_beat,
             tracks,
             command_buffer: Vec::with_capacity(LiveSequencer::MAX_COMMANDS_PER_FRAME),
@@ -1342,6 +1346,67 @@ impl MultiTrackEngine {
         self.sample_rate
     }
 
+    pub fn quantized_frame(&self, boundary: crate::QuantizeBoundary) -> Option<u64> {
+        let valid = match boundary {
+            crate::QuantizeBoundary::Bar { beats_per_bar } => (1..=64).contains(&beats_per_bar),
+            crate::QuantizeBoundary::Pattern { steps } => (1..=256).contains(&steps),
+            _ => true,
+        };
+        valid
+            .then(|| {
+                self.clock
+                    .next_boundary(self.position_frame(), self.steps_per_beat, boundary)
+                    .ok()
+            })
+            .flatten()
+    }
+
+    pub fn tempo_clock(&self) -> crate::TempoClock {
+        self.clock
+    }
+
+    /// Change tempo without seeking, preserving musical phase and scheduled
+    /// note releases. All work is bounded by the prepared project capacities.
+    pub fn set_tempo(&mut self, bpm: f64) -> Result<(), EngineError> {
+        if !bpm.is_finite() || !(20.0..=400.0).contains(&bpm) {
+            return Err(EngineError::InvalidValue("invalid tempo"));
+        }
+        if bpm == self.bpm {
+            return Ok(());
+        }
+        let position = self.position_frame();
+        let old = self.clock;
+        let mut clock = old;
+        clock
+            .set_bpm_at(bpm, position)
+            .map_err(|_| EngineError::InvalidValue("invalid tempo"))?;
+        let retime = |frame| clock.frame_at_beat(old.beat_at_frame(frame)).max(position);
+        for track in &mut self.tracks {
+            track.sequencer.set_clock(clock);
+            if let Some(pending) = &mut track.pending_pattern {
+                pending.change.apply_at_frame = retime(pending.change.apply_at_frame);
+            }
+            if let Some((frame, _)) = &mut track.pending_slices {
+                *frame = retime(*frame);
+            }
+            if let TrackInstrument::Synth(synth) = &mut track.instrument {
+                synth.set_tempo(bpm);
+            }
+            track.inserts.set_tempo(bpm);
+        }
+        if let Some((_, frame)) = &mut self.pending_scene {
+            *frame = retime(*frame);
+        }
+        for bus in &mut self.send_buses {
+            bus.rack.set_tempo(bpm);
+        }
+        self.master_rack.set_tempo(bpm);
+        self.frames_per_bar = clock.frames_per_beat() * f64::from(CHAIN_BEATS_PER_BAR);
+        self.bpm = bpm;
+        self.clock = clock;
+        Ok(())
+    }
+
     pub fn bpm(&self) -> f64 {
         self.bpm
     }
@@ -1413,7 +1478,7 @@ impl MultiTrackEngine {
 
         for track in &mut self.tracks {
             let ((track_left, track_right), sends) =
-                track.next_stereo_frame(any_soloed, &mut self.command_buffer);
+                track.next_stereo_frame(any_soloed, &mut self.command_buffer, self.clock);
             left += track_left;
             right += track_right;
             for (input, level) in send_inputs.iter_mut().zip(sends) {
@@ -1423,21 +1488,23 @@ impl MultiTrackEngine {
         }
 
         for (bus, (send_left, send_right)) in self.send_buses.iter_mut().zip(send_inputs) {
-            let (wet_left, wet_right) = bus.rack.process_with_transport(
+            let (wet_left, wet_right) = bus.rack.process_with_clock(
                 send_left,
                 send_right,
                 transport_frame,
                 transport_playing,
+                self.clock.origin_frame(),
             );
             left += wet_left * bus.return_gain;
             right += wet_right * bus.return_gain;
         }
         if !self.master_rack.is_empty() {
-            (left, right) = self.master_rack.process_with_transport(
+            (left, right) = self.master_rack.process_with_clock(
                 left,
                 right,
                 transport_frame,
                 transport_playing,
+                self.clock.origin_frame(),
             );
         }
         let master_gain = self.master_gain.next_value();
@@ -1461,7 +1528,12 @@ impl MultiTrackEngine {
     fn advance_scene_clock(&mut self) {
         let position = self.position_frame();
         if let Some(mut run) = self.chain_run {
-            if !run.paused && position >= bar_frame(run.next_bar, self.frames_per_bar) {
+            if !run.paused
+                && position
+                    >= self
+                        .clock
+                        .frame_at_beat(run.next_bar as f64 * f64::from(CHAIN_BEATS_PER_BAR))
+            {
                 let chain = &self.chains[run.chain];
                 run.step += 1;
                 if run.step >= chain.steps.len() {
@@ -1532,14 +1604,10 @@ impl MultiTrackEngine {
         id: SceneId,
         boundary: crate::QuantizeBoundary,
     ) -> Result<u64, EngineError> {
-        let frame = crate::next_boundary_frame(
-            self.position_frame(),
-            self.sample_rate,
-            self.bpm,
-            self.steps_per_beat,
-            boundary,
-        )
-        .map_err(|_| EngineError::InvalidValue("invalid scene launch boundary"))?;
+        let frame = self
+            .clock
+            .next_boundary(self.position_frame(), self.steps_per_beat, boundary)
+            .map_err(|_| EngineError::InvalidValue("invalid scene launch boundary"))?;
         self.launch_scene(id, frame)?;
         Ok(frame)
     }
@@ -1553,8 +1621,10 @@ impl MultiTrackEngine {
             .ok_or(EngineError::ChainNotFound(id.0))?;
         // Never start in the past: a stale request starts on the next bar.
         let from_frame = from_frame.max(self.position_frame());
-        let start_bar = bar_at_or_after(from_frame, self.frames_per_bar);
-        let start_frame = bar_frame(start_bar, self.frames_per_bar);
+        let start_bar = self.clock.next_bar_index(from_frame, CHAIN_BEATS_PER_BAR);
+        let start_frame = self
+            .clock
+            .frame_at_beat(start_bar as f64 * f64::from(CHAIN_BEATS_PER_BAR));
         let (scene, bars) = self.chains[index].steps[0];
         self.pending_scene = Some((scene, start_frame));
         self.chain_run = Some(ChainRun {
@@ -1575,10 +1645,10 @@ impl MultiTrackEngine {
     /// next bar boundary.
     pub fn pause_chain(&mut self, paused: bool) {
         let position = self.position_frame();
-        let frames_per_bar = self.frames_per_bar;
+        let clock = self.clock;
         if let Some(run) = self.chain_run.as_mut() {
             if run.paused && !paused {
-                let current_bar = bar_at_or_after(position, frames_per_bar);
+                let current_bar = clock.next_bar_index(position, CHAIN_BEATS_PER_BAR);
                 run.next_bar = run.next_bar.max(current_bar);
             }
             run.paused = paused;
@@ -1600,7 +1670,9 @@ impl MultiTrackEngine {
             chain: self.chains[run.chain].id,
             step: run.step,
             steps: self.chains[run.chain].steps.len(),
-            next_change_frame: bar_frame(run.next_bar, self.frames_per_bar),
+            next_change_frame: self
+                .clock
+                .frame_at_beat(run.next_bar as f64 * f64::from(CHAIN_BEATS_PER_BAR)),
             paused: run.paused,
         })
     }
@@ -1934,6 +2006,7 @@ impl MultiTrackEngine {
         let playing = self.is_playing();
         let PreparedTrack(mut inner) = track;
         inner.sequencer.seek(position);
+        inner.sequencer.set_clock(self.clock);
         inner.sequencer.set_playing(playing);
         // `tracks` reserves MAX_REALTIME_TRACKS slots up front, so this push
         // never reallocates on the audio thread.
@@ -2042,11 +2115,13 @@ impl MultiTrackEngine {
     /// scenes are discarded and a running chain stops. The active scene's
     /// patterns stay selected.
     pub fn restart_all(&mut self) {
+        self.clock.restart();
         for track in &mut self.tracks {
             track.instrument.handle(EngineCommand::Panic);
             track.set_locks(&[]);
             track.commit_pending_now();
             track.commit_pending_slices_now();
+            track.sequencer.set_clock(self.clock);
             track.sequencer.restart();
         }
         self.pending_scene = None;

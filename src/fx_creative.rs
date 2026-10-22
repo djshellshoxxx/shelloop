@@ -357,6 +357,8 @@ pub(crate) struct BeatRepeatFx {
     bpm: f64,
     division: f32,
     slice_len: usize,
+    held_len: usize,
+    retiring: bool,
     repeats: u32,
     reverse: bool,
     gate: f32,
@@ -389,6 +391,8 @@ impl BeatRepeatFx {
             bpm,
             division: 1.0,
             slice_len: MIN_SLICE_FRAMES,
+            held_len: MIN_SLICE_FRAMES,
+            retiring: false,
             repeats: 0,
             reverse: false,
             gate: 0.0,
@@ -419,6 +423,7 @@ impl BeatRepeatFx {
         self.last_transport_frame = None;
         self.armed = self.active;
         self.playing = false;
+        self.retiring = false;
         self.pos = 0;
         self.passes_done = 0;
         self.pass_muted = false;
@@ -428,13 +433,27 @@ impl BeatRepeatFx {
     pub(crate) fn set_tempo(&mut self, bpm: f64) {
         self.bpm = bpm;
         self.update_slice();
+        self.invalidate_capture();
+    }
+
+    fn invalidate_capture(&mut self) {
+        self.filled = 0;
+        self.armed = self.active;
+        // Keep the previous slice and its bounds intact while fading to dry.
+        // A new grid may shorten slice_len below the current playback position.
+        self.retiring = self.playing;
+        self.engage.set_target(0.0, self.engage_frames);
     }
 
     fn update_slice(&mut self) {
         let max = self.ring[0].len();
         let beats = repeat_division_beats(self.division);
         let frames = (beats * 60.0 / self.bpm * f64::from(self.sample_rate)).round() as usize;
-        self.slice_len = frames.clamp(MIN_SLICE_FRAMES, max);
+        let length = frames.clamp(MIN_SLICE_FRAMES, max);
+        if length != self.slice_len {
+            self.slice_len = length;
+            self.invalidate_capture();
+        }
     }
 
     pub(crate) fn apply(&mut self, index: usize, value: f32, smooth: u32) {
@@ -465,6 +484,7 @@ impl BeatRepeatFx {
 
     fn stop_playback(&mut self) {
         self.playing = false;
+        self.retiring = false;
         self.pos = 0;
         self.passes_done = 0;
         self.engage.set_target(0.0, self.engage_frames);
@@ -497,6 +517,8 @@ impl BeatRepeatFx {
         self.rng = self.seed.wrapping_mul(2_654_435_761).max(1);
         self.passes_done = 0;
         self.playing = true;
+        self.held_len = len;
+        self.retiring = false;
         self.armed = false;
         self.begin_pass();
         self.engage.set_target(1.0, self.engage_frames);
@@ -511,6 +533,7 @@ impl BeatRepeatFx {
         right: f32,
         frame: u64,
         playing: bool,
+        origin: f64,
     ) -> (f32, f32) {
         let discontinuity = self
             .last_transport_frame
@@ -519,6 +542,7 @@ impl BeatRepeatFx {
         if !playing || discontinuity {
             self.filled = 0;
             self.playing = false;
+            self.retiring = false;
             self.armed = self.active;
             self.pos = 0;
             self.engage.set_target(0.0, 0);
@@ -531,7 +555,8 @@ impl BeatRepeatFx {
         // rounded slice duration (which accumulates drift at fractional BPM).
         let period =
             repeat_division_beats(self.division) * 60.0 / self.bpm * f64::from(self.sample_rate);
-        let boundary = ((frame as f64 / period).round() * period).round() as u64;
+        let boundary =
+            (origin + ((frame as f64 - origin) / period).round() * period).round() as u64;
         self.process_on_boundary(left, right, boundary == frame)
     }
 
@@ -546,13 +571,13 @@ impl BeatRepeatFx {
     fn process_on_boundary(&mut self, left: f32, right: f32, boundary: bool) -> (f32, f32) {
         let mix = self.mix.next_value().clamp(0.0, 1.0);
 
-        if self.armed && boundary && self.filled >= self.slice_len {
+        if self.armed && !self.retiring && boundary && self.filled >= self.slice_len {
             self.start_playback();
         }
 
         let mut wet = [0.0_f32; 2];
         if self.playing {
-            let len = self.slice_len;
+            let len = self.held_len;
             let index = if self.reverse {
                 len - 1 - self.pos
             } else {
@@ -570,7 +595,7 @@ impl BeatRepeatFx {
             self.pos += 1;
             if self.pos >= len {
                 self.passes_done += 1;
-                if self.repeats != 0 && self.passes_done >= self.repeats {
+                if !self.retiring && self.repeats != 0 && self.passes_done >= self.repeats {
                     self.stop_playback();
                     self.active = false;
                 } else {
@@ -580,6 +605,11 @@ impl BeatRepeatFx {
         }
 
         let engage = self.engage.next_value().clamp(0.0, 1.0);
+        if self.retiring && engage == 0.0 {
+            self.playing = false;
+            self.retiring = false;
+            self.pos = 0;
+        }
         let amount = mix * engage;
         let input = [left, right];
         let cap = self.ring[0].len();

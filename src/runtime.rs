@@ -450,8 +450,18 @@ mod live {
                     let controller = self.controller.as_mut().ok_or(
                         "editing commands need a project (--project); live keys still work",
                     )?;
+                    if let Some(clock) = self.telemetry.tempo_clock() {
+                        controller.synchronize_tempo_clock(clock);
+                    }
                     controller.tick(now);
-                    controller.execute(line, frame)
+                    let result = controller.execute(line, frame);
+                    let accepted_tempo = result.as_ref().ok().and_then(|_| {
+                        matches!(head, "tempo" | "bpm").then(|| controller.tempo_clock().bpm())
+                    });
+                    if let Some(bpm) = accepted_tempo {
+                        self.record(EventSource::Cli, ControlEventKind::TempoChange { bpm });
+                    }
+                    result
                 }
             }
         }
@@ -472,6 +482,10 @@ mod live {
         fn resample_command(&mut self, line: &str) -> Result<String, String> {
             let command = parse_resample_command(line)?;
             let clock = self.clock()?;
+            let origin = self
+                .controller
+                .as_ref()
+                .map_or(0.0, |c| c.tempo_clock().origin_frame());
             let frame = self.transport_frame();
             let selected = self
                 .controller
@@ -494,7 +508,7 @@ mod live {
                        start: QuantizeBoundary,
                        stop: ResampleStop| {
                 resampler
-                    .arm(
+                    .arm_with_origin(
                         ResampleRequest {
                             source,
                             start_boundary: start,
@@ -504,6 +518,7 @@ mod live {
                         },
                         frame,
                         clock,
+                        origin,
                     )
                     .map(|(start, stop)| match stop {
                         Some(stop) => format!("resample armed: frames {start}..{stop}"),
@@ -536,7 +551,7 @@ mod live {
                     },
                 ),
                 ResampleCommand::Stop(boundary) => resampler
-                    .stop(frame, clock, boundary)
+                    .stop_with_origin(frame, clock, boundary, origin)
                     .map(|frame| format!("resample stops at frame {frame}")),
                 ResampleCommand::Cancel => resampler.cancel().map(|()| "resample cancelled".into()),
                 ResampleCommand::Normalize(enabled) => {
@@ -601,6 +616,9 @@ mod live {
             if let Some(controller) = self.controller.as_mut() {
                 if let Some(message) = controller.tick(now) {
                     messages.push((message, false));
+                }
+                if let Some(clock) = self.telemetry.tempo_clock() {
+                    controller.synchronize_tempo_clock(clock);
                 }
                 controller.observe_active_scene(snapshot_scene);
             }

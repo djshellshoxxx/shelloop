@@ -46,6 +46,17 @@ pub enum AudioMessage {
         pattern: PatternId,
         change: QuantizedChange<CompiledPatternRevision>,
     },
+    QuantizedRevision {
+        track: TrackId,
+        pattern: PatternId,
+        revision: CompiledPatternRevision,
+        boundary: QuantizeBoundary,
+    },
+    QuantizedSampleConfig {
+        track: TrackId,
+        shaping: crate::CompiledShaping,
+        slices: crate::SliceTable,
+    },
     SynthPatch {
         track: TrackId,
         patch: CompiledSynthPatch,
@@ -75,6 +86,9 @@ pub enum AudioMessage {
     StopChain,
     PauseChain(bool),
     TogglePlay,
+    Tempo {
+        bpm: f64,
+    },
     Restart,
     Panic,
     AddTrack(PreparedTrack),
@@ -127,6 +141,33 @@ pub fn apply_audio_message(
         } => {
             let _ = engine.queue_library_revision(track, pattern, change);
         }
+        AudioMessage::QuantizedRevision {
+            track,
+            pattern,
+            revision,
+            boundary,
+        } => {
+            if let Some(frame) = engine.quantized_frame(boundary) {
+                let _ = engine.queue_library_revision(
+                    track,
+                    pattern,
+                    QuantizedChange {
+                        apply_at_frame: frame,
+                        value: revision,
+                    },
+                );
+            }
+        }
+        AudioMessage::QuantizedSampleConfig {
+            track,
+            shaping,
+            slices,
+        } => {
+            if let Some(frame) = engine.quantized_frame(QuantizeBoundary::Bar { beats_per_bar: 4 })
+            {
+                let _ = engine.schedule_sample_config(track, shaping, slices, frame);
+            }
+        }
         AudioMessage::SynthPatch { track, patch } => {
             engine.apply_synth_patch(track, patch);
         }
@@ -159,6 +200,9 @@ pub fn apply_audio_message(
         }
         AudioMessage::StopChain => engine.stop_chain(),
         AudioMessage::PauseChain(paused) => engine.pause_chain(paused),
+        AudioMessage::Tempo { bpm } => {
+            let _ = engine.set_tempo(bpm);
+        }
         AudioMessage::TogglePlay => {
             engine.toggle_playing_all();
         }
@@ -234,6 +278,10 @@ impl Default for TrackTelemetry {
 /// individually valid and meters are expendable by design.
 #[derive(Debug)]
 pub struct EngineTelemetry {
+    clock_sequence: AtomicU64,
+    clock_rate: AtomicU32,
+    clock_bpm: AtomicU64,
+    clock_origin: AtomicU64,
     position: AtomicU64,
     playing: AtomicBool,
     active_scene: AtomicU32,
@@ -249,6 +297,10 @@ pub struct EngineTelemetry {
 impl Default for EngineTelemetry {
     fn default() -> Self {
         Self {
+            clock_sequence: AtomicU64::new(0),
+            clock_rate: AtomicU32::new(0),
+            clock_bpm: AtomicU64::new(120.0_f64.to_bits()),
+            clock_origin: AtomicU64::new(0),
             position: AtomicU64::new(0),
             playing: AtomicBool::new(true),
             active_scene: AtomicU32::new(NONE_U32),
@@ -292,9 +344,42 @@ pub struct TrackTelemetrySnapshot {
 }
 
 impl EngineTelemetry {
+    /// Coherent tempo anchor, read on the control thread. Bounded retries
+    /// avoid mixing the BPM and origin from two publications.
+    pub fn tempo_clock(&self) -> Option<crate::TempoClock> {
+        for _ in 0..3 {
+            let before = self.clock_sequence.load(Ordering::Acquire);
+            if before & 1 != 0 {
+                continue;
+            }
+            let rate = self.clock_rate.load(Ordering::Relaxed);
+            let bpm = f64::from_bits(self.clock_bpm.load(Ordering::Relaxed));
+            let origin = f64::from_bits(self.clock_origin.load(Ordering::Relaxed));
+            // Keep all data loads before the final sequence check on weakly
+            // ordered CPUs; an acquire load alone only orders later loads.
+            std::sync::atomic::fence(Ordering::Acquire);
+            if before == self.clock_sequence.load(Ordering::Relaxed) {
+                return crate::TempoClock::from_snapshot(rate, bpm, origin);
+            }
+        }
+        None
+    }
+
     /// Publish engine state. Allocation-free; call from the audio thread at
     /// a bounded cadence (for example once per callback).
+    /// Publish from the single audio-thread writer; concurrent writers are unsupported.
     pub fn publish(&self, engine: &MultiTrackEngine) {
+        let clock = engine.tempo_clock();
+        self.clock_sequence.fetch_add(1, Ordering::AcqRel);
+        // Pair with the reader fence even if it observes only a new field store.
+        std::sync::atomic::fence(Ordering::Release);
+        self.clock_rate
+            .store(clock.sample_rate(), Ordering::Relaxed);
+        self.clock_bpm
+            .store(clock.bpm().to_bits(), Ordering::Relaxed);
+        self.clock_origin
+            .store(clock.origin_frame().to_bits(), Ordering::Relaxed);
+        self.clock_sequence.fetch_add(1, Ordering::Release);
         self.position
             .store(engine.position_frame(), Ordering::Relaxed);
         self.playing.store(engine.is_playing(), Ordering::Relaxed);
@@ -419,6 +504,8 @@ pub struct SessionController {
     project: MultiTrackProject,
     project_path: Option<PathBuf>,
     sample_rate: u32,
+    clock: crate::TempoClock,
+    pending_tempo: Option<f64>,
     editors: ProjectPatternEditors,
     synth_patches: Vec<(TrackId, SynthPatch)>,
     mixer: Vec<(TrackId, MixerMirror)>,
@@ -497,7 +584,10 @@ impl SessionController {
         };
         let variations = Vec::new();
         let master_gain = project.master_gain;
+        let clock = crate::TempoClock::new(sample_rate, project.bpm)?;
         let mut controller = Self {
+            clock,
+            pending_tempo: None,
             project,
             project_path,
             sample_rate,
@@ -520,6 +610,23 @@ impl SessionController {
             controller.dirty = true;
         }
         Ok(controller)
+    }
+
+    pub fn tempo_clock(&self) -> crate::TempoClock {
+        self.clock
+    }
+
+    pub fn synchronize_tempo_clock(&mut self, clock: crate::TempoClock) {
+        if clock.sample_rate() != self.sample_rate {
+            return;
+        }
+        if self.pending_tempo.is_some_and(|bpm| bpm != clock.bpm()) {
+            return;
+        }
+        self.clock = clock;
+        self.dirty |= self.project.bpm != clock.bpm();
+        self.project.bpm = clock.bpm();
+        self.pending_tempo = None;
     }
 
     pub fn project(&self) -> &MultiTrackProject {
@@ -646,13 +753,8 @@ impl SessionController {
         current_frame: u64,
         boundary: QuantizeBoundary,
     ) -> Result<u64, String> {
-        crate::next_boundary_frame(
-            current_frame,
-            self.sample_rate,
-            self.bpm(),
-            self.steps_per_beat(),
-            boundary,
-        )
+        self.clock
+            .next_boundary(current_frame, self.steps_per_beat(), boundary)
     }
 
     fn track_kind(&self, track: TrackId) -> Option<TrackKind> {
@@ -679,18 +781,20 @@ impl SessionController {
     ) -> Result<String, String> {
         let track = self.editors.selected_track();
         let pattern = self.editors.selected_pattern();
-        let (_, change) = self.editors.queue_selected_revision(
+        let (_, mut change) = self.editors.queue_selected_revision(
             current_frame,
             self.sample_rate,
             self.bpm(),
             self.steps_per_beat(),
             boundary,
         )?;
+        change.apply_at_frame = self.boundary_frame(current_frame, boundary)?;
         let (revision, frame) = (change.value.revision, change.apply_at_frame);
-        self.send(AudioMessage::Revision {
+        self.send(AudioMessage::QuantizedRevision {
             track,
             pattern,
-            change,
+            revision: change.value,
+            boundary,
         })?;
         self.sync_pattern_to_project(track, pattern);
         Ok(format!(
@@ -736,6 +840,19 @@ impl SessionController {
             "patterns" => Ok(self.describe_patterns()),
             "synth" => self.synth_command(line),
             "preset" => self.preset_command(line),
+            "tempo" | "bpm" => {
+                let crate::Command::Tempo(bpm) = crate::parse_command(line)? else {
+                    return Err("expected tempo BPM".into());
+                };
+                let mut clock = self.clock;
+                clock.set_bpm_at(bpm, current_frame)?;
+                self.send(AudioMessage::Tempo { bpm })?;
+                self.clock = clock;
+                self.pending_tempo = Some(bpm);
+                self.project.bpm = bpm;
+                self.dirty = true;
+                Ok(format!("tempo {bpm:.3} BPM"))
+            }
             "mod" => self.mod_command(line),
             "sample" | "slice" => self.sample_command(line, current_frame),
             "gain" | "pan" | "mute" | "solo" | "send" | "master" => self.mixer_command(line),
@@ -752,6 +869,7 @@ impl SessionController {
             }
             "restart" => {
                 self.send(AudioMessage::Restart)?;
+                self.clock.restart();
                 Ok("restarted from bar 1".into())
             }
             "panic" => {
@@ -855,7 +973,7 @@ impl SessionController {
 
     /// `sample ...` / `slice ...` (spec 14). Edits are validated as a unit,
     /// delivered as one bounded message and recorded for `sample undo`.
-    fn sample_command(&mut self, line: &str, current_frame: u64) -> Result<String, String> {
+    fn sample_command(&mut self, line: &str, _current_frame: u64) -> Result<String, String> {
         let command = crate::parse_sample_command(line)?;
         let track = self.selected_track();
         if self.track_kind(track) != Some(TrackKind::Sample) {
@@ -903,18 +1021,10 @@ impl SessionController {
         let compiled = crate::CompiledShaping::compile(&shaping, sample_rate)?;
         let table = crate::SliceTable::compile(&slices)?;
         // Slice maps commit on the next bar of the project grid (spec 14).
-        let apply_at_frame = crate::next_boundary_frame(
-            current_frame,
-            sample_rate,
-            self.project.bpm,
-            u32::from(self.project.steps_per_beat),
-            crate::QuantizeBoundary::Bar { beats_per_bar: 4 },
-        )?;
-        self.send(AudioMessage::ScheduledSampleConfig {
+        self.send(AudioMessage::QuantizedSampleConfig {
             track,
             shaping: compiled,
             slices: table,
-            apply_at_frame,
         })?;
         if command != crate::SampleCommand::Undo {
             if self.sample_history.len() >= EDIT_HISTORY_CAPACITY {
@@ -2318,4 +2428,4 @@ pub fn inspector_synth_params() -> impl Iterator<Item = SynthParamId> {
     .filter_map(parse_synth_param)
 }
 
-pub const HELP_TEXT: &str = "commands: track N | step N toggle|note|vel|gate|prob|ratchet|micro | length N | swing X | rotate left|right N | undo | redo | pattern ID | patterns | synth PARAM VALUE | preset list|directory|save NAME|load NAME|delete NAME | gain|pan X | mute|solo [on|off] | send a|b X | master X | fx list | fx track|send_a|send_b|master SLOT PARAM VALUE|bypass on|off | scene launch NAME [bar|beat|step|now] | scene next|prev | chain start NAME | chain stop|pause|resume | lock TARGET VALUE | unlock TARGET | locks | learn TARGET | learn confirm [replace|add|cancel] | learn cancel | mappings | mapping ID range|invert|pickup|button ... | unlearn ID | variation lock ...|preview|accept|reject | resample arm master|track [ID] [bars N|seconds S] | resample stop [bar] | resample cancel|normalize on|off|destination asset|new-track|replace | blackbox status|save [PATH]|clear | play | restart | panic | save [PATH]";
+pub const HELP_TEXT: &str = "commands: track N | step N toggle|note|vel|gate|prob|ratchet|micro | length N | swing X | rotate left|right N | undo | redo | pattern ID | patterns | synth PARAM VALUE | preset list|directory|save NAME|load NAME|delete NAME | gain|pan X | mute|solo [on|off] | send a|b X | master X | fx list | fx track|send_a|send_b|master SLOT PARAM VALUE|bypass on|off | scene launch NAME [bar|beat|step|now] | scene next|prev | chain start NAME | chain stop|pause|resume | lock TARGET VALUE | unlock TARGET | locks | learn TARGET | learn confirm [replace|add|cancel] | learn cancel | mappings | mapping ID range|invert|pickup|button ... | unlearn ID | variation lock ...|preview|accept|reject | resample arm master|track [ID] [bars N|seconds S] | resample stop [bar] | resample cancel|normalize on|off|destination asset|new-track|replace | blackbox status|save [PATH]|clear | tempo BPM | play | restart | panic | save [PATH]";

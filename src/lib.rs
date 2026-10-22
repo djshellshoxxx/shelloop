@@ -36,6 +36,7 @@ pub mod scheduler;
 pub mod scope;
 pub mod sequencer;
 pub mod synth;
+pub mod tempo;
 pub mod transport;
 pub mod tui;
 pub mod variation;
@@ -157,6 +158,7 @@ pub use synth::{
     parse_synth_parameter_command, sync_to_index, CompiledSynthPatch, Oscillator, SynthParamId,
     SynthParamValue, SynthPatch, SynthVoice,
 };
+pub use tempo::TempoClock;
 pub use transport::{Transport, TransportState};
 pub use tui::{route_input, TuiLayout, TuiSnapshot, UiAction, UiInput, UiMode};
 pub use variation::{

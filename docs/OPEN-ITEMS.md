@@ -18,8 +18,10 @@ Traceability register for work that is not complete. Each row names the requirem
 | OI-12 | Spec 16 | Euclidean rhythm command | Done 2026-10-21 | `tests/euclid.rs` |
 | OI-13 | Spec 17 | Bitcrusher effect | Done 2026-10-21 | `tests/bitcrusher.rs` |
 | OI-14 | Audit 2026-10-12 | Confirm DLL/plugin scanning in two VST3 and two CLAP hosts | External | Host runs |
-| OI-15 | Audit 2026-10-21 | Dead public `Command::Tempo` (see audit F-02) | Open, decision | Remove or wire up |
+| OI-15 | Audit 2026-10-21 | Dead public `Command::Tempo` (see audit F-02) | Done 2026-10-22 | Phase-preserving audio-thread tempo handoff, pending note-offs and quantized edits/scenes, fractional BPM, pause/restart, coherent telemetry, and zero-allocation regressions. |
 
 ## Notes
 * Spec 16 and 17 are new; their specs were written before the code.
 * Discrete effect parameters (`bitcrusher` bits/downsample, existing `delay` sync, and similar) are not lockable by existing design.
+
+Tempo commands (`tempo BPM`, alias `bpm BPM`) preserve musical phase at the audio-thread handoff. Pause/resume retains that phase; restart begins at beat zero while keeping BPM. Pending musical edits and note-offs follow the new clock; an already armed resampling interval keeps its exact physical frame bounds. Beat-repeat grid changes fade the previous bounded held slice to dry before fresh capture. Black-box recording retains timestamped CLI `EditorCommand` attempts and emits the existing validated `TempoChange { bpm }` event only after the controller accepts the tempo handoff.

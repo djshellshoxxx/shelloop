@@ -57,6 +57,7 @@ fn allocations_during(f: impl FnOnce()) -> usize {
 #[test]
 fn warmed_renders_do_not_allocate() {
     allocation_probe_is_scoped_to_the_render_thread();
+    tempo_handoff_does_not_allocate();
     sample_shaping_does_not_allocate();
     modulation_and_effects_do_not_allocate();
 }
@@ -89,6 +90,42 @@ fn allocation_probe_is_scoped_to_the_render_thread() {
     assert_eq!(
         count, 0,
         "unrelated control/harness thread allocations must not pollute the audio probe"
+    );
+}
+
+fn tempo_handoff_does_not_allocate() {
+    use shelloop::{
+        apply_audio_message, AudioMessage, EffectKind, MultiTrackEngine, MultiTrackProject,
+        Pattern, PatternStep, TrackDefinition, TrackId, TrackKind,
+    };
+    let step = PatternStep {
+        note: 60,
+        velocity: 1.0,
+        gate: 1.0,
+        probability: 1.0,
+        ratchets: 1,
+        microtiming_frames: 0,
+    };
+    let pattern = Pattern::new("clock", 1, 0.0, 0, vec![Some(step)]).unwrap();
+    let mut track = TrackDefinition::new(TrackId(1), "clock", TrackKind::Synth, pattern);
+    track
+        .inserts
+        .push(EffectConfig::new(EffectKind::BeatRepeat));
+    let project = MultiTrackProject::new(1, 120.0, 4, vec![track]);
+    let mut engine = MultiTrackEngine::from_project(48_000, 4, &project, None).unwrap();
+    for _ in 0..100 {
+        engine.next_stereo_frame();
+    }
+    let (garbage, _) = crossbeam_channel::bounded(1);
+    assert_eq!(
+        allocations_during(|| {
+            for bpm in [123.5, 91.7, 240.1, f64::NAN] {
+                apply_audio_message(&mut engine, AudioMessage::Tempo { bpm }, &garbage);
+                std::hint::black_box(engine.next_stereo_frame());
+            }
+        }),
+        0,
+        "actual tempo messages and invalid rejection must not allocate"
     );
 }
 
