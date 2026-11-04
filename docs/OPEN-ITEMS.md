@@ -18,6 +18,8 @@ Traceability register for work that is not complete. Each row names the requirem
 | OI-12 | Spec 16 | Euclidean rhythm command | Done 2026-10-21 | `tests/euclid.rs` |
 | OI-13 | Spec 17 | Bitcrusher effect | Done 2026-10-21 | `tests/bitcrusher.rs` |
 | OI-14 | Audit 2026-10-12 | Confirm DLL/plugin scanning in two VST3 and two CLAP hosts | External | Host runs |
+| OI-16 | PR #11 | Musical commands: scale/chord/arp/humanize/ratio, pattern clipboard/transpose, tap tempo, metronome, count-in, autosave | Done 2026-11-04 (integrated onto the phase-preserving clock) | `tests/musical_commands.rs`, `tests/musical_format.rs`, `tests/musical_scheduler.rs`, `realtime_allocations` |
+| OI-17 | Integration 2026-11-04 | One Euclid algorithm and one tempo path | Done | `music::euclid` delegates to spec 16 `euclidean_mask`; `euclid HITS [ROT]` is the spec 16 edit, the option form (`euclid H S rotate N note N`) is the resizing musical edit. `tap` uses the same `set_tempo` handoff as `tempo`; `MultiTrackEngine::retime` is an alias of `set_tempo`. |
 | OI-15 | Audit 2026-10-21 | Dead public `Command::Tempo` (see audit F-02) | Done 2026-10-22 | Phase-preserving audio-thread tempo handoff, pending note-offs and quantized edits/scenes, fractional BPM, pause/restart, coherent telemetry, and zero-allocation regressions. |
 
 ## Notes

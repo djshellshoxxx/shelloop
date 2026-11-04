@@ -1114,6 +1114,8 @@ pub struct MultiTrackEngine {
     frames_per_bar: f64,
     master_peak: f32,
     last_master: (f32, f32),
+    metronome: crate::metronome::Metronome,
+    count_in: Option<crate::metronome::CountIn>,
 }
 
 impl MultiTrackEngine {
@@ -1187,6 +1189,11 @@ impl MultiTrackEngine {
             frames_per_bar,
             master_peak: 0.0,
             last_master: (0.0, 0.0),
+            metronome: crate::metronome::Metronome::new(
+                sample_rate,
+                crate::scenes::CHAIN_BEATS_PER_BAR,
+            ),
+            count_in: None,
         })
     }
 
@@ -1467,10 +1474,67 @@ impl MultiTrackEngine {
         }
     }
 
+    /// Metronome click, or count-in click, for this frame. Zero when neither
+    /// is running. A finished count-in starts the transport on the next frame.
+    fn metronome_sample(&mut self) -> f32 {
+        if let Some(mut count_in) = self.count_in {
+            let (beat, ended) = count_in.tick();
+            if ended {
+                self.count_in = None;
+                self.set_playing_all(true);
+            } else {
+                self.count_in = Some(count_in);
+            }
+            return self.metronome.next_sample(Some(beat));
+        }
+        let beat = if self.metronome.enabled() && self.is_playing() {
+            self.tracks
+                .first()
+                .and_then(|track| track.sequencer.beat_index())
+        } else {
+            None
+        };
+        self.metronome.next_sample(beat)
+    }
+
+    /// Enable the metronome click and set its level (0.0..=1.0).
+    pub fn set_metronome(&mut self, enabled: bool, gain: f32) -> Result<(), EngineError> {
+        self.metronome
+            .set(enabled, gain)
+            .map_err(EngineError::InvalidValue)
+    }
+
+    /// Count in `bars` bars of clicks, then start the transport. When the
+    /// transport is already running this pauses it instead, so "play" keeps
+    /// toggling.
+    pub fn start_count_in(&mut self, bars: u32) -> Result<(), EngineError> {
+        if self.is_playing() {
+            self.set_playing_all(false);
+            return Ok(());
+        }
+        let frames_per_beat = f64::from(self.sample_rate) * 60.0 / self.bpm;
+        self.count_in = Some(
+            crate::metronome::CountIn::new(
+                bars,
+                crate::scenes::CHAIN_BEATS_PER_BAR,
+                frames_per_beat,
+            )
+            .map_err(EngineError::InvalidValue)?,
+        );
+        Ok(())
+    }
+
+    /// Compatibility alias for [`Self::set_tempo`]: one phase-preserving
+    /// clock re-anchor for every grid, synth and effect.
+    pub fn retime(&mut self, bpm: f64) -> Result<(), EngineError> {
+        self.set_tempo(bpm)
+    }
+
     pub fn next_stereo_frame(&mut self) -> (f32, f32) {
         self.advance_scene_clock();
         let transport_frame = self.position_frame();
         let transport_playing = self.is_playing();
+        let click = self.metronome_sample();
         let any_soloed = self.tracks.iter().any(|track| track.soloed);
         let mut left = 0.0_f32;
         let mut right = 0.0_f32;
@@ -1508,10 +1572,12 @@ impl MultiTrackEngine {
             );
         }
         let master_gain = self.master_gain.next_value();
-        let output = (
-            crate::protect_master(left * master_gain),
-            crate::protect_master(right * master_gain),
-        );
+        let (mut left, mut right) = (left * master_gain, right * master_gain);
+        if click != 0.0 {
+            left += click;
+            right += click;
+        }
+        let output = (crate::protect_master(left), crate::protect_master(right));
         self.last_master = output;
         let level = output.0.abs().max(output.1.abs());
         self.master_peak = if level > self.master_peak {
