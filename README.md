@@ -978,3 +978,7 @@ selected synth's current patch and modulation routes; `save` also persists them
 in the project. Names accept letters, digits, underscores and hyphens (64 max).
 Saving refuses to overwrite an existing name; invalid files and full audio
 queues leave the current patch unchanged. File I/O stays on the control thread.
+
+## Wiki
+
+Wiki source pages are in [docs/wiki/](docs/wiki/Home.md): developer guide, architecture summary and codebase map. The specs in `docs/specs/` and `AGENTS.md` are the authority.
