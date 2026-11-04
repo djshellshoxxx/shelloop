@@ -146,8 +146,50 @@ impl LiveSequencer {
         self.invalidate_cache();
     }
 
+    pub fn set_tempo(&mut self, bpm: f64) -> Result<(), String> {
+        let mut clock = self.scheduler.clock();
+        clock.set_bpm_at(bpm, self.position_frame)?;
+        self.set_clock(clock);
+        Ok(())
+    }
+
+    pub(crate) fn set_clock(&mut self, clock: crate::TempoClock) {
+        let old = self.scheduler.clock();
+        for pending in &mut self.pending_note_offs {
+            pending.frame = clock
+                .frame_at_beat(old.beat_at_frame(pending.frame))
+                .max(self.position_frame);
+        }
+        self.scheduler.set_clock(clock);
+        self.cache_start = 0;
+        self.cache_end = 0;
+        self.event_buffer.clear();
+        self.event_index = 0;
+        self.boundary_buffer.clear();
+        self.boundary_index = 0;
+    }
+
     pub fn frames_per_step(&self) -> f64 {
         self.scheduler.frames_per_step()
+    }
+
+    /// Beat index under the playhead, or `None` before the tempo origin.
+    pub fn beat_index(&self) -> Option<u64> {
+        self.scheduler.beat_index_at(self.position_frame)
+    }
+
+    /// Re-anchor the grid at `bpm` from `at_frame`. Pending note-offs are
+    /// kept so no sounding note is stranded; only the lookahead cache is
+    /// rebuilt. Events before `at_frame` are never re-emitted.
+    pub fn retime(&mut self, bpm: f64, at_frame: u64) -> Result<(), String> {
+        self.scheduler = self.scheduler.retimed(bpm, at_frame)?;
+        self.cache_start = 0;
+        self.cache_end = 0;
+        self.event_buffer.clear();
+        self.event_index = 0;
+        self.boundary_buffer.clear();
+        self.boundary_index = 0;
+        Ok(())
     }
 
     fn invalidate_cache(&mut self) {

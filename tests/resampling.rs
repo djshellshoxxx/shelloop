@@ -302,3 +302,22 @@ fn commands_parse() {
     );
     assert!(parse_resample_command("resample destination elsewhere").is_err());
 }
+
+#[test]
+fn new_capture_plans_use_the_live_phase_anchor_after_tempo_changes() {
+    let mut live = shelloop::TempoClock::new(RATE, 120.0).unwrap();
+    live.set_bpm_at(240.0, 18_000).unwrap();
+    let clock = CaptureClock {
+        bpm: 240.0,
+        ..CLOCK
+    };
+    let (start, stop) = shelloop::resample::resolve_capture_frames_with_origin(
+        &request(ResampleStop::Bars(1), false),
+        18_000,
+        clock,
+        live.origin_frame(),
+    )
+    .unwrap();
+    assert_eq!(start, 21_000);
+    assert_eq!(stop, Some(69_000));
+}

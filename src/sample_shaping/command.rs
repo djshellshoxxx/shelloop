@@ -10,6 +10,7 @@
 //! slice add <start> <end>          (normalised 0..1)
 //! slice delete <n>                 (one-based)
 //! slice auto <count>               (equal division)
+//! slice detect [count] [sensitivity] (offline transient detection, 0..1)
 //! slice assign <none|note|random> [base_note|seed]
 //! slice clear
 //! ```
@@ -34,6 +35,10 @@ pub enum SampleCommand {
     SliceAdd(SliceDef),
     SliceDelete(usize),
     SliceAuto(usize),
+    SliceDetect {
+        count: usize,
+        sensitivity: f32,
+    },
     SliceAssign {
         select: SliceSelect,
         value: Option<u32>,
@@ -41,6 +46,10 @@ pub enum SampleCommand {
     SliceClear,
     Undo,
 }
+
+/// Defaults for `slice detect` with no arguments.
+pub const DEFAULT_DETECT_SLICES: usize = 16;
+pub const DEFAULT_DETECT_SENSITIVITY: f32 = 0.5;
 
 fn number(word: Option<&&str>, what: &str) -> Result<f32, String> {
     word.ok_or_else(|| format!("missing {what}"))?
@@ -116,6 +125,26 @@ pub fn parse_sample_command(line: &str) -> Result<SampleCommand, String> {
             }
             Ok(SampleCommand::SliceAuto(n as usize))
         }
+        (Some("slice"), Some("detect")) => {
+            let count = match words.get(2) {
+                Some(_) => {
+                    let n = number(words.get(2), "slice count")?;
+                    if n < 1.0 || n.fract() != 0.0 {
+                        return Err("slice count must be a positive integer".into());
+                    }
+                    n as usize
+                }
+                None => DEFAULT_DETECT_SLICES,
+            };
+            let sensitivity = match words.get(3) {
+                Some(_) => number(words.get(3), "sensitivity")?,
+                None => DEFAULT_DETECT_SENSITIVITY,
+            };
+            if !(0.0..=1.0).contains(&sensitivity) {
+                return Err("sensitivity must be between 0.0 and 1.0".into());
+            }
+            Ok(SampleCommand::SliceDetect { count, sensitivity })
+        }
         (Some("slice"), Some("assign")) => {
             let select = match words.get(2).copied() {
                 Some("none") => SliceSelect::None,
@@ -139,7 +168,8 @@ pub fn parse_sample_command(line: &str) -> Result<SampleCommand, String> {
 }
 
 /// Applies `command` to copies and commits only if the result validates.
-/// `Undo` and `SliceList` are handled by the caller.
+/// `Undo`, `SliceList` and `SliceDetect` (which needs decoded audio) are
+/// handled by the caller.
 pub fn apply_sample_command(
     shaping: &mut SampleShaping,
     slices: &mut SliceSettings,
@@ -212,7 +242,7 @@ pub fn apply_sample_command(
             next_slices.regions.clear();
             "cleared slices".to_owned()
         }
-        SampleCommand::SliceList | SampleCommand::Undo => {
+        SampleCommand::SliceList | SampleCommand::SliceDetect { .. } | SampleCommand::Undo => {
             return Err("handled by the caller".into());
         }
     };

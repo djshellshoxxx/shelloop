@@ -25,7 +25,7 @@
   <header>
     <span class="tag">v0.01 beta development</span>
     <h1>SHELLOOP</h1>
-    <p class="lead">A terminal-only real-time step sequencer and playable synthesizer for Windows and Linux. Play it from the computer keyboard or MIDI, run deterministic patterns, and record the protected master output directly to WAV.</p>
+    <p class="lead">A terminal-only real-time step sequencer and playable synthesizer for Windows, Linux and macOS. Play it from the computer keyboard or MIDI, run deterministic patterns, and record the protected master output directly to WAV.</p>
     <div class="actions">
       <a class="btn primary" href="https://github.com/djshellshoxxx/shelloop">GitHub repository</a>
       <a class="btn" href="https://github.com/djshellshoxxx/shelloop/tree/main#complete-windows-setup-and-testing-guide">Full Windows setup</a>
@@ -43,6 +43,18 @@ cargo build --release --features realtime-audio,midi,terminal-ui
 .\target\release\shelloop.exe --list-devices
 .\target\release\shelloop.exe --no-midi --pattern .\patterns\example-bassline.json --bpm 138</code></pre>
     <p class="note">If the intended audio output is not the Windows default, copy its exact name from <code>--list-devices</code> and pass <code>--audio-device "DEVICE NAME"</code>.</p>
+  </section>
+
+  <section>
+    <h2>macOS: first sound</h2>
+    <p>Install the Xcode Command Line Tools (<code>xcode-select --install</code>) and Rust, then run this from Terminal. Apple silicon and Intel Macs both build from source.</p>
+    <pre><button class="copy" data-copy="mac">Copy</button><code id="mac">git clone https://github.com/djshellshoxxx/shelloop.git
+cd shelloop
+git switch main
+cargo build --release --features realtime-audio,midi,terminal-ui
+./target/release/shelloop --list-devices
+./target/release/shelloop --no-midi --pattern ./patterns/example-bassline.json --bpm 138</code></pre>
+    <p class="note">Prebuilt macOS downloads are ad-hoc signed, not notarized. If Gatekeeper blocks one, run <code>xattr -dr com.apple.quarantine</code> on the unpacked folder once. Check the <code>.sha256</code> file before running anything you downloaded.</p>
   </section>
 
   <section>
@@ -101,7 +113,7 @@ cargo build --release --features realtime-audio,midi,terminal-ui
   </section>
 
   <footer>
-    Shelloop is currently beta-stage software. Automated Windows/Linux CI checks compile, test, lint, and build the runtime; physical audio-interface, MIDI-controller, latency, and motherboard-speaker behavior still require real hardware testing.
+    Shelloop is currently beta-stage software. Automated Windows/Linux/macOS CI checks compile, test, lint, and build the runtime; physical audio-interface, MIDI-controller, latency, and motherboard-speaker behavior still require real hardware testing.
   </footer>
 </main>
 <script>

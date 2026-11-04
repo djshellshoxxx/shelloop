@@ -386,7 +386,11 @@ pub fn build_snapshot(
     let sample_rate = controller.sample_rate().max(1);
     let frames_per_beat = f64::from(sample_rate) * 60.0 / project.bpm;
     let frames_per_step = frames_per_beat / f64::from(project.steps_per_beat.max(1));
-    let beat_index = (telemetry.position_frame as f64 / frames_per_beat) as u64;
+    let beat_position = controller
+        .tempo_clock()
+        .beat_at_frame(telemetry.position_frame)
+        .max(0.0);
+    let beat_index = beat_position as u64;
     let scene_name = |id: SceneId| {
         project
             .scenes
@@ -492,7 +496,8 @@ pub fn build_snapshot(
     if ui.viewport.len != len {
         ui.viewport.set_len(len);
     }
-    let playhead = playhead_step(telemetry.position_frame, frames_per_step, len);
+    let musical_frame = (beat_position * frames_per_beat).round() as u64;
+    let playhead = playhead_step(musical_frame, frames_per_step, len);
 
     let targets = inspector_targets(controller);
     ui.inspector_index = ui.inspector_index.min(targets.len().saturating_sub(1));

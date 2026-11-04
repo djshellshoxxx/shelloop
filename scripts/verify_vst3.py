@@ -3,8 +3,11 @@
 Usage: python scripts/verify_vst3.py <path to the module binary>
   Linux:   SHELLOOP.vst3/Contents/x86_64-linux/SHELLOOP.so
   Windows: SHELLOOP.vst3
+  macOS:   SHELLOOP.vst3/Contents/MacOS/SHELLOOP
 """
 import ctypes
+from contextlib import contextmanager
+import os
 import sys
 from pathlib import Path
 
@@ -19,21 +22,62 @@ class PClassInfo(ctypes.Structure):
                 ("category", ctypes.c_char * 32), ("name", ctypes.c_char * 64)]
 
 
+@contextmanager
+def initialized_module(lib, binary):
+    """Match each native VST3 entry/exit ABI, retaining the macOS bundle."""
+    core = None
+    bundle = None
+    if sys.platform == "darwin":
+        core = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        core.CFURLCreateFromFileSystemRepresentation.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_bool]
+        core.CFURLCreateFromFileSystemRepresentation.restype = ctypes.c_void_p
+        core.CFBundleCreate.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        core.CFBundleCreate.restype = ctypes.c_void_p
+        core.CFRelease.argtypes = [ctypes.c_void_p]
+        path = os.fsencode(binary.parents[2])
+        url = core.CFURLCreateFromFileSystemRepresentation(None, path, len(path), True)
+        if not url:
+            raise ValueError("could not create VST3 bundle URL")
+        try:
+            bundle = core.CFBundleCreate(None, url)
+        finally:
+            core.CFRelease(url)
+        if not bundle:
+            raise ValueError("could not create VST3 bundle reference")
+        init_name, exit_name, argument = "bundleEntry", "bundleExit", bundle
+    elif sys.platform == "win32":
+        init_name, exit_name, argument = "InitDll", "ExitDll", None
+    else:
+        init_name, exit_name, argument = "ModuleEntry", "ModuleExit", lib._handle
+    initialized = False
+    try:
+        init = getattr(lib, init_name)
+        init.argtypes = [] if sys.platform == "win32" else [ctypes.c_void_p]
+        init.restype = ctypes.c_bool
+        initialized = init() if sys.platform == "win32" else init(argument)
+        if not initialized:
+            raise ValueError(f"{init_name} reported failure")
+        yield
+    finally:
+        if initialized:
+            shutdown = getattr(lib, exit_name)
+            shutdown.argtypes = []
+            shutdown.restype = ctypes.c_bool
+            shutdown()
+        if bundle:
+            core.CFRelease(bundle)
+
+
 def verify(binary):
     if binary.stat().st_size < 100_000:
         raise ValueError("VST3 module is unexpectedly small")
     lib = ctypes.CDLL(str(binary))
-    # Hosts call the platform init hook before asking for the factory.
-    init_name = "InitDll" if sys.platform == "win32" else "ModuleEntry"
-    init = getattr(lib, init_name, None)
-    if init is not None:
-        # VST3 Windows InitDll takes no arguments. On Linux ModuleEntry
-        # receives the shared-object handle.
-        init.argtypes = [] if sys.platform == "win32" else [ctypes.c_void_p]
-        init.restype = ctypes.c_bool
-        initialized = init() if sys.platform == "win32" else init(None)
-        if not initialized:
-            raise ValueError(f"{init_name} reported failure")
+    with initialized_module(lib, binary):
+        verify_factory(lib)
+
+
+def verify_factory(lib):
     lib.GetPluginFactory.restype = ctypes.c_void_p
     factory = lib.GetPluginFactory()
     if not factory:

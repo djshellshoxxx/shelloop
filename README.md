@@ -1,13 +1,13 @@
 # SHELLOOP
 
-SHELLOOP is a terminal-only real-time music instrument: a live step sequencer plus a playable synthesizer designed for Windows and Linux.
+SHELLOOP is a terminal-only real-time music instrument: a live step sequencer plus a playable synthesizer designed for Windows, Linux and macOS.
 
-All fifteen specifications (`docs/specs/01`–`15`) are implemented. The twelve v1 specs are: multitrack engine, live pattern editing, synth/filter/ADSR, WAV samples, scenes and chains, MIDI learn, effects, a full-screen terminal UI, per-step parameter locks, resampling, a retrospective performance black box and invariant-locked pattern variation. SHELLOOP also ships as a **CLAP instrument plugin** (`clap-plugin/`). Release builds are published on the GitHub Releases page as a Windows `.exe`, a Linux binary and CLAP plugins for both. The sound-design expansion adds a modulation matrix with macros (spec 13), sample shaping and slices (spec 14) and creative effects (spec 15), described below. Physical audio-hardware latency and MIDI-controller validation is tracked separately in `docs/HARDWARE-ACCEPTANCE.md`.
+All seventeen specifications (`docs/specs/01`–`17`) are implemented, plus the musical editing commands (scales, chords, arpeggiator, humanize, ratio trigs, tap tempo, metronome, count-in, autosave). The twelve v1 specs are: multitrack engine, live pattern editing, synth/filter/ADSR, WAV samples, scenes and chains, MIDI learn, effects, a full-screen terminal UI, per-step parameter locks, resampling, a retrospective performance black box and invariant-locked pattern variation. SHELLOOP also ships as a **CLAP instrument plugin** (`clap-plugin/`). Release builds are published on the GitHub Releases page as a Windows `.exe`, Linux and native macOS binaries, plus CLAP and VST3 plugins. macOS releases include separate Apple Silicon and Intel archives. The sound-design expansion adds a modulation matrix with macros (spec 13), sample shaping and slices (spec 14) and creative effects (spec 15), described below. Physical audio-hardware latency and MIDI-controller validation is tracked separately in `docs/HARDWARE-ACCEPTANCE.md`.
 
 ## Implemented
 
 - Sample-frame transport and exact in-block event offsets
-- Deterministic pattern scheduling with independent lengths, probability, swing, microtiming and ratchets
+- Deterministic pattern scheduling with independent lengths, probability, swing, microtiming, ratchets, ratio conditions and humanize
 - Live JSON pattern playback in the CPAL audio callback with preallocated scheduling buffers
 - Bounded 1–16 track synth engine with stable track IDs, independent pattern lengths, mute/solo, smoothed gain/pan and stereo output
 - Space play/pause and Backspace restart controls for loaded patterns
@@ -38,8 +38,11 @@ All fifteen specifications (`docs/specs/01`–`15`) are implemented. The twelve 
 - Modulation matrix (spec 13): 2 LFOs (sine, triangle, saw, square, seeded sample-and-hold; Hz or tempo divisions), 2 macros, mod wheel, envelopes, velocity and key tracking routed through up to 8 routes per synth patch
 - Sample shaping and slices (spec 14): per-track low-/high-pass filter, drive, ADSR amplitude envelope, zero-latency transient shaper, up to 128 slices selected by note, seeded random or step lock, offline transient detection
 - Creative effects (spec 15): tempo-synced multimode filter, stereo chorus/flanger and quantized beat repeat, usable as inserts, sends or master effects, with two performance macros per effect chain and per-scene recall
+- Euclidean rhythms (spec 16): `euclid <hits> [rotation]` rewrites the selected pattern as one undoable, pattern-quantised edit
+- Bitcrusher (spec 17): bit-depth and sample-rate reduction as an effect kind
+- Slice detection (spec 14): `slice detect`, with slice maps committed on the bar
 - CLAP instrument plugin: polyphonic synth with 23 automatable parameters (including LFO/mod-wheel/macro modulation), host-synced sequencer and saved state
-- Windows/Linux all-feature compile, test, strict Clippy and optimized-release CI gates
+- Windows/Linux/macOS all-feature compile, test, strict Clippy and optimized-release CI gates
 - Tag-triggered release workflow publishing the Windows `.exe`, Linux build and CLAP plugins with SHA-256 checksums
 
 ## Command line
@@ -116,6 +119,7 @@ step 5 micro +120
 length 15
 swing 0.12
 rotate right 1
+euclid 5 2
 undo
 redo
 ```
@@ -135,6 +139,39 @@ shelloop --mouse-xy
 ```
 
 With a pattern or multi-track project loaded, hold the left mouse button and drag inside the terminal. X crossfades between the live synth (left) and sequencer/project mix (right); Y controls overall performance level. Without a sequencer source, X is ignored and Y controls the live synth level. Mouse capture is disabled again when Shelloop exits.
+
+### Musical tools
+
+These commands work on the selected track and pattern, from the same `:` prompt. Each pattern change is one undoable edit, queued through the normal quantised revision path (`undo` reverts it). Chords, ratios and humanize are stored in the pattern JSON only when used.
+
+```text
+scale C major               # session scale: scale ROOT KIND | scale off | scale list
+scale snap on               # typed `step N note X` snaps to the scale (scale snap off to disable)
+scale apply                 # snap every note of the selected pattern to the scale
+chord C4 min7 1             # write a chord at the selected step; optional inversion 0..3
+arp A3 min up 2 2           # arpeggio from the selected step: MODE up|down|updown|random, OCTAVES 1..4, RATE 1..16 steps
+euclid 5 8 rotate 1 note 36 # Euclidean rhythm: HITS STEPS, replaces the pattern rhythm (length becomes STEPS)
+humanize 8 0.06             # random timing (±ms, deterministic per step) and velocity (±); humanize off
+ratio 5 1:2                 # step 5 sounds on every other loop (P:Q = play on P of every Q cycles); ratio 5 off
+pattern copy | pattern paste | pattern clear | pattern transpose -5
+tap                         # tap tempo: call repeatedly; two or more taps set the tempo (20..400 BPM)
+metronome on 0.4            # click on each beat, accented on bar downbeats; metronome off
+countin 1                   # play starts after one bar of clicks (countin 0 disables; pause during count-in cancels)
+autosave every 30           # autosave NAME.autosave.json beside the project every 30 s when edited (autosave on|off)
+help                        # every command, grouped
+```
+
+Notes:
+
+* `swing` (existing) is the per-pattern groove; `humanize` adds random jitter on top. Jitter is keyed on the pattern seed and step index, so the result is identical however audio blocks are split.
+* `ratio` is per step; it combines with the existing per-step `step N probability`, so both must pass.
+* A chord is one step note plus extra notes that sound with it. Clearing or toggling a step removes its chord and ratio.
+* `pattern rotate` and `length` carry chords and ratios with their steps. `shift` is covered by `rotate left|right N`.
+* `tap` re-grids playback from the current playhead. Scene and chain bar lengths keep their old tempo until the next restart, and an edit queued by a quantised boundary right after a tap uses the absolute bar grid, so it can land up to one step away from the new grid.
+* Autosave writes the current project to a sidecar file with the same atomic write as `save`; the project file itself changes only on an explicit `save`. Scale settings and the tap state are session-only and are not saved.
+* The master bus already passes through a tanh soft clipper (`protect_master`), so no separate limiter is added.
+
+Examples: `patterns/example-euclid-minor7.json` (5-of-8 Euclidean bass with minor-7 voicings, humanize and a 1:2 ratio) and `patterns/example-pentatonic-arp.json` (an A minor pentatonic arpeggio).
 
 ### ASCII waveform
 
@@ -617,6 +654,80 @@ Automated Windows CI proves that the all-feature code compiles, tests, passes st
 
 `--record <FILE>` records the protected mono master mix. Resampling and the black box capture stereo.
 
+## macOS: install and build
+
+Shelloop runs natively on Apple silicon and Intel Macs (macOS 11 or later). Real-time audio uses CoreAudio and MIDI uses CoreMIDI, so no extra audio packages are needed; installing the Xcode Command Line Tools is enough for building.
+
+Physical audio-interface and MIDI-controller behavior on macOS is not yet validated on hardware. CI builds and tests the standalone app, CLAP and VST3 on Apple silicon and Intel runners.
+
+### Option A: use the prebuilt macOS release
+
+Download from the Releases page (VERSION is the release tag):
+
+```text
+shelloop-VERSION-macos-arm64.tar.gz         standalone binary + example projects + shelloop.clap (Apple silicon)
+shelloop-VERSION-macos-x86_64.tar.gz        the same bundle for Intel Macs
+shelloop-clap-VERSION-macos-arm64.tar.gz    CLAP plugin only (use macos-x86_64 on Intel)
+shelloop-vst3-VERSION-macos-arm64.tar.gz    VST3 plugin only (use macos-x86_64 on Intel)
+```
+
+Check the download against its checksum file, then unpack it:
+
+```sh
+shasum -a 256 -c shelloop-VERSION-macos-arm64.tar.gz.sha256
+tar -xzf shelloop-VERSION-macos-arm64.tar.gz
+./shelloop-VERSION-macos-arm64/shelloop --list-devices
+```
+
+**Gatekeeper blocks the beta build.** The binaries and plugin bundles are ad-hoc signed (`codesign -s -`) but not notarized, so macOS quarantines files downloaded from the internet. Remove the quarantine attribute once after unpacking (adjust the paths to where you put the files):
+
+```sh
+xattr -dr com.apple.quarantine ./shelloop-VERSION-macos-arm64
+```
+
+The ad-hoc signature only proves the bundle is intact; it does not identify a publisher. Only run builds you downloaded from this repository's Releases page.
+
+Install the plugins into the per-user folders and rescan in your host:
+
+```sh
+mkdir -p ~/Library/Audio/Plug-Ins/CLAP ~/Library/Audio/Plug-Ins/VST3
+cp -R shelloop-clap-VERSION-macos-arm64/shelloop.clap ~/Library/Audio/Plug-Ins/CLAP/
+cp -R shelloop-vst3-VERSION-macos-arm64/SHELLOOP.vst3 ~/Library/Audio/Plug-Ins/VST3/
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/shelloop.clap ~/Library/Audio/Plug-Ins/VST3/SHELLOOP.vst3
+```
+
+### Option B: build the current version from source
+
+```sh
+xcode-select --install                  # once, if the Command Line Tools are missing
+# Install Rust from https://rustup.rs (stable toolchain)
+git clone https://github.com/djshellshoxxx/shelloop.git
+cd shelloop
+cargo test --workspace --all-targets --features realtime-audio,midi,terminal-ui
+cargo build --release --features realtime-audio,midi,terminal-ui
+./target/release/shelloop --list-devices
+./target/release/shelloop --no-midi --pattern ./patterns/example-bassline.json --bpm 138
+```
+
+To build the CLAP plugin as a macOS bundle (see `clap-plugin/README.md`):
+
+```sh
+cargo build --release -p shelloop-clap
+mkdir -p shelloop.clap/Contents/MacOS
+cp target/release/libshelloop_clap.dylib shelloop.clap/Contents/MacOS/shelloop
+# Write shelloop.clap/Contents/Info.plist (CFBundleExecutable = shelloop,
+# CFBundlePackageType = BNDL); see clap-plugin/README.md for the file.
+codesign --force --sign - shelloop.clap
+```
+
+To build the VST3 plugin, install CMake (`brew install cmake`) and run:
+
+```sh
+python3 scripts/build_vst3.py vst3-out
+```
+
+The result is `vst3-out/SHELLOOP.vst3`. Apply the same `xattr -dr com.apple.quarantine` step to any plugin you copy from a download.
+
 ## Pattern JSON
 
 Patterns are validated before the audio stream starts. Each step is either `null` or an object with note, velocity, gate, probability, ratchets and signed microtiming in sample frames. Example:
@@ -636,6 +747,12 @@ Patterns are validated before the audio stream starts. Each step is either `null
 
 The included `patterns/example-bassline.json` demonstrates probability, ratchets, swing and microtiming.
 
+Three optional keys carry the musical tools. Each is omitted when unused, so existing files load and save unchanged:
+
+* `chords`: `[{"step": 0, "notes": [51, 55, 58]}]`, extra notes that sound with a step's note. The step must have a note; at most five extra notes.
+* `ratios`: `[{"step": 7, "play": 1, "of": 2}]`, sound on loop cycles where `loop % of == play - 1`.
+* `humanize`: `{"timing_frames": 120, "velocity": 0.08}`, deterministic per-step jitter (timing up to 9600 frames, velocity up to 0.5).
+
 ## Live keyboard controls
 
 The playable synth uses a two-row piano layout:
@@ -649,7 +766,7 @@ Upper: Q 2 W 3 E R 5 T 6 Y 7 U
 
 ## Build
 
-Install a current stable Rust toolchain. Linux builds with real-time audio require ALSA development headers.
+Install a current stable Rust toolchain. Linux builds with real-time audio require ALSA development headers. macOS needs only the Xcode Command Line Tools (see [macOS: install and build](#macos-install-and-build)).
 
 Core-only build and tests:
 
@@ -799,13 +916,14 @@ Commands (selected sample track; every edit is validated as a unit, applies to n
 
 ```text
 slice auto 8 | slice add 0.0 0.25 | slice delete 3 | slice clear | slice list
+slice detect 16 0.5   (offline transient detection of the track's WAV; defaults 16 and 0.5)
 slice assign note 36 | slice assign random 99 | slice assign none
 sample filter lowpass 900 0.3 | sample filter off
 sample drive 6 | sample envelope 0.01 0.1 0.6 0.3 | sample envelope off
 sample transient 0.5 -0.25 | sample undo
 ```
 
-Offline slice detection is available to tooling as `shelloop::detect_slices` (deterministic transient detection that returns contiguous, validated slices).
+Slice maps (from `slice` commands, `slice detect` and undo) take effect on the next bar of the project grid; a stopped track or a restart applies them at once. Offline detection is also available to tooling as `shelloop::detect_slices`.
 
 ### Creative effects (spec 15)
 
@@ -816,6 +934,7 @@ Use these `kind`s in a track `inserts` list, a send bus or `master`. Parameters 
 | `filter` | `mode` 0 LP / 1 BP / 2 HP, `cutoff`, `resonance` (≤0.95), `env_amount` (envelope follower, −1…1), `sync` (0 off, 1–6 tempo divisions for a cutoff sweep), `depth`, `mix` |
 | `chorus` | `mode` 0 chorus / 1 flanger, `rate_hz`, `sync`, `depth`, `feedback` (−0.9…0.9), `width` (stereo LFO phase), `mix` |
 | `beat_repeat` | `division` (0 ¼, 1 ⅛, 2 1/16, 3 1/32, 4 ⅛ triplet), `repeats` (0 = hold), `reverse`, `gate` (seeded probability of muting a repeat), `mix`, `active`, `seed` |
+| `bitcrusher` | `bits` 1–16 (signed quantiser depth, 16 nearly transparent), `downsample` 1–32 (sample-and-hold frames), `mix`. No buffers, no latency (spec 17) |
 
 Performance macros: every effect chain (a track's inserts, a send bus, the master chain) has two macro knobs that drive one effect parameter each across its whole range, using the parameter's own response curve. Assign and move them live, and store per-scene positions in the project file; they are recalled through the normal smoothed parameter path when the scene launches.
 
@@ -838,11 +957,11 @@ Beat repeat captures continuously, arms when `active` becomes 1, and starts only
 
 `clap-plugin/` builds SHELLOOP's synthesizer and step sequencer as a CLAP instrument. Eight appended parameters (ids 15–22) expose LFO 1 (rate, wave) and its depth to cutoff, pitch, pulse width and amplitude, the mod wheel (CC 1) to cutoff, and a brightness macro; the original ids 0–14 are unchanged and older saved states load with the new parameters at their neutral defaults. Release downloads include `shelloop.clap`; copy it to `~/.clap/` on Linux or `C:\Program Files\Common Files\CLAP\` on Windows and rescan plugins in your DAW. See `clap-plugin/README.md` for its parameters and build instructions.
 
-The same instrument is also released as a **VST3** (`SHELLOOP.vst3`, Windows and Linux): copy it to `C:\Program Files\Common Files\VST3\` on Windows or `~/.vst3/` on Linux. See `vst3/README.md`.
+On macOS, copy `shelloop.clap` to `~/Library/Audio/Plug-Ins/CLAP/` and rescan; the release bundles are ad-hoc signed, so remove the quarantine attribute with `xattr -dr com.apple.quarantine` first. The same instrument is also released as a **VST3** (`SHELLOOP.vst3`, Windows, Linux and macOS): copy it to `C:\Program Files\Common Files\VST3\` on Windows, `~/.vst3/` on Linux or `~/Library/Audio/Plug-Ins/VST3/` on macOS. See `vst3/README.md`.
 
 ## Release pipeline
 
-Pushing a `v*` tag (or running the Release workflow manually with a tag) tests the workspace on Windows and Linux, builds the standalone application and the CLAP plugin, verifies the packaged archives, and publishes a GitHub release with SHA-256 checksum files. Pre-release tags (containing `-`) are marked as pre-releases.
+Pushing a `v*` tag (or running the Release workflow manually with a tag) tests the workspace on Windows, Linux and macOS (Apple silicon and Intel), builds the standalone application, the CLAP plugin and the VST3 plugin, verifies the packaged archives, and publishes a GitHub release with SHA-256 checksum files. Pre-release tags (containing `-`) are marked as pre-releases.
 
 ## Status
 
@@ -949,3 +1068,30 @@ problem file and exits before opening the audio device. Decoded audio is
 limited to 512 MiB per project; the budget is checked against the WAV header
 before decoding, so an oversized file is refused without filling memory.
 `synth ...` live edit commands apply to synth tracks only.
+
+## Native macOS releases
+
+Download the `macos-arm64` archive for Apple Silicon or `macos-x86_64` for Intel.
+The CLAP download contains a `shelloop.clap` bundle; copy the whole bundle to
+`~/Library/Audio/Plug-Ins/CLAP/`. Copy the whole `SHELLOOP.vst3` bundle to
+`~/Library/Audio/Plug-Ins/VST3/`. Rescan plugins in your host.
+
+macOS bundles are ad-hoc signed, not notarized. Gatekeeper may require explicit
+approval in System Settings. The optional PC-speaker probe is unsupported on
+macOS; CoreAudio output and CoreMIDI use the normal audio/MIDI backends.
+
+See [release procedure](docs/RELEASING.md) and [open acceptance items](docs/OPEN-ITEMS.md).
+
+### Named synth presets
+
+Use `preset save WarmPad`, `preset list`, `preset load WarmPad` and
+`preset delete WarmPad` in the project command prompt/TUI. `preset directory`
+shows the `presets/` directory beside the current project. Presets capture the
+selected synth's current patch and modulation routes; `save` also persists them
+in the project. Names accept letters, digits, underscores and hyphens (64 max).
+Saving refuses to overwrite an existing name; invalid files and full audio
+queues leave the current patch unchanged. File I/O stays on the control thread.
+
+## Wiki
+
+Wiki source pages are in [docs/wiki/](docs/wiki/Home.md): developer guide, architecture summary and codebase map. The specs in `docs/specs/` and `AGENTS.md` are the authority.

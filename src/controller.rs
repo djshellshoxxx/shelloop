@@ -28,6 +28,7 @@ use crate::{
     SynthParamValue, SynthPatch, TrackCommand, TrackId, TrackKind, TrackParamId,
     MAX_LOCKS_PER_STEP, MAX_REALTIME_TRACKS,
 };
+use crate::{Pattern, PatternEditCommand, StepEdit};
 use crossbeam_channel::{Sender, TrySendError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -46,12 +47,32 @@ pub enum AudioMessage {
         pattern: PatternId,
         change: QuantizedChange<CompiledPatternRevision>,
     },
+    QuantizedRevision {
+        track: TrackId,
+        pattern: PatternId,
+        revision: CompiledPatternRevision,
+        boundary: QuantizeBoundary,
+    },
+    QuantizedSampleConfig {
+        track: TrackId,
+        shaping: crate::CompiledShaping,
+        slices: crate::SliceTable,
+    },
     SynthPatch {
         track: TrackId,
         patch: CompiledSynthPatch,
     },
     Track(TrackCommand),
     MasterGain(f32),
+    /// Metronome click on/off and level.
+    Metronome {
+        enabled: bool,
+        gain: f32,
+    },
+    /// Count in `bars` bars, then start (or, when running, pause).
+    CountIn {
+        bars: u32,
+    },
     EffectParam {
         location: EffectLocation,
         slot: EffectSlotId,
@@ -75,6 +96,9 @@ pub enum AudioMessage {
     StopChain,
     PauseChain(bool),
     TogglePlay,
+    Tempo {
+        bpm: f64,
+    },
     Restart,
     Panic,
     AddTrack(PreparedTrack),
@@ -83,6 +107,13 @@ pub enum AudioMessage {
         track: TrackId,
         shaping: crate::CompiledShaping,
         slices: crate::SliceTable,
+    },
+    /// Shaping applies at once; the slice map at `apply_at_frame`.
+    ScheduledSampleConfig {
+        track: TrackId,
+        shaping: crate::CompiledShaping,
+        slices: crate::SliceTable,
+        apply_at_frame: u64,
     },
     ReplaceSample {
         track: TrackId,
@@ -120,6 +151,33 @@ pub fn apply_audio_message(
         } => {
             let _ = engine.queue_library_revision(track, pattern, change);
         }
+        AudioMessage::QuantizedRevision {
+            track,
+            pattern,
+            revision,
+            boundary,
+        } => {
+            if let Some(frame) = engine.quantized_frame(boundary) {
+                let _ = engine.queue_library_revision(
+                    track,
+                    pattern,
+                    QuantizedChange {
+                        apply_at_frame: frame,
+                        value: revision,
+                    },
+                );
+            }
+        }
+        AudioMessage::QuantizedSampleConfig {
+            track,
+            shaping,
+            slices,
+        } => {
+            if let Some(frame) = engine.quantized_frame(QuantizeBoundary::Bar { beats_per_bar: 4 })
+            {
+                let _ = engine.schedule_sample_config(track, shaping, slices, frame);
+            }
+        }
         AudioMessage::SynthPatch { track, patch } => {
             engine.apply_synth_patch(track, patch);
         }
@@ -128,6 +186,12 @@ pub fn apply_audio_message(
         }
         AudioMessage::MasterGain(gain) => {
             let _ = engine.set_master_gain(gain);
+        }
+        AudioMessage::Metronome { enabled, gain } => {
+            let _ = engine.set_metronome(enabled, gain);
+        }
+        AudioMessage::CountIn { bars } => {
+            let _ = engine.start_count_in(bars);
         }
         AudioMessage::EffectParam {
             location,
@@ -152,6 +216,9 @@ pub fn apply_audio_message(
         }
         AudioMessage::StopChain => engine.stop_chain(),
         AudioMessage::PauseChain(paused) => engine.pause_chain(paused),
+        AudioMessage::Tempo { bpm } => {
+            let _ = engine.set_tempo(bpm);
+        }
         AudioMessage::TogglePlay => {
             engine.toggle_playing_all();
         }
@@ -168,6 +235,14 @@ pub fn apply_audio_message(
             slices,
         } => {
             let _ = engine.apply_sample_config(track, shaping, slices);
+        }
+        AudioMessage::ScheduledSampleConfig {
+            track,
+            shaping,
+            slices,
+            apply_at_frame,
+        } => {
+            let _ = engine.schedule_sample_config(track, shaping, slices, apply_at_frame);
         }
         AudioMessage::ReplaceSample { track, playback } => {
             match engine.replace_sample(track, playback) {
@@ -219,6 +294,10 @@ impl Default for TrackTelemetry {
 /// individually valid and meters are expendable by design.
 #[derive(Debug)]
 pub struct EngineTelemetry {
+    clock_sequence: AtomicU64,
+    clock_rate: AtomicU32,
+    clock_bpm: AtomicU64,
+    clock_origin: AtomicU64,
     position: AtomicU64,
     playing: AtomicBool,
     active_scene: AtomicU32,
@@ -234,6 +313,10 @@ pub struct EngineTelemetry {
 impl Default for EngineTelemetry {
     fn default() -> Self {
         Self {
+            clock_sequence: AtomicU64::new(0),
+            clock_rate: AtomicU32::new(0),
+            clock_bpm: AtomicU64::new(120.0_f64.to_bits()),
+            clock_origin: AtomicU64::new(0),
             position: AtomicU64::new(0),
             playing: AtomicBool::new(true),
             active_scene: AtomicU32::new(NONE_U32),
@@ -277,9 +360,42 @@ pub struct TrackTelemetrySnapshot {
 }
 
 impl EngineTelemetry {
+    /// Coherent tempo anchor, read on the control thread. Bounded retries
+    /// avoid mixing the BPM and origin from two publications.
+    pub fn tempo_clock(&self) -> Option<crate::TempoClock> {
+        for _ in 0..3 {
+            let before = self.clock_sequence.load(Ordering::Acquire);
+            if before & 1 != 0 {
+                continue;
+            }
+            let rate = self.clock_rate.load(Ordering::Relaxed);
+            let bpm = f64::from_bits(self.clock_bpm.load(Ordering::Relaxed));
+            let origin = f64::from_bits(self.clock_origin.load(Ordering::Relaxed));
+            // Keep all data loads before the final sequence check on weakly
+            // ordered CPUs; an acquire load alone only orders later loads.
+            std::sync::atomic::fence(Ordering::Acquire);
+            if before == self.clock_sequence.load(Ordering::Relaxed) {
+                return crate::TempoClock::from_snapshot(rate, bpm, origin);
+            }
+        }
+        None
+    }
+
     /// Publish engine state. Allocation-free; call from the audio thread at
     /// a bounded cadence (for example once per callback).
+    /// Publish from the single audio-thread writer; concurrent writers are unsupported.
     pub fn publish(&self, engine: &MultiTrackEngine) {
+        let clock = engine.tempo_clock();
+        self.clock_sequence.fetch_add(1, Ordering::AcqRel);
+        // Pair with the reader fence even if it observes only a new field store.
+        std::sync::atomic::fence(Ordering::Release);
+        self.clock_rate
+            .store(clock.sample_rate(), Ordering::Relaxed);
+        self.clock_bpm
+            .store(clock.bpm().to_bits(), Ordering::Relaxed);
+        self.clock_origin
+            .store(clock.origin_frame().to_bits(), Ordering::Relaxed);
+        self.clock_sequence.fetch_add(1, Ordering::Release);
         self.position
             .store(engine.position_frame(), Ordering::Relaxed);
         self.playing.store(engine.is_playing(), Ordering::Relaxed);
@@ -404,6 +520,8 @@ pub struct SessionController {
     project: MultiTrackProject,
     project_path: Option<PathBuf>,
     sample_rate: u32,
+    clock: crate::TempoClock,
+    pending_tempo: Option<f64>,
     editors: ProjectPatternEditors,
     synth_patches: Vec<(TrackId, SynthPatch)>,
     mixer: Vec<(TrackId, MixerMirror)>,
@@ -424,6 +542,15 @@ pub struct SessionController {
     now_ms: u64,
     /// Previous sample shaping / slice snapshots for `sample undo`.
     sample_history: Vec<(TrackId, crate::SampleShaping, crate::SliceSettings)>,
+    /// Session scale for note input and `scale apply`; not saved in projects.
+    scale: Option<crate::Scale>,
+    scale_snap: bool,
+    tap: crate::TapTempo,
+    /// `pattern copy` / `pattern paste` buffer (one pattern, control side).
+    pattern_clipboard: Option<Pattern>,
+    autosave: crate::autosave::AutosavePolicy,
+    /// Bars of count-in before `play`; zero means start immediately.
+    count_in_bars: u32,
 }
 
 impl SessionController {
@@ -482,7 +609,10 @@ impl SessionController {
         };
         let variations = Vec::new();
         let master_gain = project.master_gain;
+        let clock = crate::TempoClock::new(sample_rate, project.bpm)?;
         let mut controller = Self {
+            clock,
+            pending_tempo: None,
             project,
             project_path,
             sample_rate,
@@ -500,11 +630,34 @@ impl SessionController {
             dirty: false,
             now_ms: 0,
             sample_history: Vec::new(),
+            scale: None,
+            scale_snap: false,
+            tap: crate::TapTempo::new(),
+            pattern_clipboard: None,
+            autosave: crate::autosave::AutosavePolicy::default(),
+            count_in_bars: 0,
         };
         if !orphans.is_empty() {
             controller.dirty = true;
         }
         Ok(controller)
+    }
+
+    pub fn tempo_clock(&self) -> crate::TempoClock {
+        self.clock
+    }
+
+    pub fn synchronize_tempo_clock(&mut self, clock: crate::TempoClock) {
+        if clock.sample_rate() != self.sample_rate {
+            return;
+        }
+        if self.pending_tempo.is_some_and(|bpm| bpm != clock.bpm()) {
+            return;
+        }
+        self.clock = clock;
+        self.dirty |= self.project.bpm != clock.bpm();
+        self.project.bpm = clock.bpm();
+        self.pending_tempo = None;
     }
 
     pub fn project(&self) -> &MultiTrackProject {
@@ -631,13 +784,8 @@ impl SessionController {
         current_frame: u64,
         boundary: QuantizeBoundary,
     ) -> Result<u64, String> {
-        crate::next_boundary_frame(
-            current_frame,
-            self.sample_rate,
-            self.bpm(),
-            self.steps_per_beat(),
-            boundary,
-        )
+        self.clock
+            .next_boundary(current_frame, self.steps_per_beat(), boundary)
     }
 
     fn track_kind(&self, track: TrackId) -> Option<TrackKind> {
@@ -664,18 +812,20 @@ impl SessionController {
     ) -> Result<String, String> {
         let track = self.editors.selected_track();
         let pattern = self.editors.selected_pattern();
-        let (_, change) = self.editors.queue_selected_revision(
+        let (_, mut change) = self.editors.queue_selected_revision(
             current_frame,
             self.sample_rate,
             self.bpm(),
             self.steps_per_beat(),
             boundary,
         )?;
+        change.apply_at_frame = self.boundary_frame(current_frame, boundary)?;
         let (revision, frame) = (change.value.revision, change.apply_at_frame);
-        self.send(AudioMessage::Revision {
+        self.send(AudioMessage::QuantizedRevision {
             track,
             pattern,
-            change,
+            revision: change.value,
+            boundary,
         })?;
         self.sync_pattern_to_project(track, pattern);
         Ok(format!(
@@ -717,11 +867,33 @@ impl SessionController {
             "track" | "step" | "length" | "swing" | "rotate" | "undo" | "redo" => {
                 self.pattern_edit(line, current_frame)
             }
-            "pattern" => self.pattern_command(&line[head.len()..]),
+            // Spec 16 owns `euclid HITS [ROT]`; the musical form adds named
+            // options (`euclid HITS STEPS rotate N note N`) and resizes.
+            "euclid" if line.split_whitespace().count() <= 3 => {
+                self.pattern_edit(line, current_frame)
+            }
+            "pattern" => {
+                let rest = &line[head.len()..];
+                if crate::music::command::is_pattern_operation(rest.split_whitespace().next()) {
+                    self.music_command(line, current_frame)
+                } else {
+                    self.pattern_command(rest)
+                }
+            }
+            "scale" | "chord" | "arp" | "euclid" | "humanize" | "ratio" | "tap" | "metronome"
+            | "countin" | "autosave" => self.music_command(line, current_frame),
             "patterns" => Ok(self.describe_patterns()),
             "synth" => self.synth_command(line),
+            "preset" => self.preset_command(line),
+            "tempo" | "bpm" => {
+                let crate::Command::Tempo(bpm) = crate::parse_command(line)? else {
+                    return Err("expected tempo BPM".into());
+                };
+                self.set_tempo(bpm, current_frame)?;
+                Ok(format!("tempo {bpm:.3} BPM"))
+            }
             "mod" => self.mod_command(line),
-            "sample" | "slice" => self.sample_command(line),
+            "sample" | "slice" => self.sample_command(line, current_frame),
             "gain" | "pan" | "mute" | "solo" | "send" | "master" => self.mixer_command(line),
             "fx" => self.fx_command(line),
             "fxmacro" => self.fxmacro_command(line),
@@ -731,11 +903,17 @@ impl SessionController {
             "learn" | "unlearn" | "mappings" | "mapping" => self.learn_command(line, self.now_ms),
             "variation" => self.variation_command(line, current_frame),
             "play" | "pause" => {
+                if head == "play" && self.count_in_bars > 0 {
+                    let bars = self.count_in_bars;
+                    self.send(AudioMessage::CountIn { bars })?;
+                    return Ok(format!("count-in of {bars} bar(s); pause toggles it off"));
+                }
                 self.send(AudioMessage::TogglePlay)?;
                 Ok("transport toggled".into())
             }
             "restart" => {
                 self.send(AudioMessage::Restart)?;
+                self.clock.restart();
                 Ok("restarted from bar 1".into())
             }
             "panic" => {
@@ -753,6 +931,21 @@ impl SessionController {
 
     fn pattern_edit(&mut self, line: &str, current_frame: u64) -> Result<String, String> {
         let command = parse_pattern_edit_command(line)?;
+        // With a session scale, typed notes snap to it (`scale snap on`).
+        let command = match (command, self.scale, self.scale_snap) {
+            (
+                PatternEditCommand::Step {
+                    index,
+                    edit: StepEdit::Note(note),
+                },
+                Some(scale),
+                true,
+            ) => PatternEditCommand::Step {
+                index,
+                edit: StepEdit::Note(scale.snap(note)),
+            },
+            (other, _, _) => other,
+        };
         let boundary = self.editors.default_quantize_boundary(&command);
         let outcome = self.editors.apply(command)?;
         // Only a successful edit moves the selection, and every edit keeps
@@ -778,6 +971,256 @@ impl SessionController {
             "editing track {} pattern {id}",
             self.selected_track().0
         ))
+    }
+
+    /// Musical commands (spec: scales, chords, arpeggios, Euclidean rhythms,
+    /// humanize, ratios, tap tempo, metronome, count-in, autosave, pattern
+    /// copy/paste). Pattern changes are computed by `crate::music` and
+    /// committed as one undoable edit through the normal revision path.
+    fn music_command(&mut self, line: &str, current_frame: u64) -> Result<String, String> {
+        use crate::music::{
+            apply_arp, apply_chord, apply_euclid, chord_notes, quantize_notes, transpose_pattern,
+            Arpeggio, MusicCommand, Scale, ScaleKind, StepRatio,
+        };
+        let command = crate::music::parse_music_command(line)?;
+        let index = self.selected_step;
+        match command {
+            MusicCommand::ScaleStatus => Ok(match self.scale {
+                Some(scale) => format!(
+                    "scale {} {}, note input snapping {}",
+                    crate::music::scale::pitch_class_name(scale.root()),
+                    scale.kind(),
+                    if self.scale_snap { "on" } else { "off" }
+                ),
+                None => "scale off".into(),
+            }),
+            MusicCommand::ScaleList => Ok(format!(
+                "scales: {}",
+                ScaleKind::ALL.map(ScaleKind::name).join(" ")
+            )),
+            MusicCommand::ScaleOff => {
+                self.scale = None;
+                self.scale_snap = false;
+                Ok("scale off".into())
+            }
+            MusicCommand::ScaleSnap(on) => {
+                if on && self.scale.is_none() {
+                    return Err("set a scale first, e.g. scale C major".into());
+                }
+                self.scale_snap = on;
+                Ok(format!(
+                    "note input snapping {}",
+                    if on { "on" } else { "off" }
+                ))
+            }
+            MusicCommand::ScaleSet { root, kind } => {
+                self.scale = Some(Scale::new(root, kind)?);
+                self.scale_snap = true;
+                Ok(format!(
+                    "scale set to pitch class {root} {kind}; note input snaps"
+                ))
+            }
+            MusicCommand::ScaleApply => {
+                let scale = self.scale.ok_or("set a scale first, e.g. scale C major")?;
+                self.edit_selected(
+                    current_frame,
+                    |pattern| quantize_notes(pattern, scale),
+                    "scale applied to pattern",
+                )
+            }
+            MusicCommand::Chord {
+                root,
+                quality,
+                inversion,
+            } => {
+                let notes = chord_notes(root, quality, inversion)?;
+                self.edit_selected(
+                    current_frame,
+                    |pattern| apply_chord(pattern, index, &notes),
+                    "chord written",
+                )
+            }
+            MusicCommand::Arp {
+                root,
+                quality,
+                mode,
+                octaves,
+                rate,
+            } => {
+                let chord = chord_notes(root, quality, 0)?;
+                self.edit_selected(
+                    current_frame,
+                    |pattern| {
+                        let arp = Arpeggio::new(&chord, mode, octaves, pattern.seed)?;
+                        apply_arp(pattern, index, &arp, rate)
+                    },
+                    "arpeggio written",
+                )
+            }
+            MusicCommand::Euclid {
+                hits,
+                steps,
+                rotation,
+                note,
+            } => self.edit_selected(
+                current_frame,
+                |pattern| apply_euclid(pattern, hits, steps, rotation, note),
+                "euclidean rhythm written",
+            ),
+            MusicCommand::Humanize(setting) => {
+                let sample_rate = f64::from(self.sample_rate);
+                let humanize = match setting {
+                    None => crate::Humanize::default(),
+                    Some((timing_ms, velocity)) => crate::Humanize {
+                        timing_frames: (timing_ms * sample_rate / 1000.0).round() as u32,
+                        velocity,
+                    },
+                };
+                self.edit_selected(
+                    current_frame,
+                    |pattern| {
+                        let mut next = pattern.clone();
+                        next.humanize = humanize;
+                        next.validate()?;
+                        Ok(next)
+                    },
+                    "humanize updated",
+                )
+            }
+            MusicCommand::Ratio { step, ratio } => self.edit_selected(
+                current_frame,
+                |pattern| {
+                    if step >= pattern.steps.len() {
+                        return Err(format!("step {} is beyond the pattern length", step + 1));
+                    }
+                    let mut next = pattern.clone();
+                    next.ratios.retain(|entry| usize::from(entry.step) != step);
+                    if let Some((play, of)) = ratio {
+                        next.ratios.push(StepRatio {
+                            step: step as u16,
+                            play,
+                            of,
+                        });
+                        next.ratios.sort_by_key(|entry| entry.step);
+                    }
+                    next.validate()?;
+                    Ok(next)
+                },
+                "ratio updated",
+            ),
+            MusicCommand::PatternCopy => {
+                let copied = self.editors.selected_editor_mut()?.pattern().clone();
+                let steps = copied.steps.len();
+                self.pattern_clipboard = Some(copied);
+                Ok(format!("pattern copied ({steps} steps)"))
+            }
+            MusicCommand::PatternPaste => {
+                let clip = self
+                    .pattern_clipboard
+                    .clone()
+                    .ok_or("pattern clipboard is empty; use pattern copy first")?;
+                self.edit_selected(
+                    current_frame,
+                    |pattern| {
+                        let mut next = pattern.clone();
+                        next.steps = clip.steps.clone();
+                        next.chords = clip.chords.clone();
+                        next.ratios = clip.ratios.clone();
+                        next.locks = clip.locks.clone();
+                        next.validate()?;
+                        Ok(next)
+                    },
+                    "pattern pasted",
+                )
+            }
+            MusicCommand::PatternClear => self.edit_selected(
+                current_frame,
+                |pattern| {
+                    let mut next = pattern.clone();
+                    next.steps.fill(None);
+                    next.chords.clear();
+                    next.ratios.clear();
+                    next.locks.clear();
+                    next.validate()?;
+                    Ok(next)
+                },
+                "pattern cleared",
+            ),
+            MusicCommand::PatternTranspose(semitones) => self.edit_selected(
+                current_frame,
+                |pattern| transpose_pattern(pattern, semitones),
+                "pattern transposed",
+            ),
+            MusicCommand::Tap => match self.tap.tap(self.now_ms) {
+                Some(bpm) => {
+                    self.set_tempo(bpm, current_frame)?;
+                    Ok(format!("tempo {bpm:.2} bpm"))
+                }
+                None => Ok("tap again to measure the tempo".into()),
+            },
+            MusicCommand::Metronome { enabled, gain } => {
+                self.send(AudioMessage::Metronome { enabled, gain })?;
+                Ok(format!("metronome {}", if enabled { "on" } else { "off" }))
+            }
+            MusicCommand::CountIn(bars) => {
+                self.count_in_bars = bars;
+                Ok(if bars == 0 {
+                    "count-in off".into()
+                } else {
+                    format!("count-in {bars} bar(s) before play")
+                })
+            }
+            MusicCommand::AutosaveStatus => Ok(match &self.project_path {
+                Some(path) if self.autosave.enabled() => format!(
+                    "autosave every {}s to {}",
+                    self.autosave.interval_ms() / 1000,
+                    crate::autosave::autosave_path(path).display()
+                ),
+                Some(_) => "autosave off".into(),
+                None => "autosave needs a project path; save first".into(),
+            }),
+            MusicCommand::AutosaveEnabled(on) => {
+                self.autosave.set_enabled(on);
+                Ok(format!("autosave {}", if on { "on" } else { "off" }))
+            }
+            MusicCommand::AutosaveEvery(interval_ms) => {
+                self.autosave.set_interval_ms(interval_ms)?;
+                self.autosave.set_enabled(true);
+                Ok(format!("autosave every {} s", interval_ms / 1000))
+            }
+        }
+    }
+
+    /// Apply a pattern transform to the selected pattern as one undoable
+    /// edit, then queue it on the quantised revision path.
+    fn edit_selected(
+        &mut self,
+        current_frame: u64,
+        build: impl FnOnce(&Pattern) -> Result<Pattern, String>,
+        message: &str,
+    ) -> Result<String, String> {
+        let current = self.editors.selected_editor_mut()?.pattern().clone();
+        let next = build(&current)?;
+        self.editors.selected_editor_mut()?.replace_pattern(next)?;
+        let boundary = QuantizeBoundary::Pattern {
+            steps: current.steps.len() as u32,
+        };
+        let queued = self.queue_selected(current_frame, boundary)?;
+        Ok(format!("{message}; {queued}"))
+    }
+
+    /// Phase-preserving tempo handoff shared by `tempo`/`bpm` and `tap`:
+    /// re-anchor the control-side clock at `current_frame`, then hand the
+    /// same tempo to the audio thread. On a full queue nothing changes.
+    fn set_tempo(&mut self, bpm: f64, current_frame: u64) -> Result<(), String> {
+        let mut clock = self.clock;
+        clock.set_bpm_at(bpm, current_frame)?;
+        self.send(AudioMessage::Tempo { bpm })?;
+        self.clock = clock;
+        self.pending_tempo = Some(bpm);
+        self.project.bpm = bpm;
+        self.dirty = true;
+        Ok(())
     }
 
     fn describe_patterns(&self) -> String {
@@ -839,7 +1282,7 @@ impl SessionController {
 
     /// `sample ...` / `slice ...` (spec 14). Edits are validated as a unit,
     /// delivered as one bounded message and recorded for `sample undo`.
-    fn sample_command(&mut self, line: &str) -> Result<String, String> {
+    fn sample_command(&mut self, line: &str, _current_frame: u64) -> Result<String, String> {
         let command = crate::parse_sample_command(line)?;
         let track = self.selected_track();
         if self.track_kind(track) != Some(TrackKind::Sample) {
@@ -861,6 +1304,16 @@ impl SessionController {
             crate::SampleCommand::SliceList => {
                 return Ok(crate::sample_shaping::command::describe_slices(&slices))
             }
+            crate::SampleCommand::SliceDetect { count, sensitivity } => {
+                // Control thread only: decode the track's file and run the
+                // offline detector. The audio thread gets just the table.
+                let path = self.track_sample_path(track)?;
+                let decoded = crate::decode_wav_file(&path, crate::DEFAULT_SAMPLE_MEMORY_BUDGET)?;
+                slices.regions =
+                    crate::detect_slices(&decoded.frames, decoded.sample_rate, count, sensitivity)?;
+                slices.validate()?;
+                format!("detected {} slice(s)", slices.regions.len())
+            }
             crate::SampleCommand::Undo => {
                 let index = self
                     .sample_history
@@ -876,7 +1329,8 @@ impl SessionController {
         };
         let compiled = crate::CompiledShaping::compile(&shaping, sample_rate)?;
         let table = crate::SliceTable::compile(&slices)?;
-        self.send(AudioMessage::SampleConfig {
+        // Slice maps commit on the next bar of the project grid (spec 14).
+        self.send(AudioMessage::QuantizedSampleConfig {
             track,
             shaping: compiled,
             slices: table,
@@ -901,6 +1355,17 @@ impl SessionController {
         Ok(format!("track {}: {message}", track.0))
     }
 
+    /// Absolute or project-relative path of a sample track's source file.
+    fn track_sample_path(&self, track: TrackId) -> Result<PathBuf, String> {
+        self.project
+            .tracks
+            .iter()
+            .find(|definition| definition.id == track)
+            .and_then(|definition| definition.sample.as_ref())
+            .map(|settings| settings.resolve_path(&self.project_dir()))
+            .ok_or_else(|| "sample track has no sample settings".to_owned())
+    }
+
     fn mod_command(&mut self, line: &str) -> Result<String, String> {
         let command = crate::parse_mod_command(line)?;
         let track = self.selected_track();
@@ -921,6 +1386,43 @@ impl SessionController {
         }
         self.dirty = true;
         Ok(format!("track {}: {message}", track.0))
+    }
+
+    fn preset_command(&mut self, line: &str) -> Result<String, String> {
+        let words: Vec<_> = line.split_whitespace().collect();
+        let store = crate::presets::PresetStore::new(self.project_dir().join("presets"));
+        match words.as_slice() {
+            ["preset", "list"] => Ok(format!("presets: {}", store.list()?.join(" "))),
+            ["preset", "directory"] => Ok(store.directory().display().to_string()),
+            ["preset", "save", name] => {
+                let patch = *self.synth_patch_mut(self.selected_track())?;
+                store.save(name, patch, self.sample_rate as f32)?;
+                Ok(format!("saved preset {name}"))
+            }
+            ["preset", "load", name] => {
+                let track = self.selected_track();
+                // Check kind before I/O and change the control snapshot only
+                // after the bounded audio queue accepts the prepared patch.
+                self.synth_patch_mut(track)?;
+                let patch = store.load(name, self.sample_rate as f32)?;
+                let compiled = CompiledSynthPatch::new(self.sample_rate as f32, patch)?;
+                self.send(AudioMessage::SynthPatch {
+                    track,
+                    patch: compiled,
+                })?;
+                *self.synth_patch_mut(track)? = patch;
+                if let Some(definition) = self.project.tracks.iter_mut().find(|t| t.id == track) {
+                    definition.synth_patch = Some(patch);
+                }
+                self.dirty = true;
+                Ok(format!("loaded preset {name}"))
+            }
+            ["preset", "delete", name] => {
+                store.delete(name)?;
+                Ok(format!("deleted preset {name}"))
+            }
+            _ => Err("preset list|directory|save NAME|load NAME|delete NAME".into()),
+        }
     }
 
     fn synth_command(&mut self, line: &str) -> Result<String, String> {
@@ -1832,9 +2334,34 @@ impl SessionController {
     /// Expire a pending learn. Returns a message when it timed out.
     pub fn tick(&mut self, now_ms: u64) -> Option<String> {
         self.now_ms = self.now_ms.max(now_ms);
+        if let Some(message) = self.run_autosave_if_due() {
+            return Some(message);
+        }
         self.learn
             .tick(now_ms)
             .then(|| "MIDI learn timed out; mappings unchanged".to_string())
+    }
+
+    /// Write the project to its autosave sidecar when edits are unsaved and
+    /// the interval has elapsed. The project file itself is untouched.
+    fn run_autosave_if_due(&mut self) -> Option<String> {
+        let path = self.project_path.clone();
+        if !self.autosave.due(self.now_ms, self.dirty, path.is_some()) {
+            return None;
+        }
+        let path = crate::autosave::autosave_path(path.as_ref()?);
+        for track in self.editors.track_ids() {
+            for pattern in self.editors.pattern_ids(track) {
+                self.sync_pattern_to_project(track, pattern);
+            }
+        }
+        let mut snapshot = self.project.clone();
+        snapshot.schema_version = crate::MULTITRACK_PROJECT_SCHEMA_VERSION;
+        self.autosave.mark_saved(self.now_ms);
+        Some(match snapshot.save_atomic(&path) {
+            Ok(()) => format!("autosaved to {}", path.display()),
+            Err(error) => format!("autosave failed: {error}"),
+        })
     }
 
     pub fn learning(&self) -> Option<String> {
@@ -2235,4 +2762,12 @@ pub fn inspector_synth_params() -> impl Iterator<Item = SynthParamId> {
     .filter_map(parse_synth_param)
 }
 
-pub const HELP_TEXT: &str = "commands: track N | step N toggle|note|vel|gate|prob|ratchet|micro | length N | swing X | rotate left|right N | undo | redo | pattern ID | patterns | synth PARAM VALUE | gain|pan X | mute|solo [on|off] | send a|b X | master X | fx list | fx track|send_a|send_b|master SLOT PARAM VALUE|bypass on|off | scene launch NAME [bar|beat|step|now] | scene next|prev | chain start NAME | chain stop|pause|resume | lock TARGET VALUE | unlock TARGET | locks | learn TARGET | learn confirm [replace|add|cancel] | learn cancel | mappings | mapping ID range|invert|pickup|button ... | unlearn ID | variation lock ...|preview|accept|reject | resample arm master|track [ID] [bars N|seconds S] | resample stop [bar] | resample cancel|normalize on|off|destination asset|new-track|replace | blackbox status|save [PATH]|clear | play | restart | panic | save [PATH]";
+pub const HELP_TEXT: &str = "Transport: play (count-in if armed) | pause | restart | panic | tempo BPM | tap | metronome on [GAIN]|off | countin BARS|0 | save [PATH]. \
+Pattern: track N | step N toggle|clear|note|vel|gate|prob|ratchet|micro VALUE | length N | swing X | rotate left|right N | undo | redo | pattern ID | patterns | pattern copy|paste|clear | pattern transpose N. \
+Musical: scale ROOT KIND|off|list|snap on|off|apply | chord ROOT QUALITY [INV] | arp ROOT QUALITY [MODE] [OCT] [RATE] | euclid HITS [ROT] (spec 16) | euclid HITS STEPS rotate N|note N (resizes pattern) | humanize MS VEL|off | ratio STEP P:Q|off. \
+Sound: synth PARAM VALUE | preset list|directory|save NAME|load NAME|delete NAME | gain|pan X | mute|solo [on|off] | send a|b X | master X | fx list | fx track|send_a|send_b|master SLOT PARAM VALUE|bypass on|off | sample ... | slice ... | mod ... | fxmacro ... | lock TARGET VALUE | unlock TARGET | locks. \
+Scenes: scene launch NAME [bar|beat|step|now] | scene next|prev | chain start NAME | chain stop|pause|resume. \
+MIDI: learn TARGET | learn confirm [replace|add|cancel] | learn cancel | mappings | mapping ID range|invert|pickup|button ... | unlearn ID. \
+Variations: variation lock ...|preview|accept|reject. Resample: resample arm master|track [ID] [bars N|seconds S] | resample stop [bar] | resample cancel|normalize on|off|destination asset|new-track|replace. \
+Files: autosave | autosave on|off | autosave every SECONDS (writes NAME.autosave.json beside the project). Blackbox: blackbox status|save [PATH]|clear. \
+Help: help.";

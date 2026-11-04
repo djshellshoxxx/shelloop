@@ -1,5 +1,5 @@
 //! Spec 15 — creative effects: tempo-synced multimode filter, stereo
-//! chorus/flanger and beat repeat.
+//! chorus/flanger and beat repeat. Spec 17 adds the bitcrusher.
 //!
 //! Each state type is owned by [`crate::effects::Effect`] (enum dispatch) and
 //! follows the same contract as the v1 effects: every buffer is allocated in
@@ -341,9 +341,8 @@ pub(crate) fn beat_repeat_max_frames(sample_rate: u32) -> usize {
 /// Quantized beat repeat / stutter.
 ///
 /// The input is continuously written into a ring buffer. When `active` rises
-/// the effect arms and, at the next slice boundary on its grid (frame
-/// counter since the last reset) *and only once a full slice has been
-/// captured*, snapshots the last slice into the hold buffer and loops it.
+/// the effect arms and, at the next transport slice boundary (or its local
+/// grid for legacy callers) *and only once a full slice has been captured*, snapshots the last slice into the hold buffer and loops it.
 /// Playback therefore never reads uninitialised or stale audio. `reset`
 /// (stop, panic, project switch) clears every buffer and the capture count.
 #[derive(Debug, Clone)]
@@ -353,10 +352,13 @@ pub(crate) struct BeatRepeatFx {
     ring_write: usize,
     filled: usize,
     frame: u64,
+    last_transport_frame: Option<u64>,
     sample_rate: f32,
     bpm: f64,
     division: f32,
     slice_len: usize,
+    held_len: usize,
+    retiring: bool,
     repeats: u32,
     reverse: bool,
     gate: f32,
@@ -384,10 +386,13 @@ impl BeatRepeatFx {
             ring_write: 0,
             filled: 0,
             frame: 0,
+            last_transport_frame: None,
             sample_rate: rate,
             bpm,
             division: 1.0,
             slice_len: MIN_SLICE_FRAMES,
+            held_len: MIN_SLICE_FRAMES,
+            retiring: false,
             repeats: 0,
             reverse: false,
             gate: 0.0,
@@ -415,8 +420,10 @@ impl BeatRepeatFx {
         self.ring_write = 0;
         self.filled = 0;
         self.frame = 0;
+        self.last_transport_frame = None;
         self.armed = self.active;
         self.playing = false;
+        self.retiring = false;
         self.pos = 0;
         self.passes_done = 0;
         self.pass_muted = false;
@@ -426,13 +433,27 @@ impl BeatRepeatFx {
     pub(crate) fn set_tempo(&mut self, bpm: f64) {
         self.bpm = bpm;
         self.update_slice();
+        self.invalidate_capture();
+    }
+
+    fn invalidate_capture(&mut self) {
+        self.filled = 0;
+        self.armed = self.active;
+        // Keep the previous slice and its bounds intact while fading to dry.
+        // A new grid may shorten slice_len below the current playback position.
+        self.retiring = self.playing;
+        self.engage.set_target(0.0, self.engage_frames);
     }
 
     fn update_slice(&mut self) {
         let max = self.ring[0].len();
         let beats = repeat_division_beats(self.division);
         let frames = (beats * 60.0 / self.bpm * f64::from(self.sample_rate)).round() as usize;
-        self.slice_len = frames.clamp(MIN_SLICE_FRAMES, max);
+        let length = frames.clamp(MIN_SLICE_FRAMES, max);
+        if length != self.slice_len {
+            self.slice_len = length;
+            self.invalidate_capture();
+        }
     }
 
     pub(crate) fn apply(&mut self, index: usize, value: f32, smooth: u32) {
@@ -463,6 +484,7 @@ impl BeatRepeatFx {
 
     fn stop_playback(&mut self) {
         self.playing = false;
+        self.retiring = false;
         self.pos = 0;
         self.passes_done = 0;
         self.engage.set_target(0.0, self.engage_frames);
@@ -495,24 +517,67 @@ impl BeatRepeatFx {
         self.rng = self.seed.wrapping_mul(2_654_435_761).max(1);
         self.passes_done = 0;
         self.playing = true;
+        self.held_len = len;
+        self.retiring = false;
         self.armed = false;
         self.begin_pass();
         self.engage.set_target(1.0, self.engage_frames);
     }
 
+    /// Use the project grid rather than time since this effect was inserted.
+    /// Pauses and seeks invalidate capture without clearing/allocating buffers:
+    /// `filled` prevents any stale data from being read on reactivation.
+    pub(crate) fn process_with_transport(
+        &mut self,
+        left: f32,
+        right: f32,
+        frame: u64,
+        playing: bool,
+        origin: f64,
+    ) -> (f32, f32) {
+        let discontinuity = self
+            .last_transport_frame
+            .is_some_and(|previous| previous.checked_add(1) != Some(frame));
+        self.last_transport_frame = Some(frame);
+        if !playing || discontinuity {
+            self.filled = 0;
+            self.playing = false;
+            self.retiring = false;
+            self.armed = self.active;
+            self.pos = 0;
+            self.engage.set_target(0.0, 0);
+        }
+        self.frame = frame;
+        if !playing {
+            return (left, right);
+        }
+        // Round each absolute musical boundary, rather than multiplying a
+        // rounded slice duration (which accumulates drift at fractional BPM).
+        let period =
+            repeat_division_beats(self.division) * 60.0 / self.bpm * f64::from(self.sample_rate);
+        let boundary =
+            (origin + ((frame as f64 - origin) / period).round() * period).round() as u64;
+        self.process_on_boundary(left, right, boundary == frame)
+    }
+
     pub(crate) fn process(&mut self, left: f32, right: f32) -> (f32, f32) {
+        self.process_on_boundary(
+            left,
+            right,
+            self.frame.is_multiple_of(self.slice_len as u64),
+        )
+    }
+
+    fn process_on_boundary(&mut self, left: f32, right: f32, boundary: bool) -> (f32, f32) {
         let mix = self.mix.next_value().clamp(0.0, 1.0);
 
-        if self.armed
-            && self.frame.is_multiple_of(self.slice_len as u64)
-            && self.filled >= self.slice_len
-        {
+        if self.armed && !self.retiring && boundary && self.filled >= self.slice_len {
             self.start_playback();
         }
 
         let mut wet = [0.0_f32; 2];
         if self.playing {
-            let len = self.slice_len;
+            let len = self.held_len;
             let index = if self.reverse {
                 len - 1 - self.pos
             } else {
@@ -530,7 +595,7 @@ impl BeatRepeatFx {
             self.pos += 1;
             if self.pos >= len {
                 self.passes_done += 1;
-                if self.repeats != 0 && self.passes_done >= self.repeats {
+                if !self.retiring && self.repeats != 0 && self.passes_done >= self.repeats {
                     self.stop_playback();
                     self.active = false;
                 } else {
@@ -540,6 +605,11 @@ impl BeatRepeatFx {
         }
 
         let engage = self.engage.next_value().clamp(0.0, 1.0);
+        if self.retiring && engage == 0.0 {
+            self.playing = false;
+            self.retiring = false;
+            self.pos = 0;
+        }
         let amount = mix * engage;
         let input = [left, right];
         let cap = self.ring[0].len();
@@ -552,6 +622,73 @@ impl BeatRepeatFx {
         (
             input[0] * (1.0 - amount) + wet[0] * amount,
             input[1] * (1.0 - amount) + wet[1] * amount,
+        )
+    }
+}
+
+// -------------------------------------------------------------- bitcrusher
+
+pub(crate) mod bcr {
+    pub const BITS: usize = 0;
+    pub const DOWNSAMPLE: usize = 1;
+    pub const MIX: usize = 2;
+}
+
+/// Spec 17: sample-and-hold rate reduction and signed bit-depth quantiser.
+/// No buffers: the held frame is two `f32` values.
+#[derive(Debug, Clone)]
+pub(crate) struct BitCrushFx {
+    /// Quantiser levels per unit: `2^(bits-1)`.
+    levels: f32,
+    /// Hold length in frames (>= 1).
+    hold: u32,
+    counter: u32,
+    held: [f32; 2],
+    mix: SmoothedParam,
+}
+
+impl BitCrushFx {
+    pub(crate) fn new() -> Self {
+        Self {
+            levels: 128.0,
+            hold: 1,
+            counter: 0,
+            held: [0.0; 2],
+            mix: SmoothedParam::new(1.0),
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.counter = 0;
+        self.held = [0.0; 2];
+    }
+
+    pub(crate) fn apply(&mut self, index: usize, value: f32, smooth: u32) {
+        match index {
+            bcr::BITS => self.levels = 2f32.powf(value.round().clamp(1.0, 16.0) - 1.0),
+            bcr::DOWNSAMPLE => self.hold = value.round().clamp(1.0, 32.0) as u32,
+            bcr::MIX => self.mix.set_target(value, smooth),
+            _ => {}
+        }
+    }
+
+    pub(crate) fn process(&mut self, left: f32, right: f32) -> (f32, f32) {
+        let mix = self.mix.next_value().clamp(0.0, 1.0);
+        if self.counter == 0 {
+            let levels = self.levels;
+            self.held = [
+                (left * levels).round() / levels,
+                (right * levels).round() / levels,
+            ];
+        }
+        self.counter += 1;
+        if self.counter >= self.hold {
+            self.counter = 0;
+        }
+        let wet = self.held;
+        (
+            left * (1.0 - mix) + finite_or_zero(wet[0]) * mix,
+            right * (1.0 - mix) + finite_or_zero(wet[1]) * mix,
         )
     }
 }

@@ -23,16 +23,17 @@ def module_binary(bundle):
     """The loadable file inside a built SHELLOOP.vst3."""
     if bundle.is_file():
         return bundle  # Windows single-file module
-    linux = bundle / "Contents" / "x86_64-linux" / "SHELLOOP.so"
-    if linux.is_file():
-        return linux
+    for relative in ("Contents/x86_64-linux/SHELLOOP.so", "Contents/MacOS/SHELLOOP"):
+        binary = bundle / relative
+        if binary.is_file():
+            return binary
     raise FileNotFoundError(f"no module binary inside {bundle}")
 
 
 def main(out_dir):
-    run("cargo", "build", "--release", "-p", "shelloop-clap")
+    run("cargo", "build", "--locked", "--release", "-p", "shelloop-clap")
     run("cmake", "-S", "vst3", "-B", str(BUILD), "-DCMAKE_BUILD_TYPE=Release")
-    run("cmake", "--build", str(BUILD), "--config", "Release")
+    run("cmake", "--build", str(BUILD), "--config", "Release", "--parallel", "2")
     found = sorted(p for p in BUILD.rglob("SHELLOOP.vst3") if p.is_file() or p.is_dir())
     if not found:
         raise FileNotFoundError(f"SHELLOOP.vst3 was not produced under {BUILD}")

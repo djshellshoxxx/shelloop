@@ -510,3 +510,10 @@ fn pan_and_effect_wet_destinations_are_reported_to_the_track_mixer() {
 fn control_interval_is_a_documented_constant() {
     assert_eq!(MOD_CONTROL_INTERVAL, 16);
 }
+
+#[test]
+fn inspector_ranges_preserve_negative_unipolar_route_direction() {
+    let patch = SynthPatch::legacy(Oscillator::Saw);
+    let route = ModRoute::new(ModSource::Macro1, ModDest::Amplitude, -0.5);
+    assert_eq!(shelloop::route_range_text(&patch, &route), "x0.50..x1.00");
+}
