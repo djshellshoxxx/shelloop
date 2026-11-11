@@ -1,4 +1,6 @@
-use shelloop::{pc_speaker_backend, pc_speaker_test, PcSpeakerBackend};
+use shelloop::pc_speaker_test;
+#[cfg(any(target_os = "linux", windows))]
+use shelloop::{pc_speaker_backend, PcSpeakerBackend};
 
 #[test]
 fn supported_ci_platforms_report_a_pc_speaker_backend() {
