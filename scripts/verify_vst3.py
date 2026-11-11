@@ -3,6 +3,7 @@
 Usage: python scripts/verify_vst3.py <path to the module binary>
   Linux:   SHELLOOP.vst3/Contents/x86_64-linux/SHELLOOP.so
   Windows: SHELLOOP.vst3
+  macOS:   SHELLOOP.vst3/Contents/MacOS/SHELLOOP
 """
 import ctypes
 import sys
@@ -24,14 +25,26 @@ def verify(binary):
         raise ValueError("VST3 module is unexpectedly small")
     lib = ctypes.CDLL(str(binary))
     # Hosts call the platform init hook before asking for the factory.
-    init_name = "InitDll" if sys.platform == "win32" else "ModuleEntry"
+    if sys.platform == "darwin":
+        # macOS hosts call bundleEntry(CFBundleRef); the module needs no
+        # bundle reference for factory lookup, so pass NULL.
+        init_name = "bundleEntry"
+    elif sys.platform == "win32":
+        init_name = "InitDll"
+    else:
+        init_name = "ModuleEntry"
     init = getattr(lib, init_name, None)
     if init is not None:
         # VST3 Windows InitDll takes no arguments. On Linux ModuleEntry
-        # receives the shared-object handle.
-        init.argtypes = [] if sys.platform == "win32" else [ctypes.c_void_p]
+        # receives the shared-object handle; macOS bundleEntry receives the
+        # bundle reference (NULL here).
         init.restype = ctypes.c_bool
-        initialized = init() if sys.platform == "win32" else init(None)
+        if sys.platform == "win32":
+            init.argtypes = []
+            initialized = init()
+        else:
+            init.argtypes = [ctypes.c_void_p]
+            initialized = init(None)
         if not initialized:
             raise ValueError(f"{init_name} reported failure")
     lib.GetPluginFactory.restype = ctypes.c_void_p

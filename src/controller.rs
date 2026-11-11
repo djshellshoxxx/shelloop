@@ -28,6 +28,7 @@ use crate::{
     SynthParamValue, SynthPatch, TrackCommand, TrackId, TrackKind, TrackParamId,
     MAX_LOCKS_PER_STEP, MAX_REALTIME_TRACKS,
 };
+use crate::{Pattern, PatternEditCommand, StepEdit};
 use crossbeam_channel::{Sender, TrySendError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -52,6 +53,17 @@ pub enum AudioMessage {
     },
     Track(TrackCommand),
     MasterGain(f32),
+    /// Re-grid the transport at a new tempo without moving the playheads.
+    Tempo(f64),
+    /// Metronome click on/off and level.
+    Metronome {
+        enabled: bool,
+        gain: f32,
+    },
+    /// Count in `bars` bars, then start (or, when running, pause).
+    CountIn {
+        bars: u32,
+    },
     EffectParam {
         location: EffectLocation,
         slot: EffectSlotId,
@@ -128,6 +140,15 @@ pub fn apply_audio_message(
         }
         AudioMessage::MasterGain(gain) => {
             let _ = engine.set_master_gain(gain);
+        }
+        AudioMessage::Tempo(bpm) => {
+            let _ = engine.retime(bpm);
+        }
+        AudioMessage::Metronome { enabled, gain } => {
+            let _ = engine.set_metronome(enabled, gain);
+        }
+        AudioMessage::CountIn { bars } => {
+            let _ = engine.start_count_in(bars);
         }
         AudioMessage::EffectParam {
             location,
@@ -424,6 +445,15 @@ pub struct SessionController {
     now_ms: u64,
     /// Previous sample shaping / slice snapshots for `sample undo`.
     sample_history: Vec<(TrackId, crate::SampleShaping, crate::SliceSettings)>,
+    /// Session scale for note input and `scale apply`; not saved in projects.
+    scale: Option<crate::Scale>,
+    scale_snap: bool,
+    tap: crate::TapTempo,
+    /// `pattern copy` / `pattern paste` buffer (one pattern, control side).
+    pattern_clipboard: Option<Pattern>,
+    autosave: crate::autosave::AutosavePolicy,
+    /// Bars of count-in before `play`; zero means start immediately.
+    count_in_bars: u32,
 }
 
 impl SessionController {
@@ -500,6 +530,12 @@ impl SessionController {
             dirty: false,
             now_ms: 0,
             sample_history: Vec::new(),
+            scale: None,
+            scale_snap: false,
+            tap: crate::TapTempo::new(),
+            pattern_clipboard: None,
+            autosave: crate::autosave::AutosavePolicy::default(),
+            count_in_bars: 0,
         };
         if !orphans.is_empty() {
             controller.dirty = true;
@@ -717,7 +753,16 @@ impl SessionController {
             "track" | "step" | "length" | "swing" | "rotate" | "undo" | "redo" => {
                 self.pattern_edit(line, current_frame)
             }
-            "pattern" => self.pattern_command(&line[head.len()..]),
+            "pattern" => {
+                let rest = &line[head.len()..];
+                if crate::music::command::is_pattern_operation(rest.split_whitespace().next()) {
+                    self.music_command(line, current_frame)
+                } else {
+                    self.pattern_command(rest)
+                }
+            }
+            "scale" | "chord" | "arp" | "euclid" | "humanize" | "ratio" | "tap" | "metronome"
+            | "countin" | "autosave" => self.music_command(line, current_frame),
             "patterns" => Ok(self.describe_patterns()),
             "synth" => self.synth_command(line),
             "mod" => self.mod_command(line),
@@ -731,6 +776,11 @@ impl SessionController {
             "learn" | "unlearn" | "mappings" | "mapping" => self.learn_command(line, self.now_ms),
             "variation" => self.variation_command(line, current_frame),
             "play" | "pause" => {
+                if head == "play" && self.count_in_bars > 0 {
+                    let bars = self.count_in_bars;
+                    self.send(AudioMessage::CountIn { bars })?;
+                    return Ok(format!("count-in of {bars} bar(s); pause toggles it off"));
+                }
                 self.send(AudioMessage::TogglePlay)?;
                 Ok("transport toggled".into())
             }
@@ -753,6 +803,21 @@ impl SessionController {
 
     fn pattern_edit(&mut self, line: &str, current_frame: u64) -> Result<String, String> {
         let command = parse_pattern_edit_command(line)?;
+        // With a session scale, typed notes snap to it (`scale snap on`).
+        let command = match (command, self.scale, self.scale_snap) {
+            (
+                PatternEditCommand::Step {
+                    index,
+                    edit: StepEdit::Note(note),
+                },
+                Some(scale),
+                true,
+            ) => PatternEditCommand::Step {
+                index,
+                edit: StepEdit::Note(scale.snap(note)),
+            },
+            (other, _, _) => other,
+        };
         let boundary = self.editors.default_quantize_boundary(&command);
         let outcome = self.editors.apply(command)?;
         // Only a successful edit moves the selection, and every edit keeps
@@ -778,6 +843,250 @@ impl SessionController {
             "editing track {} pattern {id}",
             self.selected_track().0
         ))
+    }
+
+    /// Musical commands (spec: scales, chords, arpeggios, Euclidean rhythms,
+    /// humanize, ratios, tap tempo, metronome, count-in, autosave, pattern
+    /// copy/paste). Pattern changes are computed by `crate::music` and
+    /// committed as one undoable edit through the normal revision path.
+    fn music_command(&mut self, line: &str, current_frame: u64) -> Result<String, String> {
+        use crate::music::{
+            apply_arp, apply_chord, apply_euclid, chord_notes, quantize_notes, transpose_pattern,
+            Arpeggio, MusicCommand, Scale, ScaleKind, StepRatio,
+        };
+        let command = crate::music::parse_music_command(line)?;
+        let index = self.selected_step;
+        match command {
+            MusicCommand::ScaleStatus => Ok(match self.scale {
+                Some(scale) => format!(
+                    "scale {} {}, note input snapping {}",
+                    crate::music::scale::pitch_class_name(scale.root()),
+                    scale.kind(),
+                    if self.scale_snap { "on" } else { "off" }
+                ),
+                None => "scale off".into(),
+            }),
+            MusicCommand::ScaleList => Ok(format!(
+                "scales: {}",
+                ScaleKind::ALL.map(ScaleKind::name).join(" ")
+            )),
+            MusicCommand::ScaleOff => {
+                self.scale = None;
+                self.scale_snap = false;
+                Ok("scale off".into())
+            }
+            MusicCommand::ScaleSnap(on) => {
+                if on && self.scale.is_none() {
+                    return Err("set a scale first, e.g. scale C major".into());
+                }
+                self.scale_snap = on;
+                Ok(format!(
+                    "note input snapping {}",
+                    if on { "on" } else { "off" }
+                ))
+            }
+            MusicCommand::ScaleSet { root, kind } => {
+                self.scale = Some(Scale::new(root, kind)?);
+                self.scale_snap = true;
+                Ok(format!(
+                    "scale set to pitch class {root} {kind}; note input snaps"
+                ))
+            }
+            MusicCommand::ScaleApply => {
+                let scale = self.scale.ok_or("set a scale first, e.g. scale C major")?;
+                self.edit_selected(
+                    current_frame,
+                    |pattern| quantize_notes(pattern, scale),
+                    "scale applied to pattern",
+                )
+            }
+            MusicCommand::Chord {
+                root,
+                quality,
+                inversion,
+            } => {
+                let notes = chord_notes(root, quality, inversion)?;
+                self.edit_selected(
+                    current_frame,
+                    |pattern| apply_chord(pattern, index, &notes),
+                    "chord written",
+                )
+            }
+            MusicCommand::Arp {
+                root,
+                quality,
+                mode,
+                octaves,
+                rate,
+            } => {
+                let chord = chord_notes(root, quality, 0)?;
+                self.edit_selected(
+                    current_frame,
+                    |pattern| {
+                        let arp = Arpeggio::new(&chord, mode, octaves, pattern.seed)?;
+                        apply_arp(pattern, index, &arp, rate)
+                    },
+                    "arpeggio written",
+                )
+            }
+            MusicCommand::Euclid {
+                hits,
+                steps,
+                rotation,
+                note,
+            } => self.edit_selected(
+                current_frame,
+                |pattern| apply_euclid(pattern, hits, steps, rotation, note),
+                "euclidean rhythm written",
+            ),
+            MusicCommand::Humanize(setting) => {
+                let sample_rate = f64::from(self.sample_rate);
+                let humanize = match setting {
+                    None => crate::Humanize::default(),
+                    Some((timing_ms, velocity)) => crate::Humanize {
+                        timing_frames: (timing_ms * sample_rate / 1000.0).round() as u32,
+                        velocity,
+                    },
+                };
+                self.edit_selected(
+                    current_frame,
+                    |pattern| {
+                        let mut next = pattern.clone();
+                        next.humanize = humanize;
+                        next.validate()?;
+                        Ok(next)
+                    },
+                    "humanize updated",
+                )
+            }
+            MusicCommand::Ratio { step, ratio } => self.edit_selected(
+                current_frame,
+                |pattern| {
+                    if step >= pattern.steps.len() {
+                        return Err(format!("step {} is beyond the pattern length", step + 1));
+                    }
+                    let mut next = pattern.clone();
+                    next.ratios.retain(|entry| usize::from(entry.step) != step);
+                    if let Some((play, of)) = ratio {
+                        next.ratios.push(StepRatio {
+                            step: step as u16,
+                            play,
+                            of,
+                        });
+                        next.ratios.sort_by_key(|entry| entry.step);
+                    }
+                    next.validate()?;
+                    Ok(next)
+                },
+                "ratio updated",
+            ),
+            MusicCommand::PatternCopy => {
+                let copied = self.editors.selected_editor_mut()?.pattern().clone();
+                let steps = copied.steps.len();
+                self.pattern_clipboard = Some(copied);
+                Ok(format!("pattern copied ({steps} steps)"))
+            }
+            MusicCommand::PatternPaste => {
+                let clip = self
+                    .pattern_clipboard
+                    .clone()
+                    .ok_or("pattern clipboard is empty; use pattern copy first")?;
+                self.edit_selected(
+                    current_frame,
+                    |pattern| {
+                        let mut next = pattern.clone();
+                        next.steps = clip.steps.clone();
+                        next.chords = clip.chords.clone();
+                        next.ratios = clip.ratios.clone();
+                        next.locks = clip.locks.clone();
+                        next.validate()?;
+                        Ok(next)
+                    },
+                    "pattern pasted",
+                )
+            }
+            MusicCommand::PatternClear => self.edit_selected(
+                current_frame,
+                |pattern| {
+                    let mut next = pattern.clone();
+                    next.steps.fill(None);
+                    next.chords.clear();
+                    next.ratios.clear();
+                    next.locks.clear();
+                    next.validate()?;
+                    Ok(next)
+                },
+                "pattern cleared",
+            ),
+            MusicCommand::PatternTranspose(semitones) => self.edit_selected(
+                current_frame,
+                |pattern| transpose_pattern(pattern, semitones),
+                "pattern transposed",
+            ),
+            MusicCommand::Tap => match self.tap.tap(self.now_ms) {
+                Some(bpm) => {
+                    self.set_tempo(bpm)?;
+                    Ok(format!("tempo {bpm:.2} bpm"))
+                }
+                None => Ok("tap again to measure the tempo".into()),
+            },
+            MusicCommand::Metronome { enabled, gain } => {
+                self.send(AudioMessage::Metronome { enabled, gain })?;
+                Ok(format!("metronome {}", if enabled { "on" } else { "off" }))
+            }
+            MusicCommand::CountIn(bars) => {
+                self.count_in_bars = bars;
+                Ok(if bars == 0 {
+                    "count-in off".into()
+                } else {
+                    format!("count-in {bars} bar(s) before play")
+                })
+            }
+            MusicCommand::AutosaveStatus => Ok(match &self.project_path {
+                Some(path) if self.autosave.enabled() => format!(
+                    "autosave every {}s to {}",
+                    self.autosave.interval_ms() / 1000,
+                    crate::autosave::autosave_path(path).display()
+                ),
+                Some(_) => "autosave off".into(),
+                None => "autosave needs a project path; save first".into(),
+            }),
+            MusicCommand::AutosaveEnabled(on) => {
+                self.autosave.set_enabled(on);
+                Ok(format!("autosave {}", if on { "on" } else { "off" }))
+            }
+            MusicCommand::AutosaveEvery(interval_ms) => {
+                self.autosave.set_interval_ms(interval_ms)?;
+                self.autosave.set_enabled(true);
+                Ok(format!("autosave every {} s", interval_ms / 1000))
+            }
+        }
+    }
+
+    /// Apply a pattern transform to the selected pattern as one undoable
+    /// edit, then queue it on the quantised revision path.
+    fn edit_selected(
+        &mut self,
+        current_frame: u64,
+        build: impl FnOnce(&Pattern) -> Result<Pattern, String>,
+        message: &str,
+    ) -> Result<String, String> {
+        let current = self.editors.selected_editor_mut()?.pattern().clone();
+        let next = build(&current)?;
+        self.editors.selected_editor_mut()?.replace_pattern(next)?;
+        let boundary = QuantizeBoundary::Pattern {
+            steps: current.steps.len() as u32,
+        };
+        let queued = self.queue_selected(current_frame, boundary)?;
+        Ok(format!("{message}; {queued}"))
+    }
+
+    /// Change the tempo for playback and for the control-side grid.
+    fn set_tempo(&mut self, bpm: f64) -> Result<(), String> {
+        self.send(AudioMessage::Tempo(bpm))?;
+        self.project.bpm = bpm;
+        self.dirty = true;
+        Ok(())
     }
 
     fn describe_patterns(&self) -> String {
@@ -1832,9 +2141,34 @@ impl SessionController {
     /// Expire a pending learn. Returns a message when it timed out.
     pub fn tick(&mut self, now_ms: u64) -> Option<String> {
         self.now_ms = self.now_ms.max(now_ms);
+        if let Some(message) = self.run_autosave_if_due() {
+            return Some(message);
+        }
         self.learn
             .tick(now_ms)
             .then(|| "MIDI learn timed out; mappings unchanged".to_string())
+    }
+
+    /// Write the project to its autosave sidecar when edits are unsaved and
+    /// the interval has elapsed. The project file itself is untouched.
+    fn run_autosave_if_due(&mut self) -> Option<String> {
+        let path = self.project_path.clone();
+        if !self.autosave.due(self.now_ms, self.dirty, path.is_some()) {
+            return None;
+        }
+        let path = crate::autosave::autosave_path(path.as_ref()?);
+        for track in self.editors.track_ids() {
+            for pattern in self.editors.pattern_ids(track) {
+                self.sync_pattern_to_project(track, pattern);
+            }
+        }
+        let mut snapshot = self.project.clone();
+        snapshot.schema_version = crate::MULTITRACK_PROJECT_SCHEMA_VERSION;
+        self.autosave.mark_saved(self.now_ms);
+        Some(match snapshot.save_atomic(&path) {
+            Ok(()) => format!("autosaved to {}", path.display()),
+            Err(error) => format!("autosave failed: {error}"),
+        })
     }
 
     pub fn learning(&self) -> Option<String> {
@@ -2235,4 +2569,12 @@ pub fn inspector_synth_params() -> impl Iterator<Item = SynthParamId> {
     .filter_map(parse_synth_param)
 }
 
-pub const HELP_TEXT: &str = "commands: track N | step N toggle|note|vel|gate|prob|ratchet|micro | length N | swing X | rotate left|right N | undo | redo | pattern ID | patterns | synth PARAM VALUE | gain|pan X | mute|solo [on|off] | send a|b X | master X | fx list | fx track|send_a|send_b|master SLOT PARAM VALUE|bypass on|off | scene launch NAME [bar|beat|step|now] | scene next|prev | chain start NAME | chain stop|pause|resume | lock TARGET VALUE | unlock TARGET | locks | learn TARGET | learn confirm [replace|add|cancel] | learn cancel | mappings | mapping ID range|invert|pickup|button ... | unlearn ID | variation lock ...|preview|accept|reject | resample arm master|track [ID] [bars N|seconds S] | resample stop [bar] | resample cancel|normalize on|off|destination asset|new-track|replace | blackbox status|save [PATH]|clear | play | restart | panic | save [PATH]";
+pub const HELP_TEXT: &str = "Transport: play (count-in if armed) | pause | restart | panic | tempo BPM | tap | metronome on [GAIN]|off | countin BARS|0 | save [PATH]. \
+Pattern: track N | step N toggle|clear|note|vel|gate|prob|ratchet|micro VALUE | length N | swing X | rotate left|right N | undo | redo | pattern ID | patterns | pattern copy|paste|clear | pattern transpose N. \
+Musical: scale ROOT KIND|off|list|snap on|off|apply | chord ROOT QUALITY [INV] | arp ROOT QUALITY [MODE] [OCT] [RATE] | euclid HITS STEPS [rotate N] [note N] | humanize MS VEL|off | ratio STEP P:Q|off. \
+Sound: synth PARAM VALUE | gain|pan X | mute|solo [on|off] | send a|b X | master X | fx list | fx track|send_a|send_b|master SLOT PARAM VALUE|bypass on|off | sample ... | slice ... | mod ... | fxmacro ... | lock TARGET VALUE | unlock TARGET | locks. \
+Scenes: scene launch NAME [bar|beat|step|now] | scene next|prev | chain start NAME | chain stop|pause|resume. \
+MIDI: learn TARGET | learn confirm [replace|add|cancel] | learn cancel | mappings | mapping ID range|invert|pickup|button ... | unlearn ID. \
+Variations: variation lock ...|preview|accept|reject. Resample: resample arm master|track [ID] [bars N|seconds S] | resample stop [bar] | resample cancel|normalize on|off|destination asset|new-track|replace. \
+Files: autosave | autosave on|off | autosave every SECONDS (writes NAME.autosave.json beside the project). Blackbox: blackbox status|save [PATH]|clear. \
+Help: help.";

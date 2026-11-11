@@ -150,6 +150,25 @@ impl LiveSequencer {
         self.scheduler.frames_per_step()
     }
 
+    /// Beat index under the playhead, or `None` before the tempo origin.
+    pub fn beat_index(&self) -> Option<u64> {
+        self.scheduler.beat_index_at(self.position_frame)
+    }
+
+    /// Re-anchor the grid at `bpm` from `at_frame`. Pending note-offs are
+    /// kept so no sounding note is stranded; only the lookahead cache is
+    /// rebuilt. Events before `at_frame` are never re-emitted.
+    pub fn retime(&mut self, bpm: f64, at_frame: u64) -> Result<(), String> {
+        self.scheduler = self.scheduler.retimed(bpm, at_frame)?;
+        self.cache_start = 0;
+        self.cache_end = 0;
+        self.event_buffer.clear();
+        self.event_index = 0;
+        self.boundary_buffer.clear();
+        self.boundary_index = 0;
+        Ok(())
+    }
+
     fn invalidate_cache(&mut self) {
         self.cache_start = 0;
         self.cache_end = 0;

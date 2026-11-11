@@ -5,6 +5,7 @@ Usage: python scripts/build_vst3.py <output directory>
 Needs CMake, a C++ toolchain and network access (CMake fetches clap-wrapper,
 the CLAP headers and the VST3 SDK). Builds the Rust static library first.
 """
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -26,7 +27,32 @@ def module_binary(bundle):
     linux = bundle / "Contents" / "x86_64-linux" / "SHELLOOP.so"
     if linux.is_file():
         return linux
+    macos = bundle / "Contents" / "MacOS" / "SHELLOOP"
+    if sys.platform == "darwin" and macos.is_file():
+        return macos
     raise FileNotFoundError(f"no module binary inside {bundle}")
+
+
+def ensure_macos_bundle(bundle):
+    """Make sure a macOS SHELLOOP.vst3 has Info.plist and an ad-hoc signature."""
+    contents = bundle / "Contents"
+    info = contents / "Info.plist"
+    if not info.is_file():
+        contents.mkdir(parents=True, exist_ok=True)
+        info.write_bytes(plistlib.dumps({
+            "CFBundleName": "SHELLOOP",
+            "CFBundleExecutable": "SHELLOOP",
+            "CFBundleIdentifier": "com.circuitdriftlabs.shelloop.vst3",
+            "CFBundlePackageType": "BNDL",
+            "CFBundleSignature": "????",
+            "CFBundleVersion": "1.1.0",
+            "CFBundleShortVersionString": "1.1.0",
+            "CFBundleInfoDictionaryVersion": "6.0",
+            "LSMinimumSystemVersion": "11.0",
+        }))
+    # Ad-hoc signature (no developer identity). Hosts on Apple Silicon need
+    # at least this to load the module.
+    run("codesign", "--force", "--sign", "-", str(bundle))
 
 
 def main(out_dir):
@@ -42,6 +68,8 @@ def main(out_dir):
             + ", ".join(map(str, found))
         )
     built = found[0]
+    if sys.platform == "darwin" and built.is_dir():
+        ensure_macos_bundle(built)
     run(sys.executable, "-I", "scripts/verify_vst3.py", str(module_binary(built)))
     out = Path(out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)

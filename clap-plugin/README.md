@@ -52,6 +52,22 @@ mkdir -p ~/.clap
 cp target/release/libshelloop_clap.so ~/.clap/shelloop.clap
 ```
 
+**macOS:** the release bundle is `shelloop.clap/` (a bundle directory whose
+`Contents/MacOS/shelloop` is the plugin). Copy it to the per-user CLAP folder
+and remove the quarantine attribute of the ad-hoc signed download:
+
+```sh
+mkdir -p ~/Library/Audio/Plug-Ins/CLAP
+cp -R shelloop.clap ~/Library/Audio/Plug-Ins/CLAP/
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/shelloop.clap
+```
+
+To build the bundle yourself, copy `target/release/libshelloop_clap.dylib` to
+`shelloop.clap/Contents/MacOS/shelloop`, add a `Contents/Info.plist` with
+`CFBundleExecutable` = `shelloop`, `CFBundleIdentifier` =
+`com.circuitdriftlabs.shelloop.clap` and `CFBundlePackageType` = `BNDL`, then
+run `codesign --force --sign - shelloop.clap`.
+
 **Windows:** copy `target\release\shelloop_clap.dll` to
 `C:\Program Files\Common Files\CLAP\shelloop.clap`:
 
@@ -60,6 +76,10 @@ Copy-Item target\release\shelloop_clap.dll "C:\Program Files\Common Files\CLAP\s
 ```
 
 Then rescan plugins in your host.
+
+The CI and release workflows build this plugin on Windows, Linux and macOS
+(Apple silicon and Intel). The macOS build has not been validated in a host on
+real hardware.
 
 ## Test
 

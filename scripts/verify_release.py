@@ -41,8 +41,14 @@ def verify(archive):
             "projects/samples/snare.wav",
             "projects/samples/hat.wav",
         )
+        clap = package / "shelloop.clap"
+        # macOS ships the CLAP as a bundle directory, elsewhere a single file.
+        clap_module = clap / "Contents" / "MacOS" / "shelloop" if clap.is_dir() else clap
         for name in resources:
-            if not (package / name).is_file():
+            if name == "shelloop.clap":
+                if not clap_module.is_file():
+                    raise ValueError(f"missing packaged resource: {name}")
+            elif not (package / name).is_file():
                 raise ValueError(f"missing packaged resource: {name}")
         for name in resources:
             if name.endswith(".json") and name != "shelloop.clap":
@@ -52,7 +58,7 @@ def verify(archive):
         for flag in ("--pattern", "--project", "--tui", "--black-box-seconds"):
             if flag not in result.stdout:
                 raise ValueError(f"packaged executable lacks {flag}")
-        if (package / "shelloop.clap").stat().st_size < 10_000:
+        if clap_module.stat().st_size < 10_000:
             raise ValueError("packaged CLAP plugin is unexpectedly small")
     print(f"Verified checksum, resources and executable: {archive.name}")
 

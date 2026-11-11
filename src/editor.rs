@@ -78,6 +78,7 @@ impl PatternEditor {
             Some(_) => None,
             None => Some(default_step),
         };
+        drop_orphaned_extras(&mut candidate);
         self.commit(candidate)
     }
 
@@ -85,6 +86,7 @@ impl PatternEditor {
         self.ensure_step_index(index)?;
         let mut candidate = self.pattern.clone();
         candidate.steps[index] = step;
+        drop_orphaned_extras(&mut candidate);
         self.commit(candidate)
     }
 
@@ -146,6 +148,7 @@ impl PatternEditor {
     pub fn clear_pattern(&mut self) -> Result<u64, String> {
         let mut candidate = self.pattern.clone();
         candidate.steps.fill(None);
+        drop_orphaned_extras(&mut candidate);
         self.commit(candidate)
     }
 
@@ -241,6 +244,21 @@ impl PatternEditor {
 
 /// Move per-step locks and anchor invariants with their steps. `map` takes
 /// a zero-based step and returns its new index, or `None` to drop it.
+/// Chords and ratios need a note on their step; drop any left without one.
+fn drop_orphaned_extras(pattern: &mut Pattern) {
+    let steps = &pattern.steps;
+    pattern.chords.retain(|chord| {
+        steps
+            .get(usize::from(chord.step))
+            .is_some_and(Option::is_some)
+    });
+    pattern.ratios.retain(|ratio| {
+        steps
+            .get(usize::from(ratio.step))
+            .is_some_and(Option::is_some)
+    });
+}
+
 fn remap_step_metadata(pattern: &mut Pattern, map: impl Fn(usize) -> Option<usize>) {
     let locks = std::mem::take(&mut pattern.locks);
     for mut entry in locks {
@@ -250,6 +268,23 @@ fn remap_step_metadata(pattern: &mut Pattern, map: impl Fn(usize) -> Option<usiz
         }
     }
     pattern.locks.sort_by_key(|entry| entry.step);
+    // Chords and ratios follow their steps the same way.
+    let chords = std::mem::take(&mut pattern.chords);
+    for mut chord in chords {
+        if let Some(step) = map(usize::from(chord.step)) {
+            chord.step = step as u16;
+            pattern.chords.push(chord);
+        }
+    }
+    pattern.chords.sort_by_key(|chord| chord.step);
+    let ratios = std::mem::take(&mut pattern.ratios);
+    for mut ratio in ratios {
+        if let Some(step) = map(usize::from(ratio.step)) {
+            ratio.step = step as u16;
+            pattern.ratios.push(ratio);
+        }
+    }
+    pattern.ratios.sort_by_key(|ratio| ratio.step);
     if let Some(profile) = pattern.invariants.as_mut() {
         for rule in &mut profile.rules {
             if let crate::InvariantKind::AnchorSteps { steps } = &mut rule.kind {
