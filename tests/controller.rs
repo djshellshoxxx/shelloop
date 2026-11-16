@@ -210,3 +210,211 @@ fn save_writes_a_loadable_project() {
     let loaded = MultiTrackProject::load(&path).unwrap();
     assert!(loaded.tracks[0].pattern.steps[2].is_some());
 }
+
+#[test]
+fn named_presets_capture_live_edits_and_load_only_after_queue_acceptance() {
+    let directory = tempfile::tempdir().unwrap();
+    let project_path = directory.path().join("song.json");
+    let mut rig = Rig::new();
+    rig.run(&format!("save {}", project_path.display()))
+        .unwrap();
+    rig.run("synth output_gain 0.42").unwrap();
+    rig.run("mod add lfo1 filter_cutoff 0.5 25").unwrap();
+    rig.run("preset save WarmPad").unwrap();
+    assert!(rig.run("preset list").unwrap().contains("WarmPad"));
+    assert!(rig.run("preset save WarmPad").is_err());
+    rig.run("synth output_gain 0.8").unwrap();
+    rig.run("mod clear").unwrap();
+    rig.run("preset load WarmPad").unwrap();
+    assert_eq!(
+        rig.controller.project().tracks[0]
+            .synth_patch
+            .unwrap()
+            .output_gain,
+        0.42
+    );
+    assert_eq!(
+        rig.engine
+            .track_base_synth_patch(TrackId(1))
+            .unwrap()
+            .output_gain,
+        0.42
+    );
+    rig.run("save").unwrap();
+    assert_eq!(
+        MultiTrackProject::load(project_path).unwrap().tracks[0]
+            .synth_patch
+            .unwrap()
+            .output_gain,
+        0.42
+    );
+    assert_eq!(
+        rig.controller.project().tracks[0]
+            .synth_patch
+            .unwrap()
+            .modulation
+            .routes()
+            .len(),
+        1
+    );
+    let (sender, _receiver) = bounded(0);
+    let mut blocked = SessionController::new(
+        project(),
+        Some(directory.path().join("blocked.json")),
+        RATE,
+        sender,
+    )
+    .unwrap();
+    assert!(blocked.execute("preset load WarmPad", 0).is_err());
+    assert_eq!(blocked.project().tracks[0].synth_patch, None);
+    rig.run("preset delete WarmPad").unwrap();
+    assert!(rig.run("preset load WarmPad").is_err());
+    assert!(rig.run("preset save ../outside").is_err());
+}
+
+#[test]
+fn all_eight_modulation_routes_are_editable_and_visible_in_the_tui() {
+    let mut rig = Rig::new();
+    for _ in 0..8 {
+        rig.run("mod add macro1 filter_cutoff -0.1").unwrap();
+    }
+    assert!(rig.run("mod add macro1 filter_cutoff -0.1").is_err());
+    let mut ui = shelloop::workstation::UiState::new(true);
+    let snapshot = shelloop::workstation::build_snapshot(
+        &rig.controller,
+        &Default::default(),
+        &mut ui,
+        &Default::default(),
+    );
+    let routes: Vec<_> = snapshot
+        .inspector
+        .rows
+        .iter()
+        .filter(|(name, _)| name.starts_with("mod "))
+        .collect();
+    assert_eq!(routes.len(), 8);
+    assert!(routes
+        .iter()
+        .all(|(_, value)| value.contains("FilterCutoff") && value.contains("Hz")));
+    rig.run("mod set 8 velocity amplitude 0.2").unwrap();
+    rig.run("mod off 8").unwrap();
+    rig.run("mod remove 1").unwrap();
+    assert_eq!(
+        rig.controller.project().tracks[0]
+            .synth_patch
+            .unwrap()
+            .modulation
+            .routes()
+            .len(),
+        7
+    );
+}
+
+#[test]
+fn tempo_commands_preserve_phase_and_scene_quantization_and_save_the_live_rate() {
+    let mut rig = Rig::new();
+    rig.render(18_000); // 0.75 beats at 120 BPM.
+    rig.run("tempo 240").unwrap();
+    assert_eq!(rig.engine.bpm(), 240.0);
+    assert_eq!(rig.engine.position_frame(), 18_000);
+    assert_eq!(rig.engine.tempo_clock().beat_at_frame(18_000), 0.75);
+    rig.run("scene launch Drop beat").unwrap();
+    assert_eq!(rig.engine.queued_scene(), Some((SceneId(1), 21_000)));
+    assert!(rig.run("tempo NaN").is_err());
+    assert_eq!(rig.engine.bpm(), 240.0);
+    rig.run("bpm 60").unwrap();
+    assert_eq!(rig.engine.bpm(), 60.0);
+    assert_eq!(rig.controller.project().bpm, 60.0);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("tempo.json");
+    rig.run(&format!("save {}", path.display())).unwrap();
+    assert_eq!(MultiTrackProject::load(path).unwrap().bpm, 60.0);
+    let telemetry = EngineTelemetry::default();
+    telemetry.publish(&rig.engine);
+    rig.controller
+        .synchronize_tempo_clock(telemetry.tempo_clock().unwrap());
+    assert_eq!(rig.controller.tempo_clock(), rig.engine.tempo_clock());
+    let (sender, _receiver) = bounded(0);
+    let mut blocked = SessionController::new(project(), None, RATE, sender).unwrap();
+    assert!(blocked.execute("tempo 90", 123).is_err());
+    assert_eq!(blocked.project().bpm, 120.0);
+}
+
+#[test]
+fn tempo_retimes_queued_pattern_edits_and_pause_resume_keeps_the_anchor() {
+    let mut rig = Rig::new();
+    rig.render(18_000);
+    let old_revision = rig.engine.track_active_revision(TrackId(1)).unwrap();
+    rig.run("length 8").unwrap(); // old pattern boundary at frame 24000.
+    rig.run("tempo 240").unwrap();
+    rig.render(2_999);
+    assert_eq!(
+        rig.engine.track_active_revision(TrackId(1)),
+        Some(old_revision)
+    );
+    rig.render(1);
+    assert_eq!(
+        rig.engine.track_active_revision(TrackId(1)),
+        Some(old_revision)
+    );
+    rig.render(1); // retimed boundary at frame21000.
+    assert!(rig.engine.track_active_revision(TrackId(1)).unwrap() > old_revision);
+    let clock = rig.engine.tempo_clock();
+    let frame = rig.engine.position_frame();
+    rig.run("pause").unwrap();
+    rig.render(100);
+    assert_eq!(rig.engine.position_frame(), frame);
+    assert_eq!(rig.engine.tempo_clock(), clock);
+    rig.run("play").unwrap();
+    rig.render(1);
+    assert_eq!(rig.engine.position_frame(), frame + 1);
+    assert_eq!(rig.engine.tempo_clock(), clock);
+    rig.run("restart").unwrap();
+    assert_eq!(rig.engine.position_frame(), 0);
+    assert_eq!(rig.engine.bpm(), 240.0);
+    assert_eq!(rig.engine.tempo_clock().origin_frame(), 0.0);
+}
+
+#[test]
+fn concurrent_clock_telemetry_never_mixes_tempo_and_origin_publications() {
+    use std::sync::Arc;
+    let mut rig = Rig::new();
+    rig.render(18_000);
+    let first = rig.engine;
+    let mut second = first.clone();
+    second.set_tempo(240.0).unwrap();
+    let allowed = [first.tempo_clock(), second.tempo_clock()];
+    let telemetry = Arc::new(EngineTelemetry::default());
+    telemetry.publish(&first);
+    assert_eq!(telemetry.tempo_clock(), Some(allowed[0]));
+    let writer_telemetry = telemetry.clone();
+    let writer = std::thread::spawn(move || {
+        for _ in 0..20_000 {
+            writer_telemetry.publish(&second);
+            writer_telemetry.publish(&first);
+        }
+    });
+    for _ in 0..40_000 {
+        if let Some(clock) = telemetry.tempo_clock() {
+            assert!(allowed.contains(&clock), "mixed BPM/origin pair: {clock:?}");
+        }
+    }
+    writer.join().unwrap();
+    assert_eq!(telemetry.tempo_clock(), Some(allowed[0]));
+}
+
+#[test]
+fn stale_control_timestamps_cannot_schedule_pattern_edits_off_the_live_grid() {
+    let mut rig = Rig::new();
+    rig.render(18_000);
+    rig.engine.set_tempo(240.0).unwrap();
+    let revision = rig.engine.track_active_revision(TrackId(1)).unwrap();
+    rig.controller.execute("length 8", 0).unwrap();
+    while let Ok(message) = rig.receiver.try_recv() {
+        apply_audio_message(&mut rig.engine, message, &rig.garbage);
+    }
+    rig.render(3_000);
+    assert_eq!(rig.engine.track_active_revision(TrackId(1)), Some(revision));
+    rig.render(1);
+    assert!(rig.engine.track_active_revision(TrackId(1)).unwrap() > revision);
+}

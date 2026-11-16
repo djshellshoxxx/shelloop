@@ -1,5 +1,6 @@
 pub mod app;
 pub mod audio;
+pub mod autosave;
 pub mod blackbox;
 pub mod command;
 pub mod controller;
@@ -9,19 +10,23 @@ pub mod effect_macros;
 pub mod effects;
 pub mod engine;
 pub mod envelope;
+pub mod euclid;
 pub mod filter;
 pub mod fx_creative;
 pub mod keyboard;
+pub mod metronome;
 pub mod midi;
 pub mod midi_io;
 pub mod midi_learn;
 pub mod mixer;
 pub mod modulation;
 pub mod multitrack;
+pub mod music;
 pub mod params;
 pub mod pattern;
 pub mod pc_speaker;
 pub mod performance;
+pub mod presets;
 pub mod project;
 pub mod quantize;
 pub mod recording;
@@ -34,6 +39,7 @@ pub mod scheduler;
 pub mod scope;
 pub mod sequencer;
 pub mod synth;
+pub mod tempo;
 pub mod transport;
 pub mod tui;
 pub mod variation;
@@ -107,14 +113,19 @@ pub use multitrack::{
     TrackKind, TrackStatus, MAX_REALTIME_TRACKS, MAX_TRACK_PATTERNS,
     MULTITRACK_PROJECT_SCHEMA_VERSION, PRIMARY_PATTERN_ID,
 };
+pub use music::{
+    apply_arp, apply_chord, apply_euclid, chord_notes, euclidean, parse_music_command, parse_note,
+    parse_pitch_class, parse_ratio, quantize_notes, transpose_pattern, ArpMode, Arpeggio,
+    ChordQuality, Humanize, MusicCommand, Scale, ScaleKind, StepRatio, TapTempo,
+};
 pub use params::{
     ActionId, EffectLocation, EffectParamId, EffectSlotId, GlobalParamId, ParamCurve,
     ParamDescriptor, ParameterTarget, SampleParamId, TrackParamId,
 };
 pub use pattern::{
     parse_pattern_json, CompiledPattern, LockBoundary, LockTarget, ParameterLock, Pattern,
-    PatternEvent, PatternScheduler, PatternStep, StepLocks, MAX_LOCKS_PER_STEP, MAX_PATTERN_LOCKS,
-    MAX_PATTERN_STEPS,
+    PatternEvent, PatternScheduler, PatternStep, StepChord, StepLocks, MAX_CHORD_EXTRA_NOTES,
+    MAX_LOCKS_PER_STEP, MAX_PATTERN_CHORDS, MAX_PATTERN_LOCKS, MAX_PATTERN_STEPS,
 };
 pub use pc_speaker::{pc_speaker_backend, pc_speaker_test, PcSpeakerBackend};
 pub use performance::{AxisCurve, AxisMapping, PerformanceMix, XyPoint};
@@ -155,6 +166,7 @@ pub use synth::{
     parse_synth_parameter_command, sync_to_index, CompiledSynthPatch, Oscillator, SynthParamId,
     SynthParamValue, SynthPatch, SynthVoice,
 };
+pub use tempo::TempoClock;
 pub use transport::{Transport, TransportState};
 pub use tui::{route_input, TuiLayout, TuiSnapshot, UiAction, UiInput, UiMode};
 pub use variation::{

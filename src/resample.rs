@@ -7,7 +7,7 @@
 //! on control/background threads through [`Resampler`].
 
 use crate::{
-    decode_wav_file, next_boundary_frame, spawn_realtime_recording, DecodedWav, QuantizeBoundary,
+    decode_wav_file, spawn_realtime_recording, DecodedWav, QuantizeBoundary,
     RealtimeRecordingFinalizer, RealtimeRecordingProducer, RecordingSummary, TrackId,
     WavRecordingConfig,
 };
@@ -98,13 +98,23 @@ pub fn resolve_capture_frames(
     current_frame: u64,
     clock: CaptureClock,
 ) -> Result<(u64, Option<u64>), String> {
+    resolve_capture_frames_with_origin(request, current_frame, clock, 0.0)
+}
+
+pub fn resolve_capture_frames_with_origin(
+    request: &ResampleRequest,
+    current_frame: u64,
+    clock: CaptureClock,
+    origin: f64,
+) -> Result<(u64, Option<u64>), String> {
     request.validate()?;
-    let start = next_boundary_frame(
+    let start = crate::quantize::next_boundary_frame_from_origin(
         current_frame,
         clock.sample_rate,
         clock.bpm,
         clock.steps_per_beat,
         request.start_boundary,
+        origin,
     )?;
     let stop = match request.stop {
         ResampleStop::Manual { .. } => None,
@@ -378,13 +388,24 @@ impl Resampler {
         current_frame: u64,
         clock: CaptureClock,
     ) -> Result<(u64, Option<u64>), String> {
+        self.arm_with_origin(request, current_frame, clock, 0.0)
+    }
+
+    pub fn arm_with_origin(
+        &mut self,
+        request: ResampleRequest,
+        current_frame: u64,
+        clock: CaptureClock,
+        origin: f64,
+    ) -> Result<(u64, Option<u64>), String> {
         if self.busy() {
             return Err("a resample capture is already in progress".into());
         }
         if clock.sample_rate != self.sample_rate {
             return Err("capture clock sample rate does not match the session".into());
         }
-        let (start_frame, stop_frame) = resolve_capture_frames(&request, current_frame, clock)?;
+        let (start_frame, stop_frame) =
+            resolve_capture_frames_with_origin(&request, current_frame, clock, origin)?;
         std::fs::create_dir_all(&self.directory)
             .map_err(|error| format!("create capture directory: {error}"))?;
         let final_path = next_resample_path(&self.directory)?;
@@ -431,18 +452,29 @@ impl Resampler {
         clock: CaptureClock,
         boundary: QuantizeBoundary,
     ) -> Result<u64, String> {
+        self.stop_with_origin(current_frame, clock, boundary, 0.0)
+    }
+
+    pub fn stop_with_origin(
+        &mut self,
+        current_frame: u64,
+        clock: CaptureClock,
+        boundary: QuantizeBoundary,
+        origin: f64,
+    ) -> Result<u64, String> {
         let id = match &self.state {
             ResampleState::Armed { capture_id, .. } | ResampleState::Recording { capture_id } => {
                 *capture_id
             }
             _ => return Err("no resample capture is armed or recording".into()),
         };
-        let frame = next_boundary_frame(
+        let frame = crate::quantize::next_boundary_frame_from_origin(
             current_frame,
             clock.sample_rate,
             clock.bpm,
             clock.steps_per_beat,
             boundary,
+            origin,
         )?;
         self.control
             .try_send(CaptureControl::StopAt { id, frame })

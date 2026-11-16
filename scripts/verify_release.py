@@ -36,7 +36,6 @@ def verify(archive):
             "projects/example-sound-design.json",
             "projects/example-sliced-break.json",
             "projects/samples/break.wav",
-            "shelloop.clap",
             "projects/samples/kick.wav",
             "projects/samples/snare.wav",
             "projects/samples/hat.wav",
@@ -52,7 +51,10 @@ def verify(archive):
         for flag in ("--pattern", "--project", "--tui", "--black-box-seconds"):
             if flag not in result.stdout:
                 raise ValueError(f"packaged executable lacks {flag}")
-        if (package / "shelloop.clap").stat().st_size < 10_000:
+        plugin = package / "shelloop.clap"
+        if plugin.is_dir():
+            plugin = plugin / "Contents" / "MacOS" / "shelloop"
+        if plugin.stat().st_size < 10_000:
             raise ValueError("packaged CLAP plugin is unexpectedly small")
     print(f"Verified checksum, resources and executable: {archive.name}")
 

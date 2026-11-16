@@ -1,0 +1,80 @@
+{
+  "name": "Example Euclid Minor-7 Bass",
+  "seed": 90210,
+  "swing": 0.06,
+  "channel": 1,
+  "steps": [
+    {
+      "note": 36,
+      "velocity": 0.9,
+      "gate": 0.45,
+      "probability": 1.0,
+      "ratchets": 1,
+      "microtiming_frames": 0
+    },
+    null,
+    {
+      "note": 36,
+      "velocity": 0.78,
+      "gate": 0.45,
+      "probability": 1.0,
+      "ratchets": 1,
+      "microtiming_frames": 0
+    },
+    null,
+    {
+      "note": 36,
+      "velocity": 0.78,
+      "gate": 0.45,
+      "probability": 1.0,
+      "ratchets": 1,
+      "microtiming_frames": 0
+    },
+    {
+      "note": 36,
+      "velocity": 0.78,
+      "gate": 0.45,
+      "probability": 1.0,
+      "ratchets": 1,
+      "microtiming_frames": 0
+    },
+    null,
+    {
+      "note": 36,
+      "velocity": 0.78,
+      "gate": 0.45,
+      "probability": 1.0,
+      "ratchets": 1,
+      "microtiming_frames": 0
+    }
+  ],
+  "chords": [
+    {
+      "step": 0,
+      "notes": [
+        51,
+        55,
+        58
+      ]
+    },
+    {
+      "step": 4,
+      "notes": [
+        51,
+        55,
+        58
+      ]
+    }
+  ],
+  "ratios": [
+    {
+      "step": 7,
+      "play": 1,
+      "of": 2
+    }
+  ],
+  "humanize": {
+    "timing_frames": 120,
+    "velocity": 0.08
+  }
+}

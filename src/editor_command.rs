@@ -23,11 +23,19 @@ pub enum StepEdit {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PatternEditCommand {
     SelectTrack(TrackId),
-    Step { index: usize, edit: StepEdit },
+    Step {
+        index: usize,
+        edit: StepEdit,
+    },
     Length(usize),
     Swing(f32),
     RotateLeft(usize),
     RotateRight(usize),
+    /// Euclidean rhythm over the current length (spec 16).
+    Euclid {
+        hits: usize,
+        rotation: usize,
+    },
     Undo,
     Redo,
 }
@@ -227,6 +235,9 @@ impl ProjectPatternEditors {
             PatternEditCommand::Swing(swing) => Some(editor.set_swing(swing)?),
             PatternEditCommand::RotateLeft(amount) => Some(editor.rotate_left(amount)?),
             PatternEditCommand::RotateRight(amount) => Some(editor.rotate_right(amount)?),
+            PatternEditCommand::Euclid { hits, rotation } => {
+                Some(editor.apply_euclidean(hits, rotation, default_step())?)
+            }
             PatternEditCommand::Undo => editor.undo().then(|| editor.revision()),
             PatternEditCommand::Redo => editor.redo().then(|| editor.revision()),
         };
@@ -247,7 +258,8 @@ impl ProjectPatternEditors {
         match command {
             PatternEditCommand::Length(_)
             | PatternEditCommand::RotateLeft(_)
-            | PatternEditCommand::RotateRight(_) => QuantizeBoundary::Pattern {
+            | PatternEditCommand::RotateRight(_)
+            | PatternEditCommand::Euclid { .. } => QuantizeBoundary::Pattern {
                 steps: pattern_steps,
             },
             PatternEditCommand::SelectTrack(_) => QuantizeBoundary::Immediate,
@@ -323,6 +335,17 @@ pub fn parse_pattern_edit_command(line: &str) -> Result<PatternEditCommand, Stri
                 "right" => Ok(PatternEditCommand::RotateRight(amount)),
                 _ => Err("rotate direction must be left or right".into()),
             }
+        }
+        "euclid" => {
+            if !(2..=3).contains(&parts.len()) {
+                return Err("euclid requires <hits> and an optional rotation".into());
+            }
+            let hits = parse_usize(parts[1], "euclid hits")?;
+            let rotation = match parts.get(2) {
+                Some(value) => parse_usize(value, "euclid rotation")?,
+                None => 0,
+            };
+            Ok(PatternEditCommand::Euclid { hits, rotation })
         }
         "undo" => {
             require_len(&parts, 1, "undo does not accept arguments")?;

@@ -1,7 +1,7 @@
 use shelloop::{pc_speaker_backend, pc_speaker_test, PcSpeakerBackend};
 
 #[test]
-fn supported_ci_platforms_report_a_pc_speaker_backend() {
+fn native_platforms_report_their_pc_speaker_capability() {
     #[cfg(target_os = "linux")]
     assert_eq!(pc_speaker_backend(), PcSpeakerBackend::LinuxConsoleSpeaker);
 
@@ -10,6 +10,9 @@ fn supported_ci_platforms_report_a_pc_speaker_backend() {
         pc_speaker_backend(),
         PcSpeakerBackend::WindowsBeepCompatibility
     );
+
+    #[cfg(not(any(target_os = "linux", windows)))]
+    assert_eq!(pc_speaker_backend(), PcSpeakerBackend::Unsupported);
 }
 
 #[test]
